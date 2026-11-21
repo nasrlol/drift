@@ -64,12 +64,26 @@ Tiles: float32 GeoTIFF (COG), heights in m above EGM2008, AREA_OR_POINT=Point. 1
   800 x 1200 from 50 N (longitude spacing doubles to 4.5 arc seconds). A surface model: buildings and
   forest are in the heights. Checked: coast tile N51 E002 -5.7..41 m, Ardennes N50 E005 max 668 m.
 
+FONT
+
+Source: Roboto v3.016 (googlefonts/roboto-3-classic, release 2026-06-17), SIL Open Font License 1.1
+  https://github.com/googlefonts/roboto-3-classic/releases/download/v3.016/Roboto_v3.016.zip
+  saved as assets/raw/roboto_v3.016/Roboto_v3.016.zip (29 MB, not in git, sha256 1653dbe1...e334f)
+  committed: assets/fonts/Roboto-Regular.ttf = web/static/Roboto-Regular.ttf from the zip, unchanged
+  (157 KB, sha256 a6ec0ffa...23690), and assets/fonts/OFL.txt from the repo at tag v3.016 (the license
+  must travel with the font). Embedded with #load, the release exe grows by the same 157 KB.
+
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
   game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing
                   Sim speed: keys 1..4 set w.sim_speed = 1x / 5x / 15x / 40x (SIM_SPEEDS). The frame time (capped at
                   0.25 s) is multiplied before it goes into the accumulator, so 40x runs up to 40 steps per 60 fps frame
                   (600 at most after a hitch) and every step still has dt = 1 / 60.
+                  w.font: Roboto rasterized by raylib on the first frame (needs a window, so never in headless),
+                  FONT_PX 14, codepoints 32..255. Falls back to the raylib font with a log line if loading fails.
+                  Unloaded in game_shutdown. The profiler overlay still uses the raylib font.
+                  "(c) OpenStreetMap contributors" (with a real copyright sign) bottom right on a white box,
+                  required by the ODbL wherever the map is shown.
                   Camera: w.view (View) = pan (km from the map centre to the screen centre) + zoom (log2 relative
                   to the fitted view, ZOOM_MIN -1 .. ZOOM_MAX 7). Zero = the whole map fitted to 95% of the window.
                   Each frame it becomes a Camera2D, zoom = px per km. Pan is clamped so the screen centre stays on
