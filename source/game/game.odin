@@ -277,6 +277,8 @@ game_update :: proc(memory: rawptr) -> bool {
 				lm.ground.vertices, lm.ground.colors = nil, nil
 				lm.ground_material = rl.LoadMaterialDefault()
 			}
+			areas_build(w, lm)
+			hill_build(w, lm)
 			lm.wind = line_mesh_upload(
 				make([][3]f32, WIND_VERTICES, context.temp_allocator),
 				make([][3]f32, WIND_VERTICES, context.temp_allocator),
@@ -373,6 +375,10 @@ game_update :: proc(memory: rawptr) -> bool {
 		// Everything lies on the ground plane (z = 0): raylib's depth test passes equal depths, so later draws go on
 		// top. Triangles face the camera when they are counter-clockwise on the map (x east, y south).
 		rl.BeginMode3D(w.cam.view)
+
+		// Draw order 1: land use areas, water last.
+		areas_draw(w)
+		hill_draw(w)
 
 		// Draw order 2: ground layers.
 		if w.screen == .Plan || w.nav_wind do layers_draw_ground(w)

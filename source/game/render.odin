@@ -247,6 +247,13 @@ Line_Meshes :: struct {
 	// ground layers (plan_ui layers_draw_ground): a vertex colored grid over the map
 	ground:          rl.Mesh,
 	ground_material: rl.Material,
+	// land use (draw order 1): the baked area triangles, vertex colors from the palette of area_theme
+	areas:           rl.Mesh,
+	area_colors:     [][4]u8, // perm arena, one per vertex, rewritten on a theme change
+	area_theme:      Theme,
+	// hillshade (terrain map type): one quad over the map with the baked shading as a texture
+	hill:            rl.Mesh,
+	hill_material:   rl.Material,
 	built:           bool,
 }
 
@@ -354,7 +361,121 @@ line_meshes_unload :: proc(lm: ^Line_Meshes) {
 	if lm.map_lines.vertexCount > 0 do rl.UnloadMesh(lm.map_lines)
 	rl.UnloadMesh(lm.wind)
 	rl.UnloadMesh(lm.ground)
+	if lm.areas.vertexCount > 0 do rl.UnloadMesh(lm.areas)
+	if lm.hill.vertexCount > 0 do rl.UnloadMesh(lm.hill)
 	rl.UnloadMaterial(lm.ground_material)
 	rl.UnloadMaterial(lm.material)
 	lm^ = {}
+}
+
+// Land use (draw order 1): one static mesh of the baked area triangles, built once. Each triangle is turned to
+// the winding of ground_quad, so back face culling never drops one. Colors per vertex from the palette, rewritten
+// only when the theme changes.
+areas_build :: proc(w: ^World, lm: ^Line_Meshes) {
+	pts := w.m.area_points
+	if len(pts) == 0 do return
+	pos := make([][3]f32, len(pts), context.temp_allocator)
+	lm.area_colors = make([][4]u8, len(pts))
+	for a in w.m.areas {
+		tri := pts[a.start:][:a.count]
+		for t := 0; t + 2 < len(tri); t += 3 {
+			p0, p1, p2 := tri[t], tri[t + 1], tri[t + 2]
+			e1, e2 := p1 - p0, p2 - p0
+			if e1.x * e2.y - e1.y * e2.x > 0 do p1, p2 = p2, p1
+			base := int(a.start) + t
+			pos[base], pos[base + 1], pos[base + 2] = {p0.x, p0.y, 0}, {p1.x, p1.y, 0}, {p2.x, p2.y, 0}
+		}
+	}
+	areas_color(w, lm)
+	lm.areas = rl.Mesh {
+		vertexCount   = i32(len(pts)),
+		triangleCount = i32(len(pts) / 3),
+		vertices      = ([^]f32)(raw_data(pos)),
+		colors        = ([^]u8)(raw_data(lm.area_colors)),
+	}
+	rl.UploadMesh(&lm.areas, true)
+	lm.areas.vertices, lm.areas.colors = nil, nil
+}
+
+areas_color :: proc(w: ^World, lm: ^Line_Meshes) {
+	pal := palette(w)
+	colors := [Area_Kind]rl.Color {
+		.City     = pal.city,
+		.Park     = pal.park,
+		.Farmland = pal.farmland,
+		.Marsh    = pal.marsh,
+		.Beach    = pal.beach,
+		.Water    = pal.water,
+	}
+	for a in w.m.areas {
+		c := colors[Area_Kind(a.kind)]
+		for &v in lm.area_colors[a.start:][:a.count] do v = {c.r, c.g, c.b, c.a}
+	}
+	lm.area_theme = w.theme
+}
+
+areas_draw :: proc(w: ^World) {
+	lm := &w.line_meshes
+	if lm.areas.vertexCount == 0 do return
+	if lm.area_theme != w.theme {
+		areas_color(w, lm)
+		rl.UpdateMeshBuffer(
+			lm.areas,
+			3,
+			raw_data(lm.area_colors),
+			i32(len(lm.area_colors) * size_of([4]u8)),
+			0,
+		)
+	}
+	rl.DrawMesh(lm.areas, lm.ground_material, rl.Matrix(1))
+}
+
+// Shading below this baked value darkens, above it lightens: 180 = cos 45 deg, flat ground under the 45 deg sun.
+HILL_FLAT :: 180
+HILL_SHADOW_ALPHA :: 130
+HILL_LIGHT_ALPHA :: 70
+
+// The hillshade of belgium.bin as one texture on a quad over the whole map (todo: "draw it as one quad"). Shadows
+// are black and highlights white with alpha, so it shades whatever land use is under it, in both themes.
+hill_build :: proc(w: ^World, lm: ^Line_Meshes) {
+	hs := w.m.hillshade
+	if len(hs) != HEIGHT_W * HEIGHT_H do return
+	pixels := make([][4]u8, len(hs), context.temp_allocator)
+	for v, i in hs {
+		if v < HILL_FLAT {
+			pixels[i] = {0, 0, 0, u8(f32(HILL_FLAT - v) / HILL_FLAT * HILL_SHADOW_ALPHA)}
+		} else {
+			pixels[i] = {255, 255, 255, u8(f32(v - HILL_FLAT) / (255 - HILL_FLAT) * HILL_LIGHT_ALPHA)}
+		}
+	}
+	img := rl.Image {
+		data    = raw_data(pixels),
+		width   = HEIGHT_W,
+		height  = HEIGHT_H,
+		mipmaps = 1,
+		format  = .UNCOMPRESSED_R8G8B8A8,
+	}
+	tex := rl.LoadTextureFromImage(img)
+	rl.SetTextureFilter(tex, .BILINEAR)
+	// Two triangles in the winding of ground_quad, texture v follows map y (row 0 = north edge).
+	W, H :: f32(MAP_W_KM), f32(MAP_H_KM)
+	pos := [6][3]f32{{0, 0, 0}, {0, H, 0}, {W, H, 0}, {0, 0, 0}, {W, H, 0}, {W, 0, 0}}
+	uv := [6][2]f32{{0, 0}, {0, 1}, {1, 1}, {0, 0}, {1, 1}, {1, 0}}
+	mesh := rl.Mesh {
+		vertexCount   = 6,
+		triangleCount = 2,
+		vertices      = ([^]f32)(&pos),
+		texcoords     = ([^]f32)(&uv),
+	}
+	rl.UploadMesh(&mesh, false)
+	mesh.vertices, mesh.texcoords = nil, nil // uploaded, the stack arrays are not kept
+	lm.hill = mesh
+	lm.hill_material = rl.LoadMaterialDefault()
+	rl.SetMaterialTexture(&lm.hill_material, .ALBEDO, tex)
+}
+
+hill_draw :: proc(w: ^World) {
+	lm := &w.line_meshes
+	if lm.hill.vertexCount == 0 || !w.plan.layers.terrain do return
+	rl.DrawMesh(lm.hill, lm.hill_material, rl.Matrix(1))
 }
