@@ -823,6 +823,18 @@ source/host/      debug host: loads build/game.so (game.dll on Windows), checks 
                   refuses a reload if World changed (restart needed). Calls game_before_reload on the old
                   library right before unloading it (stops the weather thread). Run from the repo root.
 source/release/   release main: calls the game package directly, one static exe
+web/              (Dario) browser build for phones, waiting for the owner's answer in #79.
+                  web/build.sh (Git Bash on Windows, odin dev-2026-11a + emcc 4.0.10) -> build/web/site, a static folder
+                  (index.html, index.js, index.wasm, odin.js). index.wasm is 17.4 MB, 9.9 MB gzipped: the host must
+                  compress it. web/raylib.sh builds raylib 6.2 (pinned commit) for WebGL 2, Odin's own web lib is WebGL 1.
+                  The build compiles a staged copy in build/web/stage: core:mem/virtual, core:os and vendor:curl are
+                  swapped for web/shim, dial_*.odin for dial_web.odin, GLSL 330 headers for 300 es. net.odin and
+                  presence.odin are compiled unchanged, but weather_poll and node_poll do not run (IS_WEB), so the
+                  page uses the embedded weather and shows no other cars and no carpool partner.
+                  source/game/web.odin: what the page feeds the game (stick, climb, actions, pinch zoom, state bits).
+                  web/shell.html: canvas scaled to at least 436 x 520 game px, one finger = mouse, two = zoom.
+                  Tested 2026-11-21 in headless Chromium (390 x 844 and 844 x 390, software GL) and WebKit 27.2 with
+                  iPhone emulation. Not yet measured on a real phone: frame rate and memory are unknown.
 
 World memory
   World is bootstrapped inside its own perm arena (virtual memory), so it survives reloads.

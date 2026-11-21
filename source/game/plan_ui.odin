@@ -20,6 +20,7 @@ MAP_BUTTON :: 48
 MAP_BUTTON_GAP :: 10
 LEGEND_X :: 440
 HUB_PICK_PX :: 16 // a click this close to a hub marker opens its menu
+HUB_PICK_TOUCH_PX :: 28 // a finger is less precise than a mouse
 
 Layers :: struct {
 	hide_wind:   bool,
@@ -60,11 +61,18 @@ Plan :: struct {
 }
 
 plan_panel_rect :: proc(w: ^World) -> rl.Rectangle {
-	return {PLAN_MARGIN, PLAN_MARGIN, PLAN_PANEL_W, f32(rl.GetScreenHeight()) - 2 * PLAN_MARGIN}
+	width := min(f32(PLAN_PANEL_W), f32(rl.GetScreenWidth()) - 2 * PLAN_MARGIN)
+	// In portrait the phone page keeps its button row above the panel.
+	top: f32 = IS_WEB && rl.GetScreenWidth() < 760 ? 64 : PLAN_MARGIN
+	return {PLAN_MARGIN, top, width, f32(rl.GetScreenHeight()) - top - PLAN_MARGIN}
 }
 
 // The part of the screen right of the panel, where cam_fit puts the routes.
 plan_map_rect :: proc(w: ^World) -> rl.Rectangle {
+	// A phone in portrait has no room beside the panel: the routes fit the whole screen, shown when it is closed.
+	if IS_WEB && (w.web.panel_hidden || rl.GetScreenWidth() < 760) {
+		return {16, 60, max(f32(rl.GetScreenWidth()) - 96, 100), max(f32(rl.GetScreenHeight()) - 140, 100)}
+	}
 	p := plan_panel_rect(w)
 	x := p.x + p.width + 40
 	return {x, 60, max(f32(rl.GetScreenWidth()) - x - 130, 100), max(f32(rl.GetScreenHeight()) - 140, 100)}
@@ -246,6 +254,10 @@ plan_refresh :: proc(w: ^World) {
 plan_ui :: proc(w: ^World) {
 	pal := palette(w)
 	p := &w.plan
+	if w.web.panel_hidden {
+		plan_hub_menu(w)
+		return
+	}
 	panel := plan_panel_rect(w)
 	buf: [96]u8
 
@@ -329,6 +341,7 @@ plan_ui :: proc(w: ^World) {
 		mouse := rl.GetMousePosition()
 		if rl.CheckCollisionPointRec(mouse, routes_box) {
 			p.scroll -= rl.GetMouseWheelMove() * 40
+			when IS_WEB do if rl.IsMouseButtonDown(.LEFT) do p.scroll -= rl.GetMouseDelta().y
 		}
 		p.scroll = clamp(p.scroll, 0, max(3 * ROW_H - routes_box.height, 0))
 		rl.BeginScissorMode(
@@ -433,7 +446,10 @@ plan_ui :: proc(w: ^World) {
 		ay := b.y + b.height - ACTIONS_H + 16
 		rl.DrawLineEx({b.x, ay - 16}, {b.x + b.width, ay - 16}, 1, pal.line)
 		ok := w.routes[p.mode].ok
-		if ui_pill_button(w, {b.x + 16, ay, 128, 44}, "Preview", .Secondary, .Play, true) && ok do cam_preview(w, p.mode)
+		if ui_pill_button(w, {b.x + 16, ay, 128, 44}, "Preview", .Secondary, .Play, true) && ok {
+			cam_preview(w, p.mode)
+			if IS_WEB do w.web.panel_hidden = true
+		}
 		if ui_pill_button(
 			   w,
 			   {b.x + 16 + 128 + 10, ay, b.width - 32 - 138, 44},
@@ -532,10 +548,19 @@ plan_hub_menu :: proc(w: ^World) {
 	outside := w.ui.last_popup.width == 0 || !rl.CheckCollisionPointRec(m, w.ui.last_popup)
 	// A click anywhere outside the open menu closes it, on the map it may open the menu of another hub.
 	if rl.IsMouseButtonPressed(.LEFT) && p.hub_menu > 0 && outside do p.hub_menu = 0
-	if rl.IsMouseButtonPressed(.LEFT) && !ui_mouse_captured(w) && w.ui.popup.width == 0 {
+	pick := rl.IsMouseButtonPressed(.LEFT) && !ui_mouse_captured(w) && w.ui.popup.width == 0
+	// On a phone a press may be the start of a drag over the map: only a tap that stayed in place picks a hub.
+	when IS_WEB {
+		if rl.IsMouseButtonPressed(.LEFT) {
+			w.web.press_pos = m
+			w.web.press_on_map = pick
+		}
+		pick = rl.IsMouseButtonReleased(.LEFT) && w.web.press_on_map && linalg.length(m - w.web.press_pos) < WEB_TAP_PX
+	}
+	if pick {
 		for i in 0 ..< w.m.hub_count {
 			px, visible := cam_to_screen(w, {w.m.hubs[i].pos.x, w.m.hubs[i].pos.y, 0})
-			if visible && linalg.length(px - m) < HUB_PICK_PX {
+			if visible && linalg.length(px - m) < (IS_WEB ? HUB_PICK_TOUCH_PX : HUB_PICK_PX) {
 				p.hub_menu = i + 1
 				p.editing = .None
 				break
@@ -581,6 +606,11 @@ plan_map_controls :: proc(w: ^World) {
 	pal := palette(w)
 	p := &w.plan
 	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
+	// A phone in portrait shows either the panel or the map, these buttons belong to the map.
+	if IS_WEB && !w.web.panel_hidden && sw < 760 {
+		p.layers_open = false
+		return
+	}
 	x := sw - PLAN_MARGIN - MAP_BUTTON
 	zoom := rl.Rectangle{x, sh - 24 - 92, MAP_BUTTON, 92}
 	switch ui_zoom_pill(w, zoom) {

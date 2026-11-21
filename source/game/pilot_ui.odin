@@ -36,7 +36,7 @@ PAD_KEYS :: [9]Pad_Key {
 // Reads the pad under the mouse, called before the fixed steps so a press steers the ship this frame.
 pilot_pad_controls :: proc(w: ^World) -> Controls {
 	c: Controls
-	if w.screen != .Navigate || !w.nav.manual || !rl.IsMouseButtonDown(.LEFT) do return c
+	if IS_WEB || w.screen != .Navigate || !w.nav.manual || !rl.IsMouseButtonDown(.LEFT) do return c
 	m := rl.GetMousePosition()
 	keys := PAD_KEYS
 	for k, i in keys {
@@ -130,7 +130,9 @@ pilot_ui :: proc(w: ^World) {
 
 	// Speed circle 16 px from the left, 84 px above the sheet.
 	{
-		c := [2]f32{16 + SPEED_CIRCLE / 2, sheet.y - 84 - SPEED_CIRCLE / 2}
+		// On a phone it sits above the touch stick.
+		bottom := IS_WEB ? w.web.stick_top - 10 : sheet.y - 84
+		c := [2]f32{16 + SPEED_CIRCLE / 2, bottom - SPEED_CIRCLE / 2}
 		ui_shadow(
 			w,
 			{c.x - SPEED_CIRCLE / 2, c.y - SPEED_CIRCLE / 2, SPEED_CIRCLE, SPEED_CIRCLE},
@@ -147,11 +149,13 @@ pilot_ui :: proc(w: ^World) {
 	// Re-centre after the user moved the map.
 	if w.cam.dragged {
 		r := rl.Rectangle{16, sheet.y - 16 - 56, 170, 56}
+		// Between the touch stick and the climb buttons.
+		if IS_WEB do r = {sw / 2 - 70, sheet.y - 16 - 56, 140, 56}
 		id, hot, fired := ui_widget(w, r)
 		dark := rl.Color{32, 33, 36, 255}
 		round_rect(r, 28, hot ? rl.ColorBrightness(dark, 0.15) : dark)
 		ui_icon(w, .Navigate, {r.x + 30, r.y + 28}, 24, {138, 180, 248, 255})
-		ui_text(w, {r.x + 52, r.y + 17}, "Re-centre", .Figtree_500, 18, rl.WHITE)
+		ui_text(w, {r.x + (IS_WEB ? 44 : 52), r.y + 17}, "Re-centre", .Figtree_500, IS_WEB ? 16 : 18, rl.WHITE)
 		ui_focus_ring(w, id, r, 28)
 		ui_block(w, r)
 		if fired do cam_recentre(w)
@@ -174,8 +178,8 @@ pilot_ui :: proc(w: ^World) {
 		if fired && n.active do nav_set_manual(w, !n.manual)
 	}
 
-	// Control pad (only in self-fly) and the key card above it.
-	if n.manual || !n.active {
+	// Control pad (only in self-fly) and the key card above it. The phone page has its own multi-touch controls.
+	if !IS_WEB && (n.manual || !n.active) {
 		keys := PAD_KEYS
 		pressed := w.controls
 		for k, i in keys {
