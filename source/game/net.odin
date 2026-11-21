@@ -19,12 +19,7 @@ import curl "vendor:curl"
 // Static raylib drops libcmt (wants the dynamic CRT), vendor:curl drops msvcrt (wants the static one),
 // so a static Windows exe ends up with no CRT at all. Give the dynamic CRT back explicitly.
 when ODIN_OS == .Windows && !#config(RAYLIB_SHARED, false) {
-	@(require)
-	foreign import windows_crt {
-		"system:msvcrt.lib",
-		"system:vcruntime.lib",
-		"system:ucrt.lib",
-	}
+	@(require) foreign import windows_crt {"system:msvcrt.lib", "system:vcruntime.lib", "system:ucrt.lib"}
 }
 
 OPEN_METEO_URL :: "https://api.open-meteo.com/v1/forecast"
@@ -263,7 +258,12 @@ weather_load_snapshot :: proc(w: ^World) {
 	w.weather_hash = h.hash
 	f.fetched_at = h.fetched_at
 	f.next = h.fetched_at + REFRESH_S
-	fmt.printfln("[weather] loaded %s, start %d, fetched at %d", SNAPSHOT_PATH, w.weather.start, h.fetched_at)
+	fmt.printfln(
+		"[weather] loaded %s, start %d, fetched at %d",
+		SNAPSHOT_PATH,
+		w.weather.start,
+		h.fetched_at,
+	)
 }
 
 // Called every frame. Starts a fetch thread when one is due, takes over its result when it is done.
