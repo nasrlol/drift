@@ -135,15 +135,15 @@ Street_Look :: struct {
 
 street_look :: proc(w: ^World) -> Street_Look {
 	day := Street_Look {
-		zenith    = {92, 138, 196, 255},
-		horizon   = {196, 210, 222, 255},
-		sun_dir   = linalg.normalize([3]f32{-0.45, 0.7, 0.55}),
-		sun       = 1,
-		sky_amb   = {0.66, 0.76, 0.9},
-		gnd_amb   = {0.3, 0.29, 0.25},
-		tone      = {1, 1, 1},
-		land      = {106, 122, 78, 255},
-		areas     = {
+		zenith = {92, 138, 196, 255},
+		horizon = {196, 210, 222, 255},
+		sun_dir = linalg.normalize([3]f32{-0.45, 0.7, 0.55}),
+		sun = 1,
+		sky_amb = {0.66, 0.76, 0.9},
+		gnd_amb = {0.3, 0.29, 0.25},
+		tone = {1, 1, 1},
+		land = {106, 122, 78, 255},
+		areas = {
 			.City = {132, 130, 124, 255},
 			.Park = {78, 110, 60, 255},
 			.Farmland = {136, 138, 92, 255},
@@ -151,10 +151,10 @@ street_look :: proc(w: ^World) -> Street_Look {
 			.Beach = {206, 192, 156, 255},
 			.Water = {58, 86, 106, 255},
 		},
-		asphalt   = {66, 68, 72, 255},
-		motorway  = {76, 77, 80, 255},
-		marking   = {214, 212, 200, 255},
-		river     = {56, 84, 102, 255},
+		asphalt = {66, 68, 72, 255},
+		motorway = {76, 77, 80, 255},
+		marking = {214, 212, 200, 255},
+		river = {56, 84, 102, 255},
 		buildings = {roof = {0.47, 0.4, 0.37}, wall = {0.74, 0.7, 0.64}, tree = {0.3, 0.4, 0.24}},
 	}
 	if w.theme == .Night {
@@ -166,7 +166,11 @@ street_look :: proc(w: ^World) -> Street_Look {
 		n.sky_amb = {0.16, 0.2, 0.3}
 		n.gnd_amb = {0.05, 0.05, 0.07}
 		n.tone = {0.3, 0.34, 0.46}
-		n.buildings = {roof = {0.15, 0.15, 0.2}, wall = {0.25, 0.27, 0.34}, tree = {0.08, 0.12, 0.1}}
+		n.buildings = {
+			roof = {0.15, 0.15, 0.2},
+			wall = {0.25, 0.27, 0.34},
+			tree = {0.08, 0.12, 0.1},
+		}
 		day = n
 	}
 	day.buildings.fog = rl.ColorNormalize(day.horizon).rgb
@@ -175,12 +179,7 @@ street_look :: proc(w: ^World) -> Street_Look {
 
 // Map space (x km, y km south, z km down) to street space (m, y up) around origin.
 street_transform :: proc(origin: [2]f32) -> rl.Matrix {
-	return rl.Matrix {
-		1000, 0, 0, -1000 * origin.x,
-		0, 0, -1000, 0,
-		0, 1000, 0, -1000 * origin.y,
-		0, 0, 0, 1,
-	}
+	return rl.Matrix{1000, 0, 0, -1000 * origin.x, 0, 0, -1000, 0, 0, 1000, 0, -1000 * origin.y, 0, 0, 0, 1}
 }
 
 // The ship in street space: f64 so pos_frac (below the f32 resolution of pos) counts.
@@ -290,7 +289,14 @@ street_road_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	look := street_look(w)
 	pos := make([dynamic][3]f32, 0, 1 << 14, context.temp_allocator)
 	col := make([dynamic][4]u8, 0, 1 << 14, context.temp_allocator)
-	quad :: proc(pos: ^[dynamic][3]f32, col: ^[dynamic][4]u8, a, b: [2]f32, hw: f32, c: rl.Color, layer: u8) {
+	quad :: proc(
+		pos: ^[dynamic][3]f32,
+		col: ^[dynamic][4]u8,
+		a, b: [2]f32,
+		hw: f32,
+		c: rl.Color,
+		layer: u8,
+	) {
 		d := b - a
 		l := linalg.length(d)
 		if l <= 0 do return

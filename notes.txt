@@ -253,7 +253,8 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   with the mesh. The first frame takes ~34 ms (mesh build).
                   Wind particles (Wind_Particles in render.odin, w.wind): WIND_PARTICLES 600, SoA arrays x, y, vx, vy,
                   age in World. Drawing only, never read by the simulation, so frame time is used. Spread over the
-                  visible part of the map, respawned there when they leave the view or reach WIND_LIFE_S 3 s; the
+                  visible part of the map, respawned there when they leave the view or Belgium (WIND_SPAWN_TRIES 8
+                  picks to land inside) or reach WIND_LIFE_S 3 s; alpha x belgium_fade, so nothing shows abroad. The
                   first frame (seeded = false) gives them random ages. Seeded LCG (wind_rand), same picture every
                   run. Velocity = wind_at of layer 0 (until the layer toggles) at the forecast hour of w.tick,
                   shown at WIND_PX_PER_MS 4 px/s per m/s at every zoom. Trail = 0.4 s of travel, fades in and out
@@ -313,6 +314,13 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   cell + forecast hour filter, then four router runs for the detour), carpool_split (passenger:
                   seats / (seats + 1) of the shared leg + the whole detour), carpool_reputation (one review per
                   side of an accepted trip), carpool_frame (live position once a second, partner on the map).
+  globe.odin      (nasr) 3D Earth globe backdrop around Belgium: #load embeds assets/world.bin (968 KB,
+                  Natural Earth 50m land mask 2048x1024 1-bit + 1815 coastline/border lines + 1127 world
+                  cities, baked by tools/bake_world after tools/download_world.sh). Sphere radius 6371 km
+                  tangent to Belgium's centre (MAP_W_KM/2, MAP_H_KM/2, z=0), so Belgium's flat map and
+                  simulation stay untouched on top. Night/day ocean + land + 15-deg graticule + Fresnel limb
+                  atmosphere shader, coastlines/borders via LINE_VS, world city labels when zoom < -0.8.
+                  Camera (camera.odin): ZOOM_MIN -6.2 orbits the globe via Cam_Pose.globe_rot (lon/lat rad).
   map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
                   load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
                   Hubs are copied into a fixed array w.m.hubs[:w.m.hub_count], hub id = index.
@@ -341,6 +349,19 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Measured (profile build, cloud box): bench avg ~50 ns (4096 random points over the 2.2 MB
                   grid after a route ran, so mostly cache misses), ~10-18 ns warm, 1.69M calls in grid order
                   14 ms (the route's terrain set, built on first use and after a reload: +~14 ms).
+                  Belgium mask (nasr, 2026-11-21, "limit everything to Belgium"): w.belgium [HEIGHT_W * HEIGHT_H]u8
+                  on the same 250 m cells, built by belgium_build in game_hot_reloaded from the 36 Border rings of
+                  belgium.bin (even-odd scanline fill, the sea zone counts as Belgium), then two chamfer passes:
+                  0 outside, else the depth into Belgium in cells, capped at BELGIUM_DEPTH 12 (BELGIUM_FADE_KM 3).
+                  514933 cells inside = 32183 km2. ~6 ms (-o:speed) at startup and after every reload. No border
+                  rings = Belgium everywhere. belgium_inside(w, x, y) -> bool (cell lookup, outside the map and
+                  NaN false), belgium_fade(w, x, y) -> 0..1 (bilinear like height_at). Users:
+                    wind particles, clouds, gust / solar ground layers: alpha x belgium_fade (replaced map_edge_fade)
+                    camera (Free mode): after cam_clamp_pan the point under the screen centre must be inside, else
+                      keep the axis that stays inside, else pull the pan toward the map centre (inside Belgium)
+                    ship_step: a step from inside to outside keeps the axis that stays inside (slides along the
+                      border); a ship already outside moves freely
+                    route terrain set: a 1 km cell whose centre is outside is closed on every layer
   weather.odin    wind_at(w, x, y, layer, hour) -> [2]f32 m/s, direction the wind blows toward, x east, y south
                   gust_at(w, x, y, layer, hour) -> 0..1, cloud_at(w, x, y, hour) -> 0..1. Bilinear on the 40 km grid
                   from w.weather, no allocation. Outside the grid the edge value holds, layer and hour are

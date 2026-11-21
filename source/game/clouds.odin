@@ -135,7 +135,8 @@ clouds_draw :: proc(w: ^World) {
 			p :=
 				([2]f32{f32(cx), f32(cy)} + {cloud_rand(cx, cy, 1), cloud_rand(cx, cy, 2)}) * CLOUD_CELL_KM +
 				drift
-			if p.x < 0 || p.y < 0 || p.x > MAP_W_KM || p.y > MAP_H_KM do continue
+			edge := belgium_fade(w, p.x, p.y)
+			if edge <= 0 do continue
 			cover := cloud_at(w, p.x, p.y, hour)
 			// Noise stretched to 0 .. 1, so a cover of 0.3 clouds about 30 % of the spots. A clear forecast still
 			// keeps a few thin ones (10 %), the sky is never empty.
@@ -153,7 +154,7 @@ clouds_draw :: proc(w: ^World) {
 					size = size,
 					seed = hash_u32(u32(cx) * 31 + u32(cy) * 7919),
 					depth = linalg.length(world - cam_pos),
-					alpha = fade * map_edge_fade(p.x, p.y),
+					alpha = fade * edge,
 				},
 			)
 		}
