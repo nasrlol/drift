@@ -52,12 +52,20 @@ Measured (2026-11-21, macOS arm64): one fetch ~400 ms, ~1.2 MB scratch (json val
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
   game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing
-                  Camera: w.view (View) = pan (km from the map centre to the screen centre) + zoom (log2 relative
-                  to the fitted view, ZOOM_MIN -1 .. ZOOM_MAX 7). Zero = the whole map fitted to 95% of the window.
+                  Sim speed: keys 1..4 set w.sim_speed = 1x / 5x / 15x / 40x (SIM_SPEEDS). The frame time (capped at
                   0.25 s) is multiplied before it goes into the accumulator, so 40x runs up to 40 steps per 60 fps frame
                   (600 at most after a hitch) and every step still has dt = 1 / 60.
-                  Map drawing: a Camera2D per frame fits 0..MAP_W_KM x 0..MAP_H_KM (286 x 237 km) to 95% of the
-                  window, zoom = px per km, map centre on screen centre. Each Map_Line is one rl.DrawLineStrip
+                  Camera: w.view (View) = pan (km from the map centre to the screen centre) + zoom (log2 relative
+                  to the fitted view, ZOOM_MIN -1 .. ZOOM_MAX 7). Zero = the whole map fitted to 95% of the window.
+                  Each frame it becomes a Camera2D, zoom = px per km. Pan is clamped so the screen centre stays on
+                  the map. Two modes, key M toggles, w.drive_mode (zero = map mode):
+                  Map mode: the camera reads w.controls, throttle / turn pan (600 px/s), climb zooms (2 per s) around
+                  the screen centre. So WASD and the left stick pan, R/F and right stick Y zoom. Mouse (camera only,
+                  not in Controls): left drag pans, wheel zooms (0.25 per notch) around the cursor. The ship does not
+                  step and nothing is recorded.
+                  Drive mode: Controls go to ship_step and the replay record, the camera sits on the ship, only the
+                  wheel zooms. The ship is drawn as an 8 px red triangle pointing along its heading in both modes.
+                  Map drawing: each Map_Line is one rl.DrawLineStrip
                   straight from w.m.points ([2]f32 km has the rl.Vector2 layout, no copy, no allocation).
                   Colors: border dark grey, rivers blue, motorways orange. 10872 strips, 36k points per frame.
                   Measured 2026-11-21 (Asahi M2, 800 x 450): draw 8.7 ms debug, 7.3 ms profile, over the 4 ms budget.
@@ -148,6 +156,10 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Replay: every step the controls are packed to Control_Step ([3]i8, 3 bytes) and the ship steps with the
                   unpacked value, so the recording reproduces the path exactly. w.replay.steps is 60 * 3600 steps (1 h,
                   648 KB) from the perm arena, w.replay.count says how many are filled, recording stops when full.
+                  Bench (profile build, 2026-11-21, Windows, height_at still a stub): ship_step min 59 / avg 65 / max 319 ns
+                  against the 1 us budget. It is ~2 sin/cos, wind_at (8 ns), 15 hub distances and 8 zone checks. The tower
+                  height_at is only called for a hub that is within 30 m horizontally, not for all 15, because the real
+                  height_at will cost more than the stub.
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
                   R/F climb up / down, gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
