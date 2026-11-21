@@ -35,30 +35,50 @@ Theme :: enum u8 {
 }
 
 Palette :: struct {
-	surface:       rl.Color, // panels, cards, buttons
-	surface_2:     rl.Color, // input fields, hover
-	surface_3:     rl.Color, // toggle off
-	text:          rl.Color, // main text
-	text_2:        rl.Color, // secondary text, icons
-	line:          rl.Color, // borders, dividers
-	accent:        rl.Color, // chosen chip, Start, links
-	accent_strong: rl.Color, // chosen route bubble, chosen row
-	green:         rl.Color, // Greenest time, leaf, energy
-	banner:        rl.Color, // instruction banner
-	banner_2:      rl.Color, // "Then" tab
-	red:           rl.Color, // Exit, destination pin
-	warning:       rl.Color, // warning pill, gust icon
-	reroute:       rl.Color, // banner while rerouting
-	arrived:       rl.Color, // banner on arrival
-	sheet:         rl.Color, // navigation bottom sheet
-	chip:          rl.Color, // stat chips in the sheet
-	bubble:        rl.Color, // road sign on the map
-	bubble_text:   rl.Color, // road sign text
-	pill:          rl.Color, // road pill under the ship
-	// map, until the map colors item
-	background:    rl.Color,
-	lines:         [Map_Kind]rl.Color,
-	wind:          rl.Color,
+	surface:          rl.Color, // panels, cards, buttons
+	surface_2:        rl.Color, // input fields, hover
+	surface_3:        rl.Color, // toggle off
+	text:             rl.Color, // main text
+	text_2:           rl.Color, // secondary text, icons
+	line:             rl.Color, // borders, dividers
+	accent:           rl.Color, // chosen chip, Start, links
+	accent_strong:    rl.Color, // chosen route bubble, chosen row
+	green:            rl.Color, // Greenest time, leaf, energy
+	banner:           rl.Color, // instruction banner
+	banner_2:         rl.Color, // "Then" tab
+	red:              rl.Color, // Exit, destination pin
+	warning:          rl.Color, // warning pill, gust icon
+	reroute:          rl.Color, // banner while rerouting
+	arrived:          rl.Color, // banner on arrival
+	sheet:            rl.Color, // navigation bottom sheet
+	chip:             rl.Color, // stat chips in the sheet
+	bubble:           rl.Color, // road sign on the map
+	bubble_text:      rl.Color, // road sign text
+	pill:             rl.Color, // road pill under the ship
+	// map (design "Kaart" table)
+	land:             rl.Color,
+	city:             rl.Color,
+	park:             rl.Color,
+	farmland:         rl.Color,
+	marsh:            rl.Color,
+	beach:            rl.Color,
+	water:            rl.Color,
+	roof:             rl.Color,
+	wall:             rl.Color,
+	motorway:         rl.Color,
+	motorway_casing:  rl.Color,
+	main_road:        rl.Color,
+	main_road_casing: rl.Color,
+	street:           rl.Color,
+	street_casing:    rl.Color,
+	track:            rl.Color,
+	track_casing:     rl.Color,
+	route:            rl.Color,
+	route_casing:     rl.Color,
+	alt_route:        rl.Color,
+	alt_route_casing: rl.Color,
+	sky:              rl.Color,
+	horizon:          rl.Color,
 }
 
 PALETTES :: [Theme]Palette {
@@ -83,13 +103,29 @@ PALETTES :: [Theme]Palette {
 		bubble = {143, 227, 255, 255},
 		bubble_text = {11, 42, 58, 255},
 		pill = {26, 143, 216, 255},
-		background = {18, 22, 30, 255},
-		lines = {
-			.Border = {150, 150, 165, 255},
-			.River = {70, 140, 230, 255},
-			.Motorway = {230, 150, 40, 255},
-		},
-		wind = {170, 200, 255, 255},
+		land = {31, 60, 85, 255},
+		city = {40, 62, 99, 255},
+		park = {27, 71, 82, 255},
+		farmland = {34, 68, 91, 255},
+		marsh = {28, 71, 87, 255},
+		beach = {42, 73, 100, 255},
+		water = {12, 36, 66, 255},
+		roof = {80, 102, 151, 255},
+		wall = {54, 73, 122, 255},
+		motorway = {129, 147, 210, 255},
+		motorway_casing = {51, 70, 140, 255},
+		main_road = {100, 118, 176, 255},
+		main_road_casing = {43, 59, 110, 255},
+		street = {79, 98, 153, 255},
+		street_casing = {37, 53, 99, 255},
+		track = {59, 80, 128, 255},
+		track_casing = {34, 51, 92, 255},
+		route = {34, 205, 255, 255},
+		route_casing = {11, 119, 168, 255},
+		alt_route = {108, 123, 168, 255},
+		alt_route_casing = {58, 72, 112, 255},
+		sky = {10, 23, 48, 255},
+		horizon = {22, 48, 78, 255},
 	},
 	.Day = {
 		surface = {255, 255, 255, 255},
@@ -112,9 +148,29 @@ PALETTES :: [Theme]Palette {
 		bubble = {255, 255, 255, 255},
 		bubble_text = {32, 33, 36, 255},
 		pill = {26, 115, 232, 255},
-		background = {245, 245, 245, 255},
-		lines = {.Border = {80, 80, 80, 255}, .River = {0, 121, 241, 255}, .Motorway = {255, 161, 0, 255}},
-		wind = {60, 90, 150, 255},
+		land = {239, 236, 229, 255},
+		city = {231, 227, 219, 255},
+		park = {200, 232, 196, 255},
+		farmland = {238, 241, 217, 255},
+		marsh = {211, 236, 220, 255},
+		beach = {246, 237, 207, 255},
+		water = {159, 212, 246, 255},
+		roof = {244, 241, 236, 255},
+		wall = {216, 211, 203, 255},
+		motorway = {253, 217, 130, 255},
+		motorway_casing = {226, 180, 82, 255},
+		main_road = {255, 255, 255, 255},
+		main_road_casing = {211, 206, 197, 255},
+		street = {255, 255, 255, 255},
+		street_casing = {219, 214, 206, 255},
+		track = {251, 250, 247, 255},
+		track_casing = {227, 223, 215, 255},
+		route = {26, 115, 232, 255},
+		route_casing = {20, 86, 181, 255},
+		alt_route = {159, 189, 236, 255},
+		alt_route_casing = {117, 151, 212, 255},
+		sky = {188, 220, 242, 255},
+		horizon = {230, 239, 242, 255},
 	},
 }
 
