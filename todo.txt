@@ -49,8 +49,8 @@ navigate screen -> LARS (banner, sheet) + DARIO (buttons, pad), route strips -> 
 Shared signatures for all of this: notes.txt "DESIGN INTERFACES". nasr builds the base everyone uses:
 [ ] tokens: Palette fields = the design token table (surface .. pill), night + day values, night is zero
 [ ] map colors: land, city, park, farmland, marsh, beach, water, buildings, roads, sky per theme
-[ ] fonts: embed Figtree + Roboto Mono like Roboto (#47), ui_text(w, pos, text, Font, px, color) (waiting: same)
-[ ] icons: one embedded icon atlas, ui_icon(w, Icon, centre, px, color) (waiting: icon + font question)
+[ ] fonts: embed Figtree + Roboto Mono like Roboto (#47), ui_text(w, pos, text, Font, px, color) (waiting: #64)
+[ ] icons: one embedded icon atlas, ui_icon(w, Icon, centre, px, color) (waiting: #64)
 [ ] ui kit: card + shadow, round button 48 / 64, zoom pill, pill buttons, chip, toggle, segment, tile
 [ ] ui kit: input field, stat chip (with meter), toast 1.6 s, hover = surface-2, 2 px focus ring, 44 px hits
 [ ] screen state: w.screen (Plan / Navigate) + draw order in game.odin (see notes.txt), Esc -> Plan

@@ -338,7 +338,7 @@ Draw order (game.odin, nasr keeps the list; the design's "Tekenvolgorde")
   5 routes (Lars)  6 airship shadow + airship (Dario)  7 labels (nasr), bubbles, road sign, pill (Lars)
   8 screen UI: Plan -> plan_ui (Andrei); Navigate -> nav_ui (Lars) + pilot_ui (Dario); layers panel (Andrei);
     toasts last (nasr)
-Open question on the design: icon set + the two extra fonts (new dependencies), see "waiting" in todo.txt.
+Open question on the design: icon set + the two extra fonts (new dependencies), #64.
 
 BUILD
 compile.sh [debug|profile|release] [extra odin flags], build.sh wraps it with build-notify
