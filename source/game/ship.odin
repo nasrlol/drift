@@ -53,6 +53,17 @@ Ship :: struct {
 	// Set while within reach of a hub tower, dock_hub is only meaningful then.
 	docked:    bool,
 	dock_hub:  int,
+	// Held at the tower top + DOCK_ABOVE_M after docking, until the throttle opens again.
+	moored:    bool,
+	// Energy since the app started (spec "Vermogen"): drawn by the motors and the ballonets, and harvested by
+	// the solar film. The battery holds BATTERY_START x BATTERY_KWH - used + solar (ship_battery_kwh).
+	used_kwh:  f32,
+	solar_kwh: f32,
+}
+
+// Battery charge in kWh, BATTERY_START x BATTERY_KWH at the start, clamped to the capacity.
+ship_battery_kwh :: proc(s: ^Ship) -> f32 {
+	return clamp(BATTERY_START * BATTERY_KWH - s.used_kwh + s.solar_kwh, 0, BATTERY_KWH)
 }
 
 SHIP_MAX_SPEED :: 35.0
@@ -61,6 +72,8 @@ SHIP_BRAKE :: 1.6
 SHIP_MAX_TURN_RATE :: 0.6
 SHIP_TURN_SMOOTH_S :: 0.5
 SHIP_CLIMB_RATE :: 5.0
+// Climbing costs this much power per m/s of climb on top of P(v, g) (spec "Vermogen").
+SHIP_CLIMB_KW_PER_MS :: 4.3
 SHIP_CEILING :: 900.0
 SHIP_MIN_CLEARANCE :: 28.0
 SHIP_TERRAIN_WARN_M :: 60.0
@@ -70,6 +83,19 @@ DOCK_VERTICAL_M :: 25.0
 // Runs once per fixed step on w.ship. Reads only the ship, the controls, the terrain and the weather.
 ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	s := &w.ship
+	hour := sim_hour(w)
+
+	if s.moored {
+		if c.throttle <= 0 {
+			hub := w.m.hubs[s.dock_hub].pos
+			s.pos = hub
+			s.alt = height_at(w, hub.x, hub.y) + HUB_TOWER_M + DOCK_ABOVE_M
+			s.speed, s.turn_rate = 0, 0
+			s.docked = true
+			return
+		}
+		s.moored = false
+	}
 
 	target_turn := c.turn * SHIP_MAX_TURN_RATE
 	s.turn_rate += (target_turn - s.turn_rate) * min(dt / SHIP_TURN_SMOOTH_S, 1)
@@ -85,14 +111,20 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	// The wind layer nearest to the ship's altitude, the forecast hour from the simulated time.
 	layers := LAYER_ALT
 	layer := clamp(int(math.round((s.alt - layers[0]) / (layers[1] - layers[0]))), 0, WIND_LAYERS - 1)
-	hour := int(w.tick / (SIM_HZ * 3600))
 	wind := wind_at(w, s.pos.x, s.pos.y, layer, hour)
 	air := [2]f32{math.sin(s.heading) * s.speed, -math.cos(s.heading) * s.speed}
 	s.pos += (air + wind) * dt / 1000
 
+	alt0 := s.alt
 	s.alt += c.climb * SHIP_CLIMB_RATE * dt
 	floor := height_at(w, s.pos.x, s.pos.y) + SHIP_MIN_CLEARANCE
 	s.alt = min(max(s.alt, floor), SHIP_CEILING)
+
+	// Energy (spec): P(airspeed, gust) + climbing power, solar from the cloud cover of this hour.
+	climb_ms := max(s.alt - alt0, 0) / dt
+	gust := gust_at(w, s.pos.x, s.pos.y, layer, hour)
+	s.used_kwh += (power_kw(s.speed, gust) + climb_ms * SHIP_CLIMB_KW_PER_MS) * dt / 3600
+	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, hour)) * dt / 3600
 
 	s.warnings = {}
 	if s.alt - (floor - SHIP_MIN_CLEARANCE) < SHIP_TERRAIN_WARN_M do s.warnings += {.Terrain}
