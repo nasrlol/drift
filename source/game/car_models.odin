@@ -559,9 +559,10 @@ car_blob :: proc(b: ^Car_Builder, center, radii: [3]f32, c: [4]u8) {
 	}
 }
 
-// The saved skin, Concept when there is none or it is not a name of CAR_SKIN_NAMES.
+// The saved skin, Concept when there is none or it is not a name of CAR_SKIN_NAMES. Called from game_init,
+// before game_update points context.temp_allocator at the frame arena.
 car_skin_load :: proc(w: ^World) {
-	data, err := os.read_entire_file(CAR_SKIN_PATH, context.temp_allocator)
+	data, err := os.read_entire_file(CAR_SKIN_PATH, virtual.arena_allocator(&w.frame))
 	if err != nil do return
 	name := strings.trim_space(string(data))
 	for n, skin in CAR_SKIN_NAMES {
