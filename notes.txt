@@ -95,6 +95,15 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   Stub: straight line. Path lives in w.route_mem until the next call.
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
+test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
+                  Each case = snapshot + inputs through game.headless_run, output compared line by line to the
+                  .expected file. On a mismatch it prints the first differing line and writes the full output
+                  to build/test_<name>.txt. Expected files change only with the owner's approval.
+  test/data/      calm.snap: zero wind / gust / cloud, start 1795176000. nan_wind.snap: same with
+                  wind[3][1][20].x = NaN, must be rejected. routes.txt: one route per mode, hours 0 / 4 / 8,
+                  a route to the same hub. calm_routes.expected: today the straight line stub.
+                  Snapshots were written byte by byte from the format above. Add a real fetched snapshot
+                  once snapshot saving exists, the calm one does not exercise the wind.
 source/host/      debug host: loads build/game.so (game.dll on Windows), checks its mtime every frame, copies it to
                   build/game_N.so and loads the copy, unloads the old one after. Compares memory_size,
                   refuses a reload if World changed (restart needed). Run from the repo root.

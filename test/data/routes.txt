@@ -1,0 +1,5 @@
+# One route per mode, first and last forecast hour, and a route to the same hub.
+route 6 10 fastest 0
+route 14 2 greenest 4
+route 1 11 calmest 8
+route 5 5 fastest 0

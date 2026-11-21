@@ -23,7 +23,7 @@ FIRST, TOGETHER (so everyone can work in parallel)
 [x] add #config(DRIFT_DEBUG / DRIFT_PROFILE) in code, then the matching -define in compile.sh
 [x] hubs: fixed array of Belgian hubs (start with the 15 cities), baked into belgium.bin
 [ ] bench/ program: times every system, prints min/avg/max, run it before every merge
-[ ] test/ program: fixed snapshot + fixed inputs -> compare routes and maneuvers to stored results
+[x] test/ program: fixed snapshot + fixed inputs -> compare routes and maneuvers to stored results
 
 NASR: MAP + RENDERING + UI
 [ ] load belgium.bin and draw lines (km -> px: scale + offset)
