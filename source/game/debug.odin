@@ -331,6 +331,7 @@ dump_world :: proc(w: ^World, out: ^strings.Builder) {
 	} else {
 		fmt.sbprintln(out, "blocked set not built yet, the next route builds it")
 	}
+	fmt.sbprintfln(out, "last route expanded %d of %d nodes", w.grid.expanded_len, GRID_NODES)
 
 	fmt.sbprintfln(
 		out,

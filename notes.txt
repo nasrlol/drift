@@ -311,7 +311,14 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   points). Bench route avg 8.6 -> 8.0 ms, three modes 23.0 -> 22.0 ms (noise, A* dominates).
                   Open set: binary min-heap on f in grid.heap (fixed array, 8 B x 203k) with grid.slot
                   (index in the heap, HEAP_CLOSED once expanded) for decrease-key. No allocation during
-                  the search, the path is the only allocation (route arena). Search state 24 B x 203k = 4.9 MB.
+                  the search, the path is the only allocation (route arena). Search state 28 B x 203k = 5.7 MB.
+                  Scan order (for the A* scan animation): grid.expanded[:grid.expanded_len] holds the nodes in
+                  the order the last route expanded (popped) them, start first, goal last on success. Fixed
+                  array of 203k Node (813 KB) in World: a node is never reopened, so it always fits. Reset to
+                  0 at the start of every route, so a route that fails before A* (no free end node, separate
+                  regions) leaves an empty scan, and one that fails during A* holds every node it searched.
+                  Valid until the next route call. The renderer only reads it, the router does no extra work
+                  beyond one store per expanded node. The state dump prints expanded_len.
                   Blocked nodes (spec): highest ground in the cell + 75 m above the layer, the outer ring of
                   cells, or a no-fly zone below its ceiling. w.no_fly: [8]No_Fly_Zone (centre km, radius km,
                   ceiling m), radius 0 = unused slot, zero = no zones. A zone blocks every cell it overlaps,
@@ -370,6 +377,9 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
                   y 80..120 km, 0 elsewhere, hour 8 cloud 1 everywhere. cloudy_routes.txt: greenest Oostende ->
                   Liege flies north of the clouds (222.1 km smoothed instead of 213.6 km), fastest and
                   greenest in uniform overcast take the shortest path. Without the solar term all match.
+                  scan_order (code, no .expected): grid.expanded after routes between all 15 x 15 hubs on
+                  calm.snap: starts at the start node, ends at the goal, no node twice, none blocked, every path
+                  node in it; the same route twice gives the same scan; a route that fails before A* leaves 0.
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
                   (copy a cache/weather.snap), the synthetic ones have uniform wind per layer.
 bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.
