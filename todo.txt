@@ -166,6 +166,7 @@ The central relay (#18, #22, #25) was dropped; reuse its code from those branche
 [x] peer sync: swap ids since time T, send what the other side is missing (TCP, timeouts, thread) (#41)
 [x] peer list: seed nodes in config, learn peers from peers, forget dead ones (#41)
 [x] headless node: same store + sync without the window, anyone can run one (#41)
+[x] LAN discovery: broadcast the hello over UDP, nodes on one network find each other without seeds
 [x] weather snapshot to peers, fetch by sha256, reuse snapshot_check from #22 (#42)
 [x] matching: filter offers by grid cell + hour, then detour check with the router
 [x] verify offer route/energy by recomputing it locally

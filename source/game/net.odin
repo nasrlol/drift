@@ -801,6 +801,15 @@ PEER_FORGET_FAILS :: 8
 PEER_SHARE_S :: 24 * 3600 // 'N' only lists peers that synced this recently
 PEER_ENTRY :: 19
 
+// LAN discovery: every LAN_S the sync thread broadcasts its hello over UDP on NODE_PORT, and every other
+// node's hello heard there becomes a learned peer. Broadcasts stop at the router, so other networks still
+// need SEEDS_PATH or a public node. The UDP port is fixed, not n.port, so nodes on other TCP ports still
+// hear each other.
+LAN_S :: 5
+LAN_BROADCAST :: net.IP4_Address{255, 255, 255, 255}
+LAN_READS :: MAX_PEERS // hellos read per round, so a flood cannot keep the sync thread busy
+HELLO_SIZE :: 15
+
 Peer :: struct {
 	ep:      net.Endpoint,
 	seed:    bool,
@@ -1118,6 +1127,19 @@ node_sync_thread :: proc(t: ^thread.Thread) {
 		virtual.arena_free_all(&n.mem)
 		n.loaded = true
 	}
+	// Reuse_Address lets a second node on the same machine bind the port too (Linux and Windows).
+	lan, lan_created := net.make_unbound_udp_socket(.IP4)
+	defer if lan_created == nil do net.close(lan)
+	lan_err: net.Network_Error = lan_created
+	if lan_err == nil do lan_err = net.set_option(lan, .Reuse_Address, true)
+	if lan_err == nil do lan_err = net.set_option(lan, .Broadcast, true)
+	if lan_err == nil do lan_err = net.bind(lan, {net.IP4_Any, NODE_PORT})
+	if lan_err == nil do lan_err = net.set_blocking(lan, false)
+	lan_on := lan_err == nil
+	if !lan_on do fmt.eprintfln("[net] lan discovery off, udp port %d: %v", NODE_PORT, lan_err)
+	lan_next: i64
+	lan_last: net.Network_Error // logged when it changes, not every round
+
 	live_next: i64
 	presence_next: i64
 	for !sync.atomic_load(&n.stop) {
@@ -1129,6 +1151,34 @@ node_sync_thread :: proc(t: ^thread.Thread) {
 		if now_ms := time.time_to_unix_nano(time.now()) / 1e6; now_ms >= presence_next {
 			node_presence(w)
 			presence_next = now_ms + i64(PRESENCE_S * 1000)
+		}
+		if lan_on {
+			err: net.Network_Error
+			sent := false
+			if now >= lan_next && n.listening {
+				hello := hello_make(n)
+				_, err = net.send_udp(lan, hello[:], {LAN_BROADCAST, NODE_PORT})
+				lan_next = now + LAN_S
+				sent = true
+			}
+			for _ in 0 ..< LAN_READS {
+				pkt: [HELLO_SIZE + 1]u8 // one byte more, so a longer packet does not pass as a hello
+				got, from, rerr := net.recv_udp(lan, pkt[:])
+				if rerr == .Would_Block do break
+				if rerr != nil {
+					err = rerr
+					break
+				}
+				port, id, ok := hello_read(pkt[:got])
+				if !ok || id == n.id || port == 0 do continue
+				if node_add_peer(n, {from.address, port}, false) {
+					fmt.eprintfln("[net] lan: found %s", ep_text({from.address, port}, buf[:]))
+				}
+			}
+			if (sent || err != nil) && err != lan_last {
+				if err != nil do fmt.eprintfln("[net] lan discovery: %v", err)
+				lan_last = err
+			}
 		}
 		p: Peer
 		due := -1
@@ -1440,17 +1490,26 @@ store_has :: proc(s: ^Store, id: [32]u8) -> bool {
 
 // Both sides send a hello and check the other one. Returns the port the peer listens on and its node id.
 node_hello :: proc(n: ^Net_Node, s: net.TCP_Socket) -> (port: int, id: [8]u8, ok: bool) {
-	hello: [15]u8
+	hello := hello_make(n)
+	theirs: [HELLO_SIZE]u8
+	net_send(s, hello[:]) or_return
+	net_recv(s, theirs[:]) or_return
+	return hello_read(theirs[:])
+}
+
+// The same bytes on TCP and as the LAN broadcast.
+hello_make :: proc(n: ^Net_Node) -> (hello: [HELLO_SIZE]u8) {
 	(^u32le)(&hello[0])^ = NODE_MAGIC
 	hello[4] = NODE_VERSION
 	if n.listening do (^u16le)(&hello[5])^ = u16le(n.port == 0 ? NODE_PORT : n.port)
 	copy(hello[7:], n.id[:])
-	theirs: [15]u8
-	net_send(s, hello[:]) or_return
-	net_recv(s, theirs[:]) or_return
-	if (^u32le)(&theirs[0])^ != NODE_MAGIC || theirs[4] != NODE_VERSION do return
-	copy(id[:], theirs[7:])
-	return int((^u16le)(&theirs[5])^), id, true
+	return
+}
+
+hello_read :: proc(b: []u8) -> (port: int, id: [8]u8, ok: bool) {
+	if len(b) != HELLO_SIZE || (^u32le)(&b[0])^ != NODE_MAGIC || b[4] != NODE_VERSION do return
+	copy(id[:], b[7:])
+	return int((^u16le)(&b[5])^), id, true
 }
 
 // "1.2.3.4:7419" for logs, without allocating.

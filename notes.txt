@@ -430,6 +430,17 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     learned peer that failed most, never one that works. A hello with our own node id
                     means we dialed ourselves (our address came back through others): dropped, and that
                     address is never added again this run.
+                    LAN discovery: the sync thread broadcasts its hello (the same 15 bytes, hello_make /
+                    hello_read) over UDP to 255.255.255.255 port NODE_PORT every LAN_S = 5 s, only while
+                    listening. Hellos it hears there (right size, magic, version, not our node id, port
+                    not 0) add the sender's address + that port as a learned peer, at most LAN_READS per
+                    round. The UDP port is always NODE_PORT, also with --port, so nodes on other TCP ports
+                    hear each other. Reuse_Address lets a second node on the same machine bind it (Linux,
+                    Windows; on macOS the second one logs "lan discovery off" and only dials). Broadcasts
+                    stop at the router and some Wi-Fi blocks them between clients: there seeds.txt or a
+                    public node is still needed. Firewalls must allow UDP and TCP 7419.
+                    Tested (Linux): two headless nodes on 7421 / 7422 without seeds plus a game on 7419
+                    all knew each other within 10 s.
                     Measured (localhost): two nodes with 120 + 80 messages both end with 200 in one sync.
                     Three nodes where B and C only know A: after one round each knows the other two.
                   Weather between peers: Snapshot = Snapshot_Header + Weather, the exact file / wire bytes.
