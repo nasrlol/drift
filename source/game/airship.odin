@@ -224,11 +224,12 @@ airship_build :: proc(a: ^Airship) {
 // The airship in 2D map mode: a soft shadow on the ground, then the model through an orthographic camera that
 // looks at the ship from the south. One world unit is one pixel, so the model stays AIRSHIP_PX long at every
 // zoom, and the camera target is moved so the model lands on the ship's screen position.
-airship_draw :: proc(w: ^World, cam: rl.Camera2D) {
+airship_draw :: proc(w: ^World) {
 	a := &w.airship
 	if !a.ready do return
 	s := w.ship
-	p := rl.GetWorldToScreen2D(s.pos, cam)
+	p, visible := cam_to_screen(w, {s.pos.x, s.pos.y, 0})
+	if !visible do return
 	d := p - {f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())} / 2
 	scale := f32(AIRSHIP_PX / AIRSHIP_LEN)
 
@@ -243,8 +244,10 @@ airship_draw :: proc(w: ^World, cam: rl.Camera2D) {
 		)
 	}
 
-	sin_t := math.sin(f32(AIRSHIP_TILT))
-	cos_t := math.cos(f32(AIRSHIP_TILT))
+	// A tilted map camera shows the ship more from behind, never less tilted than on the flat map.
+	tilt := max(f32(AIRSHIP_TILT), w.cam.pose.tilt)
+	sin_t := math.sin(tilt)
+	cos_t := math.cos(tilt)
 	target := [3]f32{-d.x, d.y * sin_t, -d.y * cos_t}
 	cam3 := rl.Camera3D {
 		position   = target + {0, 1000 * cos_t, 1000 * sin_t},
@@ -254,7 +257,7 @@ airship_draw :: proc(w: ^World, cam: rl.Camera2D) {
 		projection = .ORTHOGRAPHIC,
 	}
 	bank := clamp(s.turn_rate / SHIP_MAX_TURN_RATE, -1, 1) * AIRSHIP_BANK
-	yaw := math.PI / 2 - s.heading
+	yaw := math.PI / 2 - (s.heading - w.cam.pose.yaw)
 	m := linalg.matrix4_scale_f32({scale, scale, scale})
 	m = m * linalg.matrix4_rotate_f32(yaw, {0, 1, 0})
 	m = m * linalg.matrix4_rotate_f32(bank, {1, 0, 0})

@@ -1,0 +1,324 @@
+// author: dario
+package game
+
+import "core:math"
+import "core:math/linalg"
+import rl "vendor:raylib"
+
+// Camera: zoom is log2 relative to the fitted view, so zero is the whole map.
+ZOOM_MIN :: -1
+ZOOM_MAX :: 7
+WHEEL_ZOOM_STEP :: 0.25
+ZOOM_PER_S :: 2
+PAN_PX_PER_S :: 600
+CAM_FOV_DEG :: 45
+// Motion (design "Beweging en animatie"), all ease-out.
+CAM_ZOOM_GLIDE_S :: 0.6
+CAM_FIT_S :: 0.8
+CAM_CHASE_S :: 1.2
+CAM_PREVIEW_S :: 9.0
+CAM_CHASE_TILT :: 53 * math.RAD_PER_DEG
+CAM_CHASE_ZOOM :: 5.5
+// The ship sits just below the middle of the screen in navigation: the camera looks this share of the visible
+// height ahead of it.
+CAM_CHASE_AHEAD :: 0.18
+// Following the ship: the camera closes this share of the gap per second (a small lag, turns with the ship).
+CAM_FOLLOW_RATE :: 4.0
+
+// Where the camera looks: pan = km from the map centre to the point under the screen centre, zoom, yaw (radians
+// clockwise, the map direction shown at the top of the screen) and tilt (0 = straight down). Zero is the whole
+// map, north up, from above.
+Cam_Pose :: struct {
+	pan:  [2]f32,
+	zoom: f32,
+	yaw:  f32,
+	tilt: f32,
+}
+
+Cam_Mode :: enum u8 {
+	Free, // the user moves it (plan screen, after a drag in navigation)
+	Chase, // behind the ship, turns with its heading
+	Preview, // flies the chosen route in CAM_PREVIEW_S
+}
+
+// Zero = the whole map from above, nothing moving.
+Cam :: struct {
+	pose:         Cam_Pose,
+	mode:         Cam_Mode,
+	// A glide from one pose to another (fit, chase dive, compass), ease-out over dur seconds. dur 0 = none.
+	glide_from:   Cam_Pose,
+	glide_to:     Cam_Pose,
+	glide_t:      f32,
+	glide_dur:    f32,
+	// Wheel and zoom buttons glide too: zoom moves to zoom_goal keeping the ground under zoom_anchor (px).
+	zoom_goal:    f32,
+	zoom_anchor:  [2]f32,
+	zooming:      bool,
+	preview_t:    f32, // seconds into the preview
+	preview_mode: Route_Mode,
+	dragged:      bool, // the user moved the map in navigation: Re-centre shows
+	// This frame, built by cam_update: the raylib camera, the screen size and the scale at the screen centre.
+	view:         rl.Camera3D,
+	screen:       [2]f32,
+	px_per_km:    f32,
+}
+
+ease_out :: proc(t: f32) -> f32 {
+	u := 1 - clamp(t, 0, 1)
+	return 1 - u * u * u
+}
+
+ease_in_out :: proc(x: f32) -> f32 {
+	t := clamp(x, 0, 1)
+	return t * t * (3 - 2 * t)
+}
+
+// Shortest way from angle a to angle b, so a glide never spins the long way round.
+angle_lerp :: proc(a, b, t: f32) -> f32 {
+	d := math.mod(b - a + 3 * math.PI, math.TAU) - math.PI
+	return a + d * t
+}
+
+cam_fit_scale :: proc(screen: [2]f32) -> f32 {
+	return 0.95 * min(screen.x / MAP_W_KM, screen.y / MAP_H_KM)
+}
+
+// The raylib camera for a pose. World space is (x km, y km, -altitude km): x east, y south, z down, so the
+// raylib right-handed look-at keeps east on the right.
+cam_build :: proc(p: Cam_Pose, screen: [2]f32) -> (view: rl.Camera3D, px_per_km: f32) {
+	px_per_km = cam_fit_scale(screen) * math.pow(f32(2), p.zoom)
+	dist := screen.y / (2 * math.tan(f32(CAM_FOV_DEG) * math.RAD_PER_DEG / 2) * px_per_km)
+	target := [2]f32{MAP_W_KM, MAP_H_KM} / 2 + p.pan
+	fwd := [2]f32{math.sin(p.yaw), -math.cos(p.yaw)}
+	st, ct := math.sin(p.tilt), math.cos(p.tilt)
+	view = {
+		position   = {target.x - fwd.x * dist * st, target.y - fwd.y * dist * st, -dist * ct},
+		target     = {target.x, target.y, 0},
+		up         = {fwd.x * ct, fwd.y * ct, -st},
+		fovy       = CAM_FOV_DEG,
+		projection = .PERSPECTIVE,
+	}
+	return
+}
+
+// Screen position of pos (x km, y km, altitude m). visible = in front of the camera and on the screen.
+cam_to_screen :: proc(w: ^World, pos: [3]f32) -> (px: [2]f32, visible: bool) {
+	c := &w.cam
+	p := [3]f32{pos.x, pos.y, -pos.z / 1000}
+	fwd := linalg.normalize(c.view.target - c.view.position)
+	if linalg.dot(p - c.view.position, fwd) <= 0.01 do return {-1e6, -1e6}, false
+	px = rl.GetWorldToScreenEx(p, c.view, i32(c.screen.x), i32(c.screen.y))
+	visible = px.x >= 0 && px.y >= 0 && px.x < c.screen.x && px.y < c.screen.y
+	return
+}
+
+// The point on the ground (km) under a screen position. ok = false above the horizon.
+cam_ground_at :: proc(w: ^World, px: [2]f32) -> (pos: [2]f32, ok: bool) {
+	c := &w.cam
+	ray := rl.GetScreenToWorldRayEx(px, c.view, i32(c.screen.x), i32(c.screen.y))
+	if ray.direction.z <= 1e-4 do return {}, false
+	t := -ray.position.z / ray.direction.z
+	return ray.position.xy + ray.direction.xy * t, true
+}
+
+cam_glide :: proc(w: ^World, to: Cam_Pose, dur: f32) {
+	c := &w.cam
+	c.glide_from = c.pose
+	c.glide_to = to
+	c.glide_to.zoom = clamp(to.zoom, ZOOM_MIN, ZOOM_MAX)
+	c.glide_t = 0
+	c.glide_dur = dur
+	c.zooming = false
+}
+
+// Fits the box lo..hi (km) into the screen rect r (px) from above, north up, in CAM_FIT_S.
+cam_fit :: proc(w: ^World, lo, hi: [2]f32, r: rl.Rectangle) {
+	c := &w.cam
+	c.mode = .Free
+	screen := c.screen
+	size := linalg.max(hi - lo, [2]f32{1, 1})
+	ppk := min(r.width / size.x, r.height / size.y)
+	zoom := math.log2(ppk / cam_fit_scale(screen))
+	// The box centre goes to the rect centre: shift the screen centre by the rect offset in km.
+	mid := (lo + hi) / 2
+	offset :=
+		([2]f32{r.x + r.width / 2, r.y + r.height / 2} - screen / 2) /
+		(cam_fit_scale(screen) * math.pow(f32(2), clamp(zoom, ZOOM_MIN, ZOOM_MAX)))
+	cam_glide(w, {pan = mid - offset - [2]f32{MAP_W_KM, MAP_H_KM} / 2, zoom = zoom}, CAM_FIT_S)
+}
+
+// Tilted chase camera behind the ship, dives in CAM_CHASE_S.
+cam_chase :: proc(w: ^World) {
+	c := &w.cam
+	c.mode = .Chase
+	c.dragged = false
+	cam_glide(w, cam_chase_pose(w, CAM_CHASE_ZOOM), CAM_CHASE_S)
+}
+
+cam_chase_pose :: proc(w: ^World, zoom: f32) -> Cam_Pose {
+	s := &w.ship
+	ppk := cam_fit_scale(w.cam.screen) * math.pow(f32(2), zoom)
+	ahead := CAM_CHASE_AHEAD * w.cam.screen.y / ppk
+	fwd := [2]f32{math.sin(s.heading), -math.cos(s.heading)}
+	return {
+		pan = s.pos + fwd * ahead - [2]f32{MAP_W_KM, MAP_H_KM} / 2,
+		zoom = zoom,
+		yaw = s.heading,
+		tilt = CAM_CHASE_TILT,
+	}
+}
+
+// Back to the ship after a drag.
+cam_recentre :: proc(w: ^World) {
+	cam_chase(w)
+}
+
+// The whole map, north up, from above.
+cam_overview :: proc(w: ^World) {
+	w.cam.mode = .Free
+	cam_glide(w, {}, CAM_FIT_S)
+}
+
+// North up again (compass button), keeps position and zoom.
+cam_north :: proc(w: ^World) {
+	to := w.cam.pose
+	to.yaw = 0
+	cam_glide(w, to, CAM_ZOOM_GLIDE_S)
+}
+
+// Flies the chosen route from A to B in CAM_PREVIEW_S, tilted, easing in and out (uses route_sample).
+cam_preview :: proc(w: ^World, mode: Route_Mode) {
+	c := &w.cam
+	if !w.routes[mode].ok do return
+	c.mode = .Preview
+	c.preview_t = 0
+	c.preview_mode = mode
+	pos, heading := route_sample(w, mode, 0)
+	cam_glide(
+		w,
+		{pan = pos.xy - [2]f32{MAP_W_KM, MAP_H_KM} / 2, zoom = 4.5, yaw = heading, tilt = 0.8},
+		CAM_FIT_S,
+	)
+}
+
+// Zoom by steps (wheel notches, zoom buttons) around a screen point, gliding in CAM_ZOOM_GLIDE_S.
+cam_zoom_by :: proc(w: ^World, steps: f32, anchor: [2]f32) {
+	c := &w.cam
+	if !c.zooming do c.zoom_goal = c.pose.zoom
+	c.zoom_goal = clamp(c.zoom_goal + steps, ZOOM_MIN, ZOOM_MAX)
+	c.zoom_anchor = anchor
+	c.zooming = true
+}
+
+// Once per frame before anything is drawn: input (when the mouse is not on the UI), glides, following the ship
+// or the preview, then the raylib camera for this frame. Drawing only, frame time is fine.
+cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
+	c := &w.cam
+	dt := min(rl.GetFrameTime(), MAX_FRAME_DT)
+	c.screen = {f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
+	c.view, c.px_per_km = cam_build(c.pose, c.screen)
+
+	// Input. The keyboard / stick pan only on the plan screen (in navigation they steer the ship).
+	{
+		pan_px: [2]f32
+		if controls_pan {
+			k := w.controls
+			pan_px = {k.turn, -k.throttle} * PAN_PX_PER_S * dt
+			if k.climb != 0 do cam_zoom_by(w, k.climb * ZOOM_PER_S * dt, c.screen / 2)
+		}
+		if mouse_free && rl.IsMouseButtonDown(.LEFT) && c.mode != .Preview {
+			d := rl.GetMouseDelta()
+			if d != {} {
+				pan_px -= d
+				if c.mode == .Chase {
+					c.mode = .Free
+					c.dragged = true
+				}
+			}
+		}
+		if pan_px != {} {
+			// Screen pixels to km on the ground, turned by the yaw.
+			s, co := math.sin(c.pose.yaw), math.cos(c.pose.yaw)
+			v := pan_px / c.px_per_km
+			c.pose.pan += {v.x * co - v.y * s, v.x * s + v.y * co}
+			c.glide_dur = 0
+		}
+		if wheel := rl.GetMouseWheelMove(); mouse_free && wheel != 0 {
+			cam_zoom_by(w, wheel * WHEEL_ZOOM_STEP, rl.GetMousePosition())
+		}
+	}
+
+	if c.zooming {
+		before, before_ok := cam_ground_at(w, c.zoom_anchor)
+		k := 1 - math.exp(-dt * 5 / CAM_ZOOM_GLIDE_S)
+		c.pose.zoom += (c.zoom_goal - c.pose.zoom) * k
+		if abs(c.zoom_goal - c.pose.zoom) < 1e-3 {
+			c.pose.zoom = c.zoom_goal
+			c.zooming = false
+		}
+		c.view, c.px_per_km = cam_build(c.pose, c.screen)
+		after, after_ok := cam_ground_at(w, c.zoom_anchor)
+		if before_ok && after_ok && c.mode == .Free do c.pose.pan += before - after
+	}
+
+	switch c.mode {
+	case .Free:
+	case .Chase:
+		goal := cam_chase_pose(w, c.zooming ? c.zoom_goal : c.pose.zoom)
+		goal.zoom = c.pose.zoom
+		if c.glide_dur > 0 {
+			// Follow the ship while gliding in, but keep the glide's own zoom goal.
+			goal.zoom = c.glide_to.zoom
+			c.glide_to = goal
+		} else {
+			k := 1 - math.exp(-dt * CAM_FOLLOW_RATE)
+			c.pose.pan += (goal.pan - c.pose.pan) * k
+			c.pose.yaw = angle_lerp(c.pose.yaw, goal.yaw, k)
+			c.pose.tilt = goal.tilt
+		}
+	case .Preview:
+		if c.glide_dur == 0 {
+			c.preview_t += dt
+			t := ease_in_out(c.preview_t / CAM_PREVIEW_S)
+			pos, heading := route_sample(w, c.preview_mode, t)
+			k := 1 - math.exp(-dt * CAM_FOLLOW_RATE)
+			c.pose.pan = pos.xy - [2]f32{MAP_W_KM, MAP_H_KM} / 2
+			c.pose.yaw = angle_lerp(c.pose.yaw, heading, k)
+			if c.preview_t >= CAM_PREVIEW_S {
+				c.mode = .Free
+				r := &w.routes[c.preview_mode]
+				lo, hi := path_bounds(r.path)
+				cam_fit(w, lo, hi, plan_map_rect(w))
+			}
+		}
+	}
+
+	if c.glide_dur > 0 {
+		c.glide_t += dt
+		t := ease_out(c.glide_t / c.glide_dur)
+		a, b := c.glide_from, c.glide_to
+		c.pose = {
+			pan  = linalg.lerp(a.pan, b.pan, t),
+			zoom = a.zoom + (b.zoom - a.zoom) * t,
+			yaw  = angle_lerp(a.yaw, b.yaw, t),
+			tilt = a.tilt + (b.tilt - a.tilt) * t,
+		}
+		if c.glide_t >= c.glide_dur do c.glide_dur = 0
+	}
+
+	half := [2]f32{MAP_W_KM, MAP_H_KM} / 2
+	c.pose.zoom = clamp(c.pose.zoom, ZOOM_MIN, ZOOM_MAX)
+	c.pose.pan = linalg.clamp(c.pose.pan, -half, half)
+	c.view, c.px_per_km = cam_build(c.pose, c.screen)
+}
+
+// Smallest box around a path (km).
+path_bounds :: proc(path: [][3]f32) -> (lo, hi: [2]f32) {
+	if len(path) == 0 do return {}, {MAP_W_KM, MAP_H_KM}
+	lo, hi = path[0].xy, path[0].xy
+	for p in path {
+		lo = linalg.min(lo, p.xy)
+		hi = linalg.max(hi, p.xy)
+	}
+	return
+}

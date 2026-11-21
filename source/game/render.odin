@@ -79,6 +79,19 @@ Palette :: struct {
 	alt_route_casing: rl.Color,
 	sky:              rl.Color,
 	horizon:          rl.Color,
+	// labels and markers (design "Labels en markers")
+	area_label:       rl.Color,
+	water_label:      rl.Color,
+	label_halo:       rl.Color,
+	shield:           rl.Color,
+	shield_border:    rl.Color,
+	shield_text:      rl.Color,
+	hub:              rl.Color,
+	// wind trails by speed (design "Windsporen"): below 6 m/s, to 10, to 14, above
+	wind_calm:        rl.Color,
+	wind_mint:        rl.Color,
+	wind_yellow:      rl.Color,
+	wind_coral:       rl.Color,
 }
 
 // Road colors come from the map table in docs/drift-design.pdf: main road = trunk + primary, street =
@@ -129,6 +142,17 @@ PALETTES :: [Theme]Palette {
 		alt_route_casing = {58, 72, 112, 255},
 		sky = {10, 23, 48, 255},
 		horizon = {22, 48, 78, 255},
+		area_label = {201, 212, 234, 255},
+		water_label = {111, 155, 209, 255},
+		label_halo = {12, 26, 44, 255},
+		shield = {50, 99, 201, 255},
+		shield_border = {255, 255, 255, 255},
+		shield_text = {255, 255, 255, 255},
+		hub = {47, 125, 109, 255},
+		wind_calm = {255, 255, 255, 255},
+		wind_mint = {127, 227, 196, 255},
+		wind_yellow = {249, 216, 92, 255},
+		wind_coral = {255, 127, 110, 255},
 	},
 	.Day = {
 		surface = {255, 255, 255, 255},
@@ -174,6 +198,17 @@ PALETTES :: [Theme]Palette {
 		alt_route_casing = {117, 151, 212, 255},
 		sky = {188, 220, 242, 255},
 		horizon = {230, 239, 242, 255},
+		area_label = {60, 64, 67, 255},
+		water_label = {58, 110, 170, 255},
+		label_halo = {255, 255, 255, 255},
+		shield = {255, 255, 255, 255},
+		shield_border = {154, 160, 166, 255},
+		shield_text = {32, 33, 36, 255},
+		hub = {47, 125, 109, 255},
+		wind_calm = {95, 99, 104, 255},
+		wind_mint = {24, 160, 120, 255},
+		wind_yellow = {214, 160, 0, 255},
+		wind_coral = {226, 90, 70, 255},
 	},
 }
 
@@ -200,46 +235,84 @@ Label :: struct {
 // too (1500 DrawLineV calls cost 0.5 ms). Built on the first frame because it needs the window, so never
 // in headless.
 Line_Meshes :: struct {
-	map_lines:  rl.Mesh,
-	wind:       rl.Mesh,
-	material:   rl.Material,
-	loc_screen: i32,
-	loc_colors: i32,
-	built:      bool,
+	map_lines:       rl.Mesh,
+	wind:            rl.Mesh,
+	material:        rl.Material,
+	loc_screen:      i32,
+	loc_colors:      i32,
+	loc_widths:      i32,
+	loc_fog_c:       i32,
+	loc_fog_r:       i32,
+	loc_bias:        i32,
+	// ground layers (plan_ui layers_draw_ground): a vertex colored grid over the map
+	ground:          rl.Mesh,
+	ground_material: rl.Material,
+	built:           bool,
 }
 
-// Line colors are a uniform array: the Map_Kind colors, then the wind. Switching the theme rebuilds nothing.
-WIND_COLOR :: len(Map_Kind)
-LINE_COLORS :: len(Map_Kind) + 1
-WIND_VERTICES :: WIND_PARTICLES * 6
-#assert(LINE_COLORS == 8) // colors[8] in LINE_VS
+// The ground layer grid: a vertex every GROUND_CELL_KM over the map.
+GROUND_CELL_KM :: 8
+GROUND_W :: MAP_W_KM / GROUND_CELL_KM + 2
+GROUND_H :: MAP_H_KM / GROUND_CELL_KM + 2
+GROUND_VERTICES :: (GROUND_W - 1) * (GROUND_H - 1) * 6
 
-// Every vertex of a segment quad carries both ends: vertexPosition = A, vertexNormal.xy = B. Which corner it is
-// follows from gl_VertexID % 6: A-, B-, B+ and A-, B+, A+, counter-clockwise on screen whatever the direction
-// of the segment (raylib culls back faces). vertexColor.r is the index into colors, vertexColor.a scales its
-// alpha. A zero-length segment gives an invisible quad.
+// The grid points of quad (gx, gy) as two triangles, counter-clockwise on the map.
+ground_quad :: proc(gx, gy: int) -> [6][2]int {
+	return {{gx, gy}, {gx, gy + 1}, {gx + 1, gy + 1}, {gx, gy}, {gx + 1, gy + 1}, {gx + 1, gy}}
+}
+
+// Line colors and widths are uniform arrays: the Map_Kind entries, then the four wind trail colors. Switching the
+// theme or zooming rebuilds nothing; the casing pass draws the same mesh again with the casing colors and wider
+// widths, so every casing lies under every fill (design: casings first, then fills).
+WIND_COLOR :: len(Map_Kind)
+WIND_COLOR_COUNT :: 4
+LINE_COLORS :: len(Map_Kind) + WIND_COLOR_COUNT
+WIND_VERTICES :: WIND_PARTICLES * 6
+#assert(LINE_COLORS == 11) // colors[11], widths[11] in LINE_VS
+
+// Every vertex of a segment quad carries both ends: vertexPosition = A, vertexNormal.xy = B (km on the ground).
+// Which corner it is follows from gl_VertexID % 6: A-, B-, B+ and A-, B+, A+, counter-clockwise on screen
+// whatever the direction of the segment. The ends are projected (with the perspective divide, so a tilted
+// camera works), the quad is pushed sideways by half the width in pixels and lengthened by half the width at
+// both ends, so thick lines meet without gaps at bends. A segment with an end behind the camera or a width of
+// 0 is dropped. vertexColor.r is the index into colors and widths, vertexColor.a scales the alpha. Far away
+// lines fade into the horizon color (fog_color, fog over the clip w range fog_range).
 LINE_VS :: `#version 330
 in vec3 vertexPosition;
 in vec3 vertexNormal;
 in vec4 vertexColor;
 uniform mat4 mvp;
 uniform vec2 screen;
-uniform vec4 colors[8];
+uniform vec4 colors[11];
+uniform float widths[11];
+uniform vec3 fog_color;
+uniform vec2 fog_range;
+uniform float depth_bias;
 out vec4 fragColor;
-const float LINE_PX = 1.0;
 const float AT_B[6] = float[6](0.0, 1.0, 1.0, 0.0, 1.0, 0.0);
 const float SIDE[6] = float[6](-1.0, -1.0, 1.0, -1.0, 1.0, 1.0);
 void main() {
 	int k = gl_VertexID % 6;
+	int ci = int(vertexColor.r * 255.0 + 0.5);
+	float width = widths[ci];
 	vec4 a = mvp * vec4(vertexPosition.xy, 0.0, 1.0);
 	vec4 b = mvp * vec4(vertexNormal.xy, 0.0, 1.0);
-	vec2 d = (b.xy - a.xy) * screen;
-	vec2 n = vec2(-d.y, d.x) / max(length(d), 1e-6);
+	if (a.w < 0.001 || b.w < 0.001 || width <= 0.0) {
+		gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+		fragColor = vec4(0.0);
+		return;
+	}
+	vec2 d = (b.xy / b.w - a.xy / a.w) * screen;
+	vec2 dir = d / max(length(d), 1e-6);
+	vec2 n = vec2(-dir.y, dir.x);
 	vec4 p = mix(a, b, AT_B[k]);
-	p.xy += n * SIDE[k] * LINE_PX / screen;
+	p.xy += (n * SIDE[k] + dir * (AT_B[k] * 2.0 - 1.0)) * width / screen * p.w;
 	gl_Position = p;
-	vec4 c = colors[int(vertexColor.r * 255.0 + 0.5)];
-	fragColor = vec4(c.rgb, c.a * vertexColor.a);
+	// Everything lies on z = 0: each pass sits a little nearer than the one before so it never fights it.
+	gl_Position.z -= depth_bias * p.w;
+	vec4 c = colors[ci];
+	float f = clamp((p.w - fog_range.x) / max(fog_range.y - fog_range.x, 1e-3), 0.0, 1.0);
+	fragColor = vec4(mix(c.rgb, fog_color, f * f), c.a * vertexColor.a);
 }
 `
 
@@ -280,6 +353,8 @@ line_meshes_unload :: proc(lm: ^Line_Meshes) {
 	if !lm.built do return
 	if lm.map_lines.vertexCount > 0 do rl.UnloadMesh(lm.map_lines)
 	rl.UnloadMesh(lm.wind)
+	rl.UnloadMesh(lm.ground)
+	rl.UnloadMaterial(lm.ground_material)
 	rl.UnloadMaterial(lm.material)
 	lm^ = {}
 }
