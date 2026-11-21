@@ -64,6 +64,9 @@ World :: struct {
 	view:         View,
 	// GPU texture and glyph tables owned by raylib, zero until the first frame with a window.
 	font:         rl.Font,
+	line_meshes:  Line_Meshes,
+	theme:        Theme, // zero = day, T toggles
+	wind:         Wind_Particles,
 }
 
 @(export)
@@ -133,6 +136,8 @@ game_hot_reloaded :: proc(memory: rawptr) {
 	}
 	w.m = m
 	w.grid.terrain_built = false
+	// The new library may change the shaders, so the mesh is rebuilt on the next frame.
+	line_meshes_unload(&w.line_meshes)
 }
 
 @(export)
@@ -164,6 +169,7 @@ game_update :: proc(memory: rawptr) -> bool {
 	w.controls = read_controls()
 
 	if rl.IsKeyPressed(.M) do w.drive_mode = !w.drive_mode
+	if rl.IsKeyPressed(.T) do w.theme = w.theme == .Day ? .Night : .Day
 	for key, i in ([?]rl.KeyboardKey{.ONE, .TWO, .THREE, .FOUR}) {
 		if rl.IsKeyPressed(key) do w.sim_speed = i
 	}
@@ -194,6 +200,10 @@ game_update :: proc(memory: rawptr) -> bool {
 	// Throttle / turn pan, climb zooms around the screen centre. The mouse stays camera only: drag pans, the
 	// wheel zooms keeping the point under the cursor in place.
 	// Drive mode (M toggles): the controls go to the ship and the camera sits on it, only the wheel zooms.
+	// The toolbar is drawn after the map, but laid out here so the mouse does not pan or zoom the map under it.
+	toolbar := rl.Rectangle{f32(rl.GetScreenWidth()) - TOOLBAR_W - 8, 8, TOOLBAR_W, TOOLBAR_H}
+	mouse_on_ui := rl.CheckCollisionPointRec(rl.GetMousePosition(), toolbar)
+
 	cam: rl.Camera2D
 	{
 		v := &w.view
@@ -205,10 +215,10 @@ game_update :: proc(memory: rawptr) -> bool {
 		z0 := fit * math.pow(f32(2), v.zoom)
 
 		v.pan += [2]f32{c.turn, -c.throttle} * PAN_PX_PER_S * dt / z0
-		if rl.IsMouseButtonDown(.LEFT) && !w.drive_mode do v.pan -= rl.GetMouseDelta() / z0
+		if rl.IsMouseButtonDown(.LEFT) && !w.drive_mode && !mouse_on_ui do v.pan -= rl.GetMouseDelta() / z0
 		zoom := c.climb * ZOOM_PER_S * dt
 		anchor := centre
-		if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+		if wheel := rl.GetMouseWheelMove(); wheel != 0 && !mouse_on_ui {
 			zoom += wheel * WHEEL_ZOOM_STEP
 			anchor = rl.GetMousePosition()
 		}
@@ -226,30 +236,160 @@ game_update :: proc(memory: rawptr) -> bool {
 		}
 	}
 
+	palettes := PALETTES
+	pal := &palettes[w.theme]
+
 	rl.BeginDrawing()
 	t = prof_begin()
-	rl.ClearBackground(rl.RAYWHITE)
+	rl.ClearBackground(pal.background)
 	{
-		// Points are [2]f32 km, the same layout as rl.Vector2, so the strips draw straight from map memory.
-		colors := [Map_Kind]rl.Color {
-			.Border   = rl.DARKGRAY,
-			.River    = rl.BLUE,
-			.Motorway = rl.ORANGE,
+		lm := &w.line_meshes
+		if !lm.built {
+			segments := 0
+			for l in w.m.lines do segments += max(int(l.count) - 1, 0)
+			n := segments * 6
+			pos := make([][3]f32, n, context.temp_allocator)
+			other := make([][3]f32, n, context.temp_allocator)
+			color := make([][4]u8, n, context.temp_allocator)
+			i := 0
+			for l in w.m.lines {
+				pts := w.m.points[l.start:][:l.count]
+				for s in 1 ..< len(pts) {
+					line_quad(pos, other, color, i, pts[s - 1], pts[s], {u8(l.kind), 0, 0, 255})
+					i += 6
+				}
+			}
+			if n > 0 do lm.map_lines = line_mesh_upload(pos, other, color, false)
+			lm.wind = line_mesh_upload(
+				make([][3]f32, WIND_VERTICES, context.temp_allocator),
+				make([][3]f32, WIND_VERTICES, context.temp_allocator),
+				make([][4]u8, WIND_VERTICES, context.temp_allocator),
+				true,
+			)
+			shader := rl.LoadShaderFromMemory(LINE_VS, LINE_FS)
+			if !rl.IsShaderValid(shader) do logf(w, "render", "line shader did not compile, map and wind are not drawn")
+			lm.material = rl.LoadMaterialDefault()
+			lm.material.shader = shader
+			lm.loc_screen = rl.GetShaderLocation(shader, "screen")
+			lm.loc_colors = rl.GetShaderLocation(shader, "colors")
+			lm.built = true
+			logf(
+				w,
+				"render",
+				"map mesh: %d segments, %d vertices, %.1f MB on the GPU",
+				segments,
+				n,
+				f32(n * (size_of([3]f32) * 2 + size_of([4]u8))) / (1 << 20),
+			)
 		}
+
+		// Wind particles: layer 0 (the lowest, until the layer toggles), forecast hour of the simulated time.
+		// Update loop over the SoA arrays, then one pass writes the trails into the wind mesh.
+		{
+			wp := &w.wind
+			dt := min(rl.GetFrameTime(), MAX_FRAME_DT)
+			lo := rl.GetScreenToWorld2D({0, 0}, cam)
+			hi := rl.GetScreenToWorld2D({f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}, cam)
+			hour := int(w.tick / (SIM_HZ * 3600))
+			km_per_ms := WIND_PX_PER_MS / cam.zoom
+			for i in 0 ..< WIND_PARTICLES {
+				wp.age[i] += dt
+				out := wp.x[i] < lo.x || wp.x[i] > hi.x || wp.y[i] < lo.y || wp.y[i] > hi.y
+				if !wp.seeded || out || wp.age[i] >= WIND_LIFE_S {
+					wp.x[i] = lo.x + wind_rand(wp) * (hi.x - lo.x)
+					wp.y[i] = lo.y + wind_rand(wp) * (hi.y - lo.y)
+					wp.age[i] = wp.seeded ? 0 : wind_rand(wp) * WIND_LIFE_S
+				}
+				v := wind_at(w, wp.x[i], wp.y[i], 0, hour)
+				wp.vx[i], wp.vy[i] = v.x, v.y
+				wp.x[i] += v.x * km_per_ms * dt
+				wp.y[i] += v.y * km_per_ms * dt
+			}
+			wp.seeded = true
+
+			pos := make([][3]f32, WIND_VERTICES, context.temp_allocator)
+			other := make([][3]f32, WIND_VERTICES, context.temp_allocator)
+			color := make([][4]u8, WIND_VERTICES, context.temp_allocator)
+			for i in 0 ..< WIND_PARTICLES {
+				v := [2]f32{wp.vx[i], wp.vy[i]}
+				if linalg.length(v) < WIND_CALM_MS do continue
+				p := [2]f32{wp.x[i], wp.y[i]}
+				fade := math.sin(math.PI * wp.age[i] / WIND_LIFE_S)
+				tail := p - v * km_per_ms * WIND_TRAIL_S
+				line_quad(pos, other, color, i * 6, p, tail, {WIND_COLOR, 0, 0, u8(fade * 255)})
+			}
+			rl.UpdateMeshBuffer(lm.wind, 0, raw_data(pos), i32(len(pos) * size_of(pos[0])), 0)
+			rl.UpdateMeshBuffer(lm.wind, 2, raw_data(other), i32(len(other) * size_of(other[0])), 0)
+			rl.UpdateMeshBuffer(lm.wind, 3, raw_data(color), i32(len(color) * size_of(color[0])), 0)
+		}
+
 		rl.BeginMode2D(cam)
-		for l in w.m.lines {
-			rl.DrawLineStrip(raw_data(w.m.points[l.start:]), i32(l.count), colors[Map_Kind(l.kind)])
+		{
+			screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
+			uniform: [LINE_COLORS][4]f32
+			for c, k in pal.lines do uniform[k] = rl.ColorNormalize(c)
+			uniform[WIND_COLOR] = rl.ColorNormalize(pal.wind)
+			rl.SetShaderValue(lm.material.shader, lm.loc_screen, &screen, .VEC2)
+			rl.SetShaderValueV(lm.material.shader, lm.loc_colors, &uniform, .VEC4, LINE_COLORS)
+			if lm.map_lines.vertexCount > 0 do rl.DrawMesh(lm.map_lines, lm.material, rl.Matrix(1))
+			rl.DrawMesh(lm.wind, lm.material, rl.Matrix(1))
 		}
 		// 8 px marker pointing along the heading, DrawPoly puts the first corner at the rotation angle.
-		rl.DrawPoly(w.ship.pos, 3, 8 / cam.zoom, math.to_degrees(w.ship.heading) - 90, rl.RED)
+		rl.DrawPoly(w.ship.pos, 3, 8 / cam.zoom, math.to_degrees(w.ship.heading) - 90, pal.ship)
 		rl.EndMode2D()
 
-		// Cities in screen space, so dots and text keep their pixel size at every zoom.
+		// Labels in screen space, so dots and text keep their pixel size at every zoom.
 		// Names are 0-terminated UTF-8 from the bake, the default raylib font covers Latin-1 (Liege has an e grave).
+		// Off screen: dropped. Overlapping an earlier label: only the dot. Earlier = first in the bake, there is
+		// no population yet to rank cities by.
+		labels := make([dynamic]Label, 0, len(w.m.cities), context.temp_allocator)
+		screen_rect := rl.Rectangle{0, 0, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 		for &c in w.m.cities {
 			p := rl.GetWorldToScreen2D(c.pos, cam)
-			rl.DrawCircleV(p, 3, rl.BLACK)
-			rl.DrawText(cstring(raw_data(c.name[:])), i32(p.x) + 6, i32(p.y) - 5, 10, rl.BLACK)
+			text := cstring(raw_data(c.name[:]))
+			l := Label {
+				dot   = p,
+				rect  = {
+					p.x + 6 - LABEL_GAP_PX,
+					p.y - LABEL_PX / 2 - LABEL_GAP_PX,
+					f32(rl.MeasureText(text, LABEL_PX)) + 2 * LABEL_GAP_PX,
+					LABEL_PX + 2 * LABEL_GAP_PX,
+				},
+				text  = text,
+				shown = true,
+			}
+			if !rl.CheckCollisionPointRec(p, screen_rect) && !rl.CheckCollisionRecs(l.rect, screen_rect) do continue
+			for &prev in labels {
+				if prev.shown && rl.CheckCollisionRecs(l.rect, prev.rect) do l.shown = false
+			}
+			append(&labels, l)
+		}
+		for &l in labels {
+			rl.DrawCircleV(l.dot, 3, pal.city)
+			if l.shown do rl.DrawText(l.text, i32(l.rect.x + LABEL_GAP_PX), i32(l.rect.y + LABEL_GAP_PX), LABEL_PX, pal.city)
+		}
+
+		// Toolbar: map / drive mode, sim speed, theme. The same keys still work (M, 1-4, T).
+		// A click changes the state after this frame's update, so it shows from the next frame on.
+		rl.DrawRectangleRec(toolbar, pal.panel)
+		r := rl.Rectangle{toolbar.x + UI_PAD, toolbar.y + UI_PAD, UI_BUTTON_W, UI_BUTTON_H}
+		if ui_button(r, "Map", !w.drive_mode, pal) do w.drive_mode = false
+		r.x += UI_BUTTON_W + UI_GAP
+		if ui_button(r, "Drive", w.drive_mode, pal) do w.drive_mode = true
+		r.x += UI_BUTTON_W + UI_GROUP_GAP
+		for s, i in speeds {
+			if ui_button(r, fmt.ctprintf("%.0fx", s), w.sim_speed == i, pal) do w.sim_speed = i
+			r.x += UI_BUTTON_W + UI_GAP
+		}
+		r.x += UI_GROUP_GAP - UI_GAP
+		THEME_NAMES :: [Theme]cstring {
+			.Day   = "Day",
+			.Night = "Night",
+		}
+		names := THEME_NAMES
+		for name, theme in names {
+			if ui_button(r, name, w.theme == theme, pal) do w.theme = theme
+			r.x += UI_BUTTON_W + UI_GAP
 		}
 	}
 	{
@@ -332,6 +472,7 @@ game_shutdown :: proc(memory: rawptr) {
 	weather_stop(w)
 	// raylib skips its own default font here, and headless runs never loaded one (texture id 0).
 	if w.font.texture.id != 0 do rl.UnloadFont(w.font)
+	line_meshes_unload(&w.line_meshes)
 	virtual.arena_destroy(&w.fetch.mem)
 	virtual.arena_destroy(&w.frame)
 	virtual.arena_destroy(&w.route_mem)
