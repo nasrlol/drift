@@ -173,7 +173,14 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   break the many near-ties of an open grid (paths at most 0.1 % longer than the cheapest).
                   Open set: binary min-heap on f in grid.heap (fixed array, 8 B x 203k) with grid.slot
                   (index in the heap, HEAP_CLOSED once expanded) for decrease-key. No allocation during
-                  the search, the path is the only allocation (route arena). Search state 24 B x 203k = 4.9 MB.
+                  the search, the path is the only allocation (route arena). Search state 28 B x 203k = 5.7 MB.
+                  Scan order (for the A* scan animation): grid.expanded[:grid.expanded_len] holds the nodes in
+                  the order the last route expanded (popped) them, start first, goal last on success. Fixed
+                  array of 203k Node (813 KB) in World: a node is never reopened, so it always fits. Reset to
+                  0 at the start of every route, so a route that fails before A* (no free end node, separate
+                  regions) leaves an empty scan, and one that fails during A* holds every node it searched.
+                  Valid until the next route call. The renderer only reads it, the router does no extra work
+                  beyond one store per expanded node. The state dump prints expanded_len.
                   Measured (cloud box, -o:speed): 2025 routes between all city pairs x 3 x 3 layers,
                   avg 14 us, worst 0.19 ms; corner to corner expands 286 nodes (35k without the weight).
                   Debug build: avg 0.14 ms, worst 0.6 ms. With test walls the cost matched a plain Dijkstra.
@@ -206,6 +213,9 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
                   no_fly.txt: Brussels inside an 8 km zone (no route from or to it), a 3 km zone on the
                   Mechelen - Leuven line (goes around), Antwerpen under a 400 m zone (leaves from layer 1),
                   Mechelen in a 2 km zone (ends at the closest free node outside it).
+                  scan_order (code, no .expected): grid.expanded after routes between all 15 x 15 hubs on
+                  calm.snap: starts at the start node, ends at the goal, no node twice, none blocked, every path
+                  node in it; the same route twice gives the same scan; a route that fails before A* leaves 0.
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
                   (copy a cache/weather.snap), the calm one does not exercise the wind.
 bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.

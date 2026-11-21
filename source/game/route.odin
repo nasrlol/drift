@@ -68,6 +68,10 @@ Grid :: struct {
 	parent:        [GRID_NODES]Node,
 	slot:          [GRID_NODES]u32, // index in heap while open, HEAP_CLOSED once expanded
 	heap:          [GRID_NODES]Heap_Item, // binary min-heap on f, the open set of A*
+	// Nodes in the order the last route expanded them, for the scan animation: expanded[:expanded_len].
+	// An expanded node is never reopened (see grid_estimate), so every node fits at most once.
+	expanded:      [GRID_NODES]Node,
+	expanded_len:  u32,
 	// Bit n set: node n can not be entered. terrain is the edge ring and the cells too close to the ground,
 	// blocked is terrain plus blocked_zones. Two sets because terrain costs 1.7M height_at calls and only
 	// changes with the library (game_hot_reloaded clears terrain_built), the zones change at runtime.
@@ -173,6 +177,7 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 		g.search = 1
 	}
 	g.heap_len = 0
+	g.expanded_len = 0
 
 	alt := LAYER_ALT
 	if !g.terrain_built {
@@ -302,6 +307,8 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 	for g.heap_len > 0 {
 		n := g.heap[0].n
 		g.slot[n] = HEAP_CLOSED
+		g.expanded[g.expanded_len] = n
+		g.expanded_len += 1
 		g.heap_len -= 1
 		if g.heap_len > 0 {
 			last := g.heap[g.heap_len]
