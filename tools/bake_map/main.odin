@@ -10,7 +10,7 @@ import "core:slice"
 import "core:strings"
 
 MAP_MAGIC :: 0x54465244
-MAP_VERSION :: 3
+MAP_VERSION :: 4
 MAX_HUBS :: 32
 // Same as map.odin: every point in belgium.bin lies inside 0..MAP_W_KM x 0..MAP_H_KM.
 MAP_W_KM :: 286
@@ -19,10 +19,12 @@ MAP_H_KM :: 237
 Map_Header :: struct {
 	magic, version:                      u32,
 	line_count, point_count, city_count: u32,
-	hub_count:                           u32,
+	hub_count, names_size:               u32,
 }
+// name, ref: offsets into the names blob, 0 = none.
 Map_Line :: struct {
 	start, count, kind: u32,
+	name, ref:          u32,
 }
 Map_City :: struct {
 	pos:  [2]f32,
@@ -51,6 +53,9 @@ lines: [dynamic]Map_Line
 points: [dynamic][2]f32
 cities: [dynamic]Map_City
 hubs: [dynamic]Map_Hub
+// 0-terminated strings, offset 0 is the empty string. name_at finds a string already in it.
+names: [dynamic]u8
+name_at: map[string]u32
 
 project :: proc(lon, lat: f64) -> [2]f32 {
 	cos_lat := math.cos(50.5 * math.RAD_PER_DEG)
@@ -72,14 +77,26 @@ to_point :: proc(v: json.Value) -> [2]f32 {
 	return project(num(a[0]), num(a[1]))
 }
 
+// Offset of s in names, added the first time it is seen. Offsets follow the feature order of the geojson
+// files, so the blob is the same on every run (the map is only looked up, never iterated).
+intern :: proc(s: string) -> u32 {
+	if len(s) == 0 do return 0
+	if off, ok := name_at[s]; ok do return off
+	off := u32(len(names))
+	append(&names, s)
+	append(&names, 0)
+	name_at[s] = off
+	return off
+}
+
 // The extract reaches a little past the border, so each segment is clipped to the map rectangle
 // (Liang-Barsky). A line that leaves the map and comes back becomes two lines. Fewer than 2 points give no
 // line: GDAL writes an empty geometry for a way whose nodes are missing from the extract.
-add_line :: proc(coords: json.Value, kind: Kind) {
+add_line :: proc(coords: json.Value, kind: Kind, name, ref: u32) {
 	// Ends the line started at start, or drops a lone point.
-	flush :: proc(start: ^u32, kind: Kind) {
+	flush :: proc(start: ^u32, kind: Kind, name, ref: u32) {
 		n := u32(len(points)) - start^
-		if n >= 2 do append(&lines, Map_Line{start^, n, u32(kind)})
+		if n >= 2 do append(&lines, Map_Line{start^, n, u32(kind), name, ref})
 		else do resize(&points, int(start^))
 		start^ = u32(len(points))
 	}
@@ -101,19 +118,19 @@ add_line :: proc(coords: json.Value, kind: Kind) {
 			}
 		}
 		if !visible || t0 > t1 {
-			flush(&start, kind)
+			flush(&start, kind, name, ref)
 			continue
 		}
 
-		if t0 > 0 do flush(&start, kind)
+		if t0 > 0 do flush(&start, kind, name, ref)
 		if u32(len(points)) == start do append(&points, t0 > 0 ? p + d * t0 : p)
 		append(&points, t1 < 1 ? p + d * t1 : q)
-		if t1 < 1 do flush(&start, kind)
+		if t1 < 1 do flush(&start, kind, name, ref)
 	}
-	flush(&start, kind)
+	flush(&start, kind, name, ref)
 }
 
-bake_layer :: proc(path: string, kind: Kind) {
+bake_layer :: proc(path: string, kind: Kind, is_cities := false) {
 	data, err := os.read_entire_file(path, context.allocator)
 	if err != nil {
 		fmt.eprintln("can't read", path, err)
@@ -160,37 +177,46 @@ bake_layer :: proc(path: string, kind: Kind) {
 			}
 		}
 
+		// The border has the country name and the cities keep theirs in Map_City, neither is a line label.
+		name_str, _ := props["name"].(json.String)
+		ref_str, _ := props["ref"].(json.String)
+		name, ref: u32
+		if kind != .Border do name, ref = intern(name_str), intern(ref_str)
+
 		switch geom["type"].(json.String) {
 		case "Point":
+			// GDAL 3.8 simplifies a way shorter than the tolerance to a Point. Only the cities are real points.
+			if !is_cities do continue
 			c := Map_City {
 				pos = to_point(coords),
 			}
-			name, _ := props["name"].(json.String)
-			copy(c.name[:len(c.name) - 1], name)
+			copy(c.name[:len(c.name) - 1], name_str)
 			append(&cities, c)
 		case "LineString":
-			add_line(coords, kind)
+			add_line(coords, kind, name, ref)
 		case "MultiLineString", "Polygon":
-			for l in coords.(json.Array) do add_line(l, kind)
+			for l in coords.(json.Array) do add_line(l, kind, name, ref)
 		case "MultiPolygon":
-			for p in coords.(json.Array) do for r in p.(json.Array) do add_line(r, kind)
+			for p in coords.(json.Array) do for r in p.(json.Array) do add_line(r, kind, name, ref)
 		}
 	}
 }
 
 main :: proc() {
+	append(&names, 0)
 	bake_layer("assets/geojson/border.geojson", .Border)
 	bake_layer("assets/geojson/rivers.geojson", .River)
 	bake_layer("assets/geojson/roads.geojson.gz", .Motorway) // kind comes from each road's highway tag
-	bake_layer("assets/geojson/cities.geojson", .Border)
+	bake_layer("assets/geojson/cities.geojson", .Border, is_cities = true)
 
 	// OSM cuts a road into a new way at every tag change, so most lines are a few points long and the line
 	// table outweighs the points. Join lines of one kind that meet end to end where no third line of that
-	// kind touches. The drawing stays the same, only the shared end point and the line entry go.
+	// kind touches. The drawing stays the same, only the shared end point and the line entry go. Name and ref
+	// are part of the key, so a joined line has one name: E40 and E19 sharing a node stay two lines.
 	{
 		End :: struct {
-			pos:  [2]f32,
-			kind: u32,
+			pos:             [2]f32,
+			kind, name, ref: u32,
 		}
 		first :: proc(l: Map_Line, reversed: bool) -> [2]f32 {
 			return points[reversed ? l.start + l.count - 1 : l.start]
@@ -203,9 +229,9 @@ main :: proc() {
 		at: map[End][dynamic]int
 		for l, i in lines {
 			for p in ([2][2]f32{first(l, false), last(l, false)}) {
-				list := at[{p, l.kind}]
+				list := at[{p, l.kind, l.name, l.ref}]
 				append(&list, i)
-				at[{p, l.kind}] = list
+				at[{p, l.kind, l.name, l.ref}] = list
 			}
 		}
 		// The other line at e when exactly two line ends meet there, else -1 (also for a ring closing on itself).
@@ -226,7 +252,7 @@ main :: proc() {
 			head, head_rev := i, false
 			for {
 				p := first(lines[head], head_rev)
-				j := next(at, {p, l.kind}, head)
+				j := next(at, {p, l.kind, l.name, l.ref}, head)
 				if j < 0 || j == i || used[j] do break
 				head, head_rev = j, first(lines[j], false) == p
 			}
@@ -245,11 +271,11 @@ main :: proc() {
 					append(&merged_points, ..pts[skip:])
 				}
 				p := last(c, rev)
-				j := next(at, {p, l.kind}, cur)
+				j := next(at, {p, l.kind, l.name, l.ref}, cur)
 				if j < 0 || used[j] do break
 				cur, rev = j, last(lines[j], false) == p
 			}
-			append(&merged_lines, Map_Line{start, u32(len(merged_points)) - start, l.kind})
+			append(&merged_lines, Map_Line{start, u32(len(merged_points)) - start, l.kind, l.name, l.ref})
 		}
 		lines, points = merged_lines, merged_points
 	}
@@ -269,7 +295,11 @@ main :: proc() {
 		u32(len(points)),
 		u32(len(cities)),
 		u32(len(hubs)),
+		0,
 	}
+	// Padded with zeros so the next block stays 4-byte aligned; the last byte is always 0.
+	for len(names) % 4 != 0 do append(&names, 0)
+	h.names_size = u32(len(names))
 
 	out: [dynamic]u8
 	append(&out, ..mem.ptr_to_bytes(&h))
@@ -277,17 +307,19 @@ main :: proc() {
 	append(&out, ..slice.to_bytes(points[:]))
 	append(&out, ..slice.to_bytes(cities[:]))
 	append(&out, ..slice.to_bytes(hubs[:]))
+	append(&out, ..names[:])
 
 	if err := os.write_entire_file("assets/belgium.bin", out[:]); err != nil {
 		fmt.eprintln("can't write assets/belgium.bin", err)
 		os.exit(1)
 	}
 	fmt.printfln(
-		"assets/belgium.bin: %d lines, %d points, %d cities, %d hubs, %d bytes",
+		"assets/belgium.bin: %d lines, %d points, %d cities, %d hubs, %d bytes of names, %d bytes",
 		h.line_count,
 		h.point_count,
 		h.city_count,
 		h.hub_count,
+		h.names_size,
 		len(out),
 	)
 }
