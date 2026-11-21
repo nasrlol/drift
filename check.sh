@@ -15,7 +15,7 @@ BAD_IMPORTS=$(for f in $ODIN; do
 		sed -E 's/.*"([^"]+)"/\1/' |
 		while read -r imp; do
 			case "$imp" in
-				(core:* | base:* | vendor:raylib | vendor:curl | ../*) ;;
+				(core:* | base:* | vendor:raylib | vendor:raylib/rlgl | vendor:curl | ../*) ;;
 				(*) echo "$f: $imp" ;;
 			esac
 		done
