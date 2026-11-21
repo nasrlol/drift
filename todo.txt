@@ -231,7 +231,9 @@ LARS, 2026-11-21 (second list, on lars/all-todos)
     "zoals in het filmpje": no film was shared, so the look is ours.
 
 STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detailed, day, lots of green)
-[x] V: third-person chase camera at real scale, mouse look, never inside a wall (street.odin)
+[x] third-person chase camera at real scale, mouse look, never inside a wall (street.odin)
+[x] one world, no street view key: zoom in past the closest map view goes down into 3D at the car, climbing
+    through 300 m or zooming out past 40 m comes back to the map (Lars, test/data/street_switch.txt)
 [x] free flight with momentum, wind and gusts, hover over ground and roofs (ship_free_step)
 [x] building collision against real and generated buildings (collide.odin)
 [x] buildings at real height, towns, trees, the car at real size, HUD

@@ -33,7 +33,8 @@ STREET_CAM_WALL_M :: 0.6
 STREET_REACH_KM :: STREET_VIEW_KM
 STREET_CAM_DIST_M :: 8.5
 STREET_CAM_MIN_M :: 4.0
-STREET_CAM_MAX_M :: 40.0
+STREET_CAM_MAX_M :: 40.0 // zoomed out past this the map takes over (street_wants_map)
+STREET_EXIT_M :: 300.0 // the car climbing through this height above the ground goes back to the map (Lars, 2026-11-22)
 STREET_CAM_LOOK_UP_M :: 1.6 // the camera looks at this point above the car
 STREET_CAM_PITCH :: 0.16 // radians down at rest
 STREET_CAM_HORIZON :: 0.05 // radians: high up, the horizon stays this far above the middle of the view at rest
@@ -78,6 +79,7 @@ Street :: struct {
 	origin:     [2]f32, // km
 	eye:        [3]f32, // the camera, street space, eased
 	seeded:     bool,
+	exit_armed: bool, // the car has been below STREET_EXIT_M since the street view came on
 	view:       rl.Camera3D,
 	// Road ribbons per STREET_ROAD_TILE_KM tile. road_segs lists, per STREET_ROAD_CELL_KM cell, the map line
 	// segments it holds: kind << 24 | index of the segment's first point (road_cells has the offsets).
@@ -843,24 +845,58 @@ street_ship_pos :: proc(w: ^World) -> [3]f32 {
 	return {f32(x), max(p.alt - height_at(w, km.x, km.y), 0), f32(z)}
 }
 
-// V: on from the navigation screen (and from the plan screen, which first goes to free flight like M).
-street_toggle :: proc(w: ^World) {
+// One world, no street view key (Lars, 2026-11-22: "geen 2 modes, als je via de map zo laag naar beneden gaat
+// switch je naar de 3d game, en omgekeerd als je naar boven gaat terug naar de map"): a zoom in past the closest
+// map view (ZOOM_MAX, the camera ~2.3 km away) goes down into the street view at the car, from the plan screen
+// too (that leaves the plan for free flight, like M; Lars: "3D at the car"). Once a frame from game_update.
+street_switch :: proc(w: ^World) {
+	if !w.street.on && w.cam.zoom_past do street_enter(w)
+	w.cam.zoom_past = false
+}
+
+// Back up to the map (Lars: "fly high or scroll out"): the car climbs through STREET_EXIT_M above the ground,
+// or the camera is zoomed out past STREET_CAM_MAX_M; Esc and Options go back too. Entered above STREET_EXIT_M,
+// the height counts once the car has been below it, so the map does not take over again at once.
+street_wants_map :: proc(w: ^World) -> bool {
 	st := &w.street
-	if st.on {
-		st.on = false
-		if !w.script.on do rl.EnableCursor()
-		return
+	if w.screen != .Navigate || key_pressed(w, .ESCAPE) || pad_pressed(w, .MIDDLE_RIGHT) do return true
+	if street_ship_pos(w).y < STREET_EXIT_M {
+		st.exit_armed = true
+	} else if st.exit_armed {
+		return true
 	}
+	dist := st.dist == 0 ? STREET_CAM_DIST_M : st.dist
+	return mouse_wheel(w) + pad_zoom(w) < 0 && dist >= STREET_CAM_MAX_M
+}
+
+street_enter :: proc(w: ^World) {
+	st := &w.street
 	if w.screen == .Plan {
 		nav_stop(w)
 		w.screen = .Navigate
-		cam_chase(w)
 	}
 	st.on = true
 	st.on_s = 0
-	st.yaw, st.pitch, st.idle_s = 0, 0, 0
+	st.yaw, st.pitch, st.idle_s, st.dist = 0, 0, 0, 0
 	st.seeded = false
+	st.exit_armed = false
 	if !w.script.on do rl.DisableCursor()
+	logf(w, "street", "down into the street view at %.0f m", street_ship_pos(w).y)
+}
+
+// The map takes over at its closest view behind the car, so one zoom in goes back down.
+street_leave :: proc(w: ^World) {
+	w.street.on = false
+	logf(w, "street", "up to the map at %.0f m", street_ship_pos(w).y)
+	if !w.script.on do rl.EnableCursor()
+	if w.screen != .Navigate do return
+	c := &w.cam
+	c.mode = .Chase
+	c.dragged = false
+	c.pose = cam_chase_pose(w, ZOOM_MAX)
+	c.glide_dur = 0
+	c.zooming = false
+	c.zoom_goal = ZOOM_MAX
 }
 
 // Builds the line index, the ground plane and the shader. Needs the window.
@@ -1261,7 +1297,7 @@ street_camera :: proc(w: ^World) {
 		st.yaw = angle_lerp(st.yaw, 0, k)
 		st.pitch += (0 - st.pitch) * k
 	}
-	if wheel := mouse_wheel(w); wheel != 0 {
+	if wheel := mouse_wheel(w) + pad_zoom(w); wheel != 0 {
 		if st.dist == 0 do st.dist = STREET_CAM_DIST_M
 		st.dist = clamp(st.dist * (1 - wheel * 0.12), STREET_CAM_MIN_M, STREET_CAM_MAX_M)
 	}
@@ -1549,7 +1585,7 @@ street_hud :: proc(w: ^World) {
 
 	if w.street.on_s < STREET_HINT_S {
 		alpha := 1 - clamp((w.street.on_s - (STREET_HINT_S - 1)) / 1, 0, 1)
-		HINT :: "W/S throttle and brake   A/D turn   Space/Shift up and down   Mouse look around   V or Esc map"
+		HINT :: "W/S throttle and brake   A/D turn   Space/Shift up and down   Mouse look around   Scroll out or fly high: map"
 		hint := ui_text_size(w, HINT, .Roboto_500, 14)
 		r := rl.Rectangle{(screen.x - hint.x) / 2 - 14, PAD, hint.x + 28, hint.y + 16}
 		round_rect(r, 10, rl.ColorAlpha(pal.surface, 0.72 * alpha))

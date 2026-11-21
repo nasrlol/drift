@@ -607,7 +607,8 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
                   Gamepad (Lars, 2026-11-21: "controller mode werkt niet", GTA style): R2 throttle, L2 brake and
                   reverse, left stick steers and drives, R1 / L1 climb and sink, right stick looks around in the
-                  street view (climbs on the map), Triangle toggles the street view, Options leaves it. Triggers
+                  street view (climbs on the map), D-pad up / down zoom like the wheel (the map down into the street
+                  view and back up, pad_zoom), Options goes back to the map. Triggers
                   rest at -1 or 0 by mapping: only the upper half counts until one was seen below -0.5. pad_poll
                   logs "[input] gamepad 0 connected: <name>": no such line means raylib does not see the controller
                   (a DualSense was paired on Lars's Mac but not connected when this was written: untested).
@@ -742,8 +743,17 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   shader), houses and the ground receive (sun_shadow in STREET_GLSL: normal offset 0.12 m, bias
                   0.09 m, 3 x 3 PCF, faded at the box edge). The texture is bound to slot 14 for the main pass.
   street.odin     (Lars) the street view (Lars, 2026-11-21: "een 3d game waar je tussen huizen kan vliegen, zoals
-                  gta in third person, zo realistisch mogelijk"). V on the navigation screen (or the plan screen, which
-                  goes to free flight first) switches it on, V or Esc back to the map; the cursor is locked while on.
+                  gta in third person, zo realistisch mogelijk"). One world, no key for it (Lars, 2026-11-22: "geen 2
+                  modes, als je via de map zo laag naar beneden gaat switch je naar de 3d game, en omgekeerd als je
+                  naar boven gaat terug naar de map"): street_switch goes down into it when a zoom in (wheel, the +
+                  button, R on the plan screen, D-pad up) asks for more than ZOOM_MAX while the map is there
+                  (cam.zoom_past, set in cam_zoom_by), always at the car, from the plan screen too (it leaves the plan
+                  for free flight like M; Lars: "3D at the car"). street_wants_map comes back up when the car climbs
+                  through STREET_EXIT_M (300 m over the ground; entered above it, only once it has been below), when
+                  the camera is zoomed out past STREET_CAM_MAX_M (40 m), or with Esc / Options; the map then takes
+                  over at ZOOM_MAX behind the car, so one zoom in goes back down. The log shows each switch ("[street]
+                  down into the street view at 58 m", "up to the map at 300 m"); test/data/street_switch.txt runs
+                  both ways. The cursor is locked while on.
                   Street space: metres, x east, y up, z south, around w.street.origin (km, snapped to 0.25 km so the
                   f32 values stay small). street_place puts the map meshes (km, y south, z down) there (tiles.odin). The
                   ground is flat: the car is drawn at alt - height_at, like the buildings stand on the map. Clip

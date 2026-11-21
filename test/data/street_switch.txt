@@ -1,0 +1,24 @@
+# Map and street view are one world (street_switch): zooming in past the closest map view goes down into the
+# street view at the car, climbing through 300 m or zooming out past 40 m comes back up to the map. The log shows
+# each switch ("down into the street view", "up to the map").
+snapshot test/data/calm.snap
+# The map zoomed all the way in (behind the loading screen), then one notch more: down at the tower (58 m).
+wheel 2 40
+shot 110 build/shots/switch_1_map_closest.png
+wheel 115 1
+shot 260 build/shots/switch_2_down.png
+# Climbing through 300 m: back to the map.
+ship 270 139.9 79.6 280 0
+down 320 SPACE
+up 460 SPACE
+shot 480 build/shots/switch_3_up_by_height.png
+# Zoom in again: down at ~300 m, where flying higher does not switch until the car has been below 300 m.
+wheel 490 1
+wheel 492 1
+shot 620 build/shots/switch_4_down_high.png
+# Zoom the street camera out past its farthest: back to the map.
+wheel 630 -20
+wheel 631 -20
+wheel 632 -1
+shot 700 build/shots/switch_5_up_by_zoom.png
+quit 701

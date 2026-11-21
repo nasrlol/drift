@@ -8,7 +8,8 @@ STICK_DEADZONE :: 0.15
 
 // The first gamepad (Lars, 2026-11-21: "controller mode werkt niet"), GTA style: R2 throttle, L2 brake and
 // reverse, left stick steers (and drives with up / down), R1 / L1 climb and sink, right stick looks around in the
-// street view (climbs on the map), Triangle the street view, Options back. A trigger rests at -1 or at 0
+// street view (climbs on the map), D-pad up / down zoom (the map into the street view and back), Options back
+// to the map. A trigger rests at -1 or at 0
 // depending on the controller's mapping: until it has been seen below -0.5 only its upper half counts, so a
 // resting trigger never drives. Connecting and disconnecting are logged with the name, so the log shows
 // whether raylib knows the controller at all (without a mapping every axis stays 0).
@@ -95,6 +96,11 @@ key_pressed :: proc(w: ^World, k: rl.KeyboardKey) -> bool {
 mouse_delta :: proc(w: ^World) -> [2]f32 {
 	if w.script.on do return w.script.mouse
 	return rl.GetMouseDelta()
+}
+
+// D-pad up / down: one zoom step in / out this frame, like a wheel notch.
+pad_zoom :: proc(w: ^World) -> f32 {
+	return f32(int(pad_pressed(w, .LEFT_FACE_UP))) - f32(int(pad_pressed(w, .LEFT_FACE_DOWN)))
 }
 
 mouse_wheel :: proc(w: ^World) -> f32 {
