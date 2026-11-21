@@ -66,12 +66,16 @@ Tiles: float32 GeoTIFF (COG), heights in m above EGM2008, AREA_OR_POINT=Point. 1
 
 FONT
 
-Source: Roboto v3.016 (googlefonts/roboto-3-classic, release 2026-06-17), SIL Open Font License 1.1
-  https://github.com/googlefonts/roboto-3-classic/releases/download/v3.016/Roboto_v3.016.zip
-  saved as assets/raw/roboto_v3.016/Roboto_v3.016.zip (29 MB, not in git, sha256 1653dbe1...e334f)
-  committed: assets/fonts/Roboto-Regular.ttf = web/static/Roboto-Regular.ttf from the zip, unchanged
-  (157 KB, sha256 a6ec0ffa...23690), and assets/fonts/OFL.txt from the repo at tag v3.016 (the license
-  must travel with the font). Embedded with #load, the release exe grows by the same 157 KB.
+Three families from the design ("Typografie"), static TTFs copied unchanged into assets/fonts, each with its
+license (SIL OFL 1.1) next to it. Raw downloads in assets/raw/fonts (not in git). Embedded with #load (~1 MB).
+  Roboto v3.016 (googlefonts/roboto-3-classic release, zip sha256 1653dbe1...e334f), web/static/:
+    Roboto-Regular a6ec0ffa...fe523690, Roboto-Medium 71f5e045...f22b462d, Roboto-Bold 07ee011e...cdee3772,
+    license Roboto-OFL.txt
+  Figtree v2.0.3 (github.com/erikdkennedy/figtree, tag v2.0.3, fonts/ttf/): Medium e605259d...28c8b3fd,
+    SemiBold a63306f1...075eb574, Bold 2a33fa55...e26c563e, ExtraBold 31990321...80f4234b,
+    Italic 5983a032...06599439, license Figtree-OFL.txt
+  Roboto Mono v3.001 (github.com/googlefonts/RobotoMono, tag v3.001, fonts/ttf/): Regular af0bff75...1be17cb4,
+    Bold 3ecf35e5...aa95c4db (no static SemiBold exists, Font.Mono_600 uses Bold), license RobotoMono-OFL.txt
 
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
@@ -140,7 +144,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   pass draws dots (3 px) and texts (default font, LABEL_PX 10). Pixel size stays the same at every
                   zoom. The default font covers Latin-1, "Liege" with e grave draws correctly. 15 cities: O(n^2)
                   overlap test, fine until there are hundreds of labels.
-  ui.odin         Immediate mode UI, our own (raygui needs a system library on Linux, it is not in the build).
+  ui.odin         Fonts: Font enum (Figtree 500/600/700/800 + italic 400, Roboto 400/500/700, Mono 400/600),
+                  font_get rasterizes each (font, px) pair on first use (codepoints 32..255, up to 64 pairs in
+                  w.fonts), fonts_unload in game_shutdown. ui_text(w, pos, text, font, px, color) draws at the
+                  top-left pos, ui_text_size measures. The OSM credit and the toolbar use them.
+                  Immediate mode UI, our own (raygui needs a system library on Linux, it is not in the build).
                   A widget is a proc call that draws itself and returns what happened this frame; nothing is kept
                   between frames. ui_button(rect, text, on, pal) -> clicked: on = button_on color, mouse over =
                   button_hot, default font 10 px. Toolbar top right (TOOLBAR_W x TOOLBAR_H, laid out in

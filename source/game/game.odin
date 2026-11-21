@@ -23,13 +23,6 @@ WHEEL_ZOOM_STEP :: 0.25
 ZOOM_PER_S :: 2
 PAN_PX_PER_S :: 600
 
-// UI font: Roboto Regular v3.016 (OFL 1.1, assets/fonts/OFL.txt), rasterized once at the size it is drawn,
-// so text stays pixel sharp. Codepoints 32..255 cover ASCII and Latin-1 (Liege with e grave, the copyright sign).
-FONT_DATA :: #load("../../assets/fonts/Roboto-Regular.ttf")
-FONT_PX :: 14
-FONT_FIRST :: 32
-FONT_COUNT :: 256 - FONT_FIRST
-
 View :: struct {
 	pan:  [2]f32, // km from the map centre to the screen centre
 	zoom: f32,
@@ -66,7 +59,7 @@ World :: struct {
 	prof:         Profiler,
 	view:         View,
 	// GPU texture and glyph tables owned by raylib, zero until the first frame with a window.
-	font:         rl.Font,
+	fonts:        Fonts,
 	line_meshes:  Line_Meshes,
 	theme:        Theme, // zero = night (the design default), T toggles
 	palette:      Palette, // PALETTES[theme], copied every frame, read through palette(w)
@@ -150,23 +143,6 @@ game_update :: proc(memory: rawptr) -> bool {
 	context.allocator = virtual.arena_allocator(&w.perm)
 	context.temp_allocator = virtual.arena_allocator(&w.frame)
 	defer virtual.arena_free_all(&w.frame)
-
-	if w.font.texture.id == 0 {
-		codepoints: [FONT_COUNT]rune
-		for &c, i in codepoints do c = rune(FONT_FIRST + i)
-		w.font = rl.LoadFontFromMemory(
-			".ttf",
-			raw_data(FONT_DATA),
-			i32(len(FONT_DATA)),
-			FONT_PX,
-			raw_data(codepoints[:]),
-			FONT_COUNT,
-		)
-		if w.font.texture.id == 0 {
-			logf(w, "ui", "cannot load Roboto (%d bytes embedded), using the raylib font", len(FONT_DATA))
-			w.font = rl.GetFontDefault()
-		}
-	}
 
 	t := prof_begin()
 	weather_poll(w)
@@ -383,34 +359,34 @@ game_update :: proc(memory: rawptr) -> bool {
 		// A click changes the state after this frame's update, so it shows from the next frame on.
 		rl.DrawRectangleRec(toolbar, pal.surface)
 		r := rl.Rectangle{toolbar.x + UI_PAD, toolbar.y + UI_PAD, UI_BUTTON_W, UI_BUTTON_H}
-		if ui_button(r, "Map", !w.drive_mode, pal) do w.drive_mode = false
+		if ui_button(w, r, "Map", !w.drive_mode) do w.drive_mode = false
 		r.x += UI_BUTTON_W + UI_GAP
-		if ui_button(r, "Drive", w.drive_mode, pal) do w.drive_mode = true
+		if ui_button(w, r, "Drive", w.drive_mode) do w.drive_mode = true
 		r.x += UI_BUTTON_W + UI_GROUP_GAP
 		for s, i in speeds {
-			if ui_button(r, fmt.ctprintf("%.0fx", s), w.sim_speed == i, pal) do w.sim_speed = i
+			if ui_button(w, r, fmt.tprintf("%.0fx", s), w.sim_speed == i) do w.sim_speed = i
 			r.x += UI_BUTTON_W + UI_GAP
 		}
 		r.x += UI_GROUP_GAP - UI_GAP
-		THEME_NAMES :: [Theme]cstring {
+		THEME_NAMES :: [Theme]string {
 			.Day   = "Day",
 			.Night = "Night",
 		}
 		names := THEME_NAMES
 		for name, theme in names {
-			if ui_button(r, name, w.theme == theme, pal) do w.theme = theme
+			if ui_button(w, r, name, w.theme == theme) do w.theme = theme
 			r.x += UI_BUTTON_W + UI_GAP
 		}
 	}
 	{
 		// The OpenStreetMap license (ODbL) asks for this credit wherever the map is shown.
-		CREDIT :: cstring("\u00a9 OpenStreetMap contributors")
+		CREDIT :: "\u00a9 OpenStreetMap contributors"
 		PAD :: 4
-		text := rl.MeasureTextEx(w.font, CREDIT, FONT_PX, 0)
+		text := ui_text_size(w, CREDIT, .Roboto_400, 12)
 		screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 		box := linalg.floor(screen - text - 2 * PAD)
 		rl.DrawRectangleV(box, text + 2 * PAD, rl.ColorAlpha(pal.surface, 0.8))
-		rl.DrawTextEx(w.font, CREDIT, box + PAD, FONT_PX, 0, pal.text_2)
+		ui_text(w, box + PAD, CREDIT, .Roboto_400, 12, pal.text_2)
 	}
 	prof_end(w, .Draw, t)
 
@@ -482,8 +458,7 @@ game_shutdown :: proc(memory: rawptr) {
 	w := (^World)(memory)
 	weather_stop(w)
 	node_stop(w)
-	// raylib skips its own default font here, and headless runs never loaded one (texture id 0).
-	if w.font.texture.id != 0 do rl.UnloadFont(w.font)
+	fonts_unload(w)
 	line_meshes_unload(&w.line_meshes)
 	virtual.arena_destroy(&w.fetch.mem)
 	virtual.arena_destroy(&w.node.mem)
