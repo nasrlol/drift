@@ -93,7 +93,7 @@ ANDREI: WEATHER + NETWORK
 [ ] bench: wind_at cost, snapshot load time
 network + carpooling (after routing works):
 [x] ed25519 key pair per user (core:crypto)
-[ ] signed message format: offer, request, accept, review (fixed-size binary, not JSON)
+[x] signed message format: offer, request, accept, review (fixed-size binary, not JSON)
 [ ] offers include hub ids, times, seats, weather snapshot hash
 [ ] simple relay: store messages, forward to subscribers
 [ ] publish weather snapshot to relay, fetch by hash
