@@ -121,6 +121,8 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   to the altitude, hour = tick / (60 * 3600). Battery comes later.
                   Ship.warnings: bit_set of Terrain (less than 60 m above the ground) and No_Fly (inside a w.no_fly
                   circle below its ceiling), rebuilt every step. The UI only reads it.
+                  Ship.docked / dock_hub: set when within 30 m horizontally and 25 m vertically of a hub's tower top
+                  (ground + HUB_TOWER_M), first hub in index order, rebuilt every step.
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
                   R/F climb up / down, gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
