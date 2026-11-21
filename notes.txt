@@ -54,10 +54,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing
                   Camera: w.view (View) = pan (km from the map centre to the screen centre) + zoom (log2 relative
                   to the fitted view, ZOOM_MIN -1 .. ZOOM_MAX 7). Zero = the whole map fitted to 95% of the window.
-                  Each frame it becomes a Camera2D, zoom = px per km. Left mouse drag pans, wheel zooms
-                  (0.25 per notch) around the cursor. Gamepad 0: right stick pans (600 px/s, deadzone 0.15),
-                  right / left trigger zoom in / out (2 per s) around the screen centre. Pan is clamped so the
-                  screen centre stays on the map. Left stick is left free for the ship controls.
+                  Each frame it becomes a Camera2D, zoom = px per km. Map mode (the only mode until there is a
+                  ship): the camera reads w.controls, throttle / turn pan (600 px/s), climb zooms (2 per s) around
+                  the screen centre. So WASD and the left stick pan, R/F and right stick Y zoom. Mouse (camera
+                  only, not in Controls): left drag pans, wheel zooms (0.25 per notch) around the cursor. Pan is
+                  clamped so the screen centre stays on the map. Drive mode comes with ship_step: Controls go
+                  to the ship and the camera follows it.
                   Map drawing: each Map_Line is one rl.DrawLineStrip
                   straight from w.m.points ([2]f32 km has the rl.Vector2 layout, no copy, no allocation).
                   Colors: border dark grey, rivers blue, motorways orange. 10872 strips, 36k points per frame.
@@ -128,7 +130,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   and arena used / reserved. No timings, so two dumps
                   of the same run are identical. F5 in the app prints it to stdout, --dump in headless mode.
                   Windows release is -subsystem:windows and has no console: use the debug or profile exe there.
-  ship.odin       Controls struct: throttle, turn, climb, each -1..1, zero = neutral. Filled by input, read by ship_step.
+  ship.odin       Controls struct: throttle, turn, climb, each -1..1, zero = neutral. Filled by input, read by the
+                  camera in map mode (game.odin), by ship_step in drive mode.
+  input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
+                  R/F climb up / down, gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
+                  add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   Path lives in w.route_mem until the next call: from, the centres of the grid nodes
@@ -232,10 +238,13 @@ World memory
 
 BUILD
 compile.sh [debug|profile|release] [extra odin flags], build.sh wraps it with build-notify
+  Linux and macOS. macOS has bash 3.2 and BSD tools: raylib is copied only when newer with [ -nt ]
+  (no cp -u), the build time comes from perl Time::HiRes (no date %N), no mold, game.dylib + libraylib.620.dylib,
+  rpath @loader_path (the dylib's install name is @rpath/libraylib.620.dylib).
 compile.bat same modes on Windows (no mold, raylib.dll copied to build\, random pdb name per build
   so a loaded pdb never blocks the next build, host not rebuilt while drift.exe runs,
   release uses -subsystem:windows). format.bat / check.bat run the .sh versions with Git for Windows sh.
-  all modes: -vet -vet-cast -strict-style -warnings-as-errors -linker:mold, prints build time
+  all modes: -vet -vet-cast -strict-style -warnings-as-errors, -linker:mold on Linux, prints build time
   debug:   host + game.so, -debug -o:none -use-separate-modules (~900 ms for both, 2026-11-21 after
            profiler / headless / log / dump: 874-917 ms, main before them 767-875 ms; limit 2 s)
            game.so uses raylib as a shared lib (RAYLIB_SHARED), copied to build/, rpath $ORIGIN,
