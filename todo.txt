@@ -241,6 +241,11 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 [ ] trees with trunks near the camera, street trees, hedges, instanced; street furniture
 [ ] other cars (presence) tested in the street view with two nodes
 
+PHONE (Dario, 2026-11-21: the audience plays on iOS and Android in the browser)
+[~] dario: web build with touch controls, offline on the embedded weather (waiting: #79)
+[ ] nasr: connect the network in the browser build (weather, other cars, carpool)
+[ ] host build/web/site on a public HTTPS address
+
 TOGETHER, AT THE END
 [ ] demo run: plan Brussels -> Gent, pick greenest, Preview, Start, report gust, reroute, dock, Done
 [ ] headless test case for that flow, plus a screenshot of both screens in night and day

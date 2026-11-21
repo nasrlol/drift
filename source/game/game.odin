@@ -93,7 +93,10 @@ World :: struct {
 	presence_copy_s: f32,
 	street:          Street, // the third-person street view, street.odin
 	collide:         Collide, // building footprints for free flight, collide.odin
+	web:             Web_Input, // touch controls of the phone page, web.odin
 }
+
+IS_WEB :: ODIN_ARCH == .wasm32
 
 @(export)
 game_memory_size :: proc() -> int {
@@ -102,12 +105,19 @@ game_memory_size :: proc() -> int {
 
 @(export)
 game_init_window :: proc() {
-	rl.SetConfigFlags({.WINDOW_RESIZABLE, .MSAA_4X_HINT})
-	rl.InitWindow(1440, 900, "drift")
-	rl.SetWindowMinSize(900, 600)
+	// The phone page sets the canvas size itself (web/shell.html), raylib's resize handler would undo it.
+	when IS_WEB {
+		rl.SetConfigFlags({.MSAA_4X_HINT})
+		rl.InitWindow(1440, 900, "drift")
+	} else {
+		rl.SetConfigFlags({.WINDOW_RESIZABLE, .MSAA_4X_HINT})
+		rl.InitWindow(1440, 900, "drift")
+		rl.SetWindowMinSize(900, 600)
+	}
 	// Esc leaves navigation (design), it does not close the window.
 	rl.SetExitKey(.KEY_NULL)
-	rl.SetTargetFPS(60)
+	// In the browser requestAnimationFrame paces the frames, raylib must not sleep on the main thread.
+	when !IS_WEB do rl.SetTargetFPS(60)
 }
 
 @(export)
@@ -185,15 +195,18 @@ game_update :: proc(memory: rawptr) -> bool {
 	defer virtual.arena_free_all(&w.frame)
 
 	t := prof_begin()
-	weather_poll(w)
-	node_poll(w)
+	// A browser has no threads or sockets here: it stays on the embedded weather until the network is connected.
+	when !IS_WEB {
+		weather_poll(w)
+		node_poll(w)
+	}
 	ui_begin(w)
 	keys := read_controls(w.street.on)
 	pad := pilot_pad_controls(w)
 	w.controls = {
-		clamp(keys.throttle + pad.throttle, -1, 1),
-		clamp(keys.turn + pad.turn, -1, 1),
-		clamp(keys.climb + pad.climb, -1, 1),
+		clamp(keys.throttle + pad.throttle + w.web.pad.throttle, -1, 1),
+		clamp(keys.turn + pad.turn + w.web.pad.turn, -1, 1),
+		clamp(keys.climb + pad.climb + w.web.pad.climb, -1, 1),
 	}
 	typing := w.plan.editing != .None
 
@@ -655,7 +668,9 @@ game_update :: proc(memory: rawptr) -> bool {
 		w.prof.frame_used = w.frame.total_used
 	}
 
-	return !rl.WindowShouldClose()
+	// On the web WindowShouldClose sleeps through Asyncify, and a page is closed by the browser anyway.
+	when IS_WEB do return true
+	else do return !rl.WindowShouldClose()
 }
 
 // The host calls this on the old library right before it unloads it.

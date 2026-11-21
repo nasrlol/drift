@@ -160,7 +160,9 @@ cam_chase :: proc(w: ^World) {
 cam_chase_pose :: proc(w: ^World, zoom: f32) -> Cam_Pose {
 	s := &w.ship
 	ppk := cam_fit_scale(w.cam.screen) * math.pow(f32(2), zoom)
-	ahead := CAM_CHASE_AHEAD * w.cam.screen.y / ppk
+	// A phone held sideways has little height above the sheet: keep the car near the middle of the screen.
+	ahead_share: f32 = IS_WEB && w.cam.screen.x > w.cam.screen.y ? 0.02 : CAM_CHASE_AHEAD
+	ahead := ahead_share * w.cam.screen.y / ppk
 	fwd := [2]f32{math.sin(s.heading), -math.cos(s.heading)}
 	return {
 		pan = s.pos + fwd * ahead - [2]f32{MAP_W_KM, MAP_H_KM} / 2,

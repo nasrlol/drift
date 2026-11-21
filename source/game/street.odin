@@ -197,7 +197,7 @@ street_toggle :: proc(w: ^World) {
 	st := &w.street
 	if st.on {
 		st.on = false
-		rl.EnableCursor()
+		when !IS_WEB do rl.EnableCursor()
 		return
 	}
 	if w.screen == .Plan {
@@ -209,7 +209,7 @@ street_toggle :: proc(w: ^World) {
 	st.on_s = 0
 	st.yaw, st.pitch, st.idle_s = 0, 0, 0
 	st.seeded = false
-	rl.DisableCursor()
+	when !IS_WEB do rl.DisableCursor()
 }
 
 // Builds the line index, the ground plane and the shader. Needs the window.
@@ -378,6 +378,8 @@ street_camera :: proc(w: ^World) {
 	}
 
 	look := rl.GetMouseDelta() * STREET_MOUSE_RAD_PER_PX
+	// No pointer lock on a phone: the camera only turns while a finger drags.
+	when IS_WEB do if !rl.IsMouseButtonDown(.LEFT) do look = {}
 	if rl.IsGamepadAvailable(0) {
 		look.x += stick_axis(rl.GetGamepadAxisMovement(0, .RIGHT_X)) * STREET_STICK_RAD_PER_S * dt
 	}
@@ -625,7 +627,7 @@ street_hud :: proc(w: ^World) {
 		ui_text(w, {box.x + 150, box.y + 62}, "auto", .Roboto_500, 14, pal.accent)
 	}
 
-	if w.street.on_s < STREET_HINT_S {
+	if !IS_WEB && w.street.on_s < STREET_HINT_S {
 		alpha := 1 - clamp((w.street.on_s - (STREET_HINT_S - 1)) / 1, 0, 1)
 		HINT :: "W/S throttle and brake   A/D turn   Space/Shift up and down   Mouse look around   V or Esc map"
 		hint := ui_text_size(w, HINT, .Roboto_500, 14)

@@ -235,7 +235,9 @@ nav_draw_trip_markers :: proc(w: ^World) {
 nav_sheet_rect :: proc(w: ^World) -> rl.Rectangle {
 	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
 	width := min(SHEET_MAX_W, sw - 32)
-	return {(sw - width) / 2, sh - SHEET_H, width, SHEET_H}
+	// On a phone the sheet stays clear of the map credit and the home indicator.
+	bottom: f32 = IS_WEB ? 22 : 0
+	return {(sw - width) / 2, sh - SHEET_H - bottom, width, SHEET_H}
 }
 
 // Navigation screen: road sign, layer pill, banner + Then, warning and the sheet. Draw order 7 and 8.
@@ -352,7 +354,7 @@ nav_ui :: proc(w: ^World) {
 			{tx, banner.y + 16, banner.width - BANNER_ICON_COL - 20, 82},
 			text,
 			.Figtree_500,
-			n.banner == .Flying ? 34 : 30,
+			IS_WEB && banner.width < 440 ? 24 : n.banner == .Flying ? 34 : 30,
 			rl.WHITE,
 		)
 		ui_text_wrapped(
@@ -431,7 +433,8 @@ nav_ui :: proc(w: ^World) {
 		)
 	} else {
 		ui_text(w, {x, sheet.y + 28}, "Free flight", .Figtree_600, 38, pal.text)
-		ui_text(w, {x, sheet.y + 72}, "No route, fly with W A S D, R and F", .Roboto_400, 20, pal.text_2)
+		hint := IS_WEB ? "No route, steer with the stick" : "No route, fly with W A S D, R and F"
+		ui_text(w, {x, sheet.y + 72}, hint, .Roboto_400, IS_WEB ? 16 : 20, pal.text_2)
 	}
 	chips := [5]struct {
 		label, value: string,

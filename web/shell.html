@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b1220">
+<title>Drift</title>
+<style>
+:root { --bg: #0b1220; --surface: rgba(32, 33, 36, .88); --text: #e8eaed; --accent: #8ab4f8; --danger: #f28b82; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; overscroll-behavior: none; position: fixed; inset: 0; width: 100%; }
+canvas { position: fixed; inset: 0; width: 100vw; height: 100dvh; display: block; touch-action: none; outline: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+#status { position: fixed; inset: 0; display: grid; place-items: center; color: var(--text); font: 500 16px system-ui, sans-serif; padding: 24px; text-align: center; background: var(--bg); z-index: 5; }
+#hud { position: fixed; inset: 0; pointer-events: none; font: 600 14px system-ui, sans-serif; color: var(--text); z-index: 2; }
+#hud[hidden] { display: none; }
+.bar { position: absolute; top: calc(env(safe-area-inset-top) + 8px); right: calc(env(safe-area-inset-right) + 8px); display: flex; gap: 8px; }
+.bar.stack { flex-direction: column; align-items: flex-end; }
+.bar.stack button { font-size: 13px; padding: 0 9px; }
+button { pointer-events: auto; touch-action: none; border: 0; color: var(--text); background: var(--surface); font: inherit; min-height: 44px; min-width: 44px; padding: 0 14px; border-radius: 22px; user-select: none; -webkit-user-select: none; }
+button:active, button.on { background: var(--accent); color: #111; }
+button.exit { background: var(--danger); color: #111; }
+#stick { position: absolute; left: calc(env(safe-area-inset-left) + 16px); bottom: calc(var(--clear, 24px) + env(safe-area-inset-bottom)); width: 116px; height: 116px; border-radius: 50%; background: var(--surface); pointer-events: auto; touch-action: none; }
+#knob { position: absolute; left: 35px; top: 35px; width: 46px; height: 46px; border-radius: 50%; background: var(--accent); }
+#lift { position: absolute; right: calc(env(safe-area-inset-right) + 12px); bottom: calc(var(--clear, 24px) + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 10px; }
+#lift button { width: 54px; height: 54px; min-height: 54px; padding: 0; border-radius: 50%; font-size: 20px; }
+#hud.wide-nav #lift { right: calc(env(safe-area-inset-right) + 76px); }
+.off { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="-1" aria-label="Drift game"></canvas>
+<div id="hud" hidden>
+  <div class="bar">
+    <button id="panel" type="button">Map</button>
+    <button id="fly" type="button">Fly</button>
+    <button id="street" type="button">Street</button>
+    <button id="auto" type="button">Autopilot</button>
+    <button id="exit" class="exit" type="button">Exit</button>
+  </div>
+  <div id="stick" role="application" aria-label="Steer and throttle"><div id="knob"></div></div>
+  <div id="lift">
+    <button id="up" type="button" aria-label="Climb">&#9650;</button>
+    <button id="down" type="button" aria-label="Descend">&#9660;</button>
+  </div>
+</div>
+<div id="status" role="status">Loading Drift...</div>
+<script src="odin.js"></script>
+<script>
+const statusEl = document.getElementById("status");
+const canvas = document.getElementById("canvas");
+const hud = document.getElementById("hud");
+const byId = (id) => document.getElementById(id);
+const odinMemory = new odin.WasmMemoryInterface();
+odinMemory.setIntSize(4);
+const odinImports = odin.setupDefaultImports(odinMemory);
+
+const ACTION = { street: 0, fly: 1, exit: 2, panel: 3, auto: 4 };
+const BIT = { navigate: 1, street: 2, steering: 4, route: 8, panelHidden: 16 };
+const MIN_W = 436, MIN_H = 520, SHEET_H = 194, STREET_HUD_H = 128, STICK_SIZE = 116;
+let gameScale = 1;
+
+function fit() {
+  const w = window.innerWidth, h = window.innerHeight;
+  gameScale = Math.max(1, MIN_W / w, MIN_H / h);
+  Module._web_resize(Math.round(w * gameScale), Math.round(h * gameScale));
+}
+
+const queue = [];
+// A press waits this long for a second finger, so the start of a pinch does not tap what is under it.
+const PINCH_WAIT_MS = 70;
+let pendingPress = null;
+const send = (type, x, y, buttons) => canvas.dispatchEvent(new MouseEvent(type, { clientX: x, clientY: y, button: 0, buttons, bubbles: true }));
+// One press or release per frame, and the move before the press in its own frame, so raylib sees every tap and
+// a touch somewhere else does not count as a drag across the screen.
+function commitPress() {
+  queue.push({ type: "mousemove", x: pendingPress.x, y: pendingPress.y, buttons: 0, hold: true });
+  queue.push({ type: "mousedown", x: pendingPress.x, y: pendingPress.y, buttons: 1 });
+  pendingPress = null;
+}
+function flushInput() {
+  if (pendingPress && performance.now() - pendingPress.t >= PINCH_WAIT_MS) commitPress();
+  while (queue.length) {
+    const e = queue.shift();
+    send(e.type, e.x, e.y, e.buttons);
+    if (e.type !== "mousemove" || e.hold) break;
+  }
+}
+
+const fingers = new Map();
+let pinch = 0;
+const spread = () => { const [a, b] = [...fingers.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+canvas.addEventListener("pointerdown", (e) => {
+  if (e.pointerType !== "touch") return;
+  canvas.setPointerCapture(e.pointerId);
+  fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (fingers.size === 1) {
+    pendingPress = { x: e.clientX, y: e.clientY, t: performance.now() };
+  } else if (fingers.size === 2) {
+    if (pendingPress) {
+      pendingPress = null;
+    } else {
+      const first = [...fingers.values()][0];
+      queue.push({ type: "mouseup", x: first.x, y: first.y, buttons: 0 });
+    }
+    pinch = spread();
+  }
+});
+canvas.addEventListener("pointermove", (e) => {
+  const f = fingers.get(e.pointerId);
+  if (!f) return;
+  f.x = e.clientX; f.y = e.clientY;
+  if (pendingPress) { pendingPress.x = f.x; pendingPress.y = f.y; return; }
+  if (fingers.size === 1) {
+    const last = queue[queue.length - 1];
+    if (last && last.type === "mousemove" && !last.hold) { last.x = f.x; last.y = f.y; }
+    else queue.push({ type: "mousemove", x: f.x, y: f.y, buttons: 1 });
+  } else if (fingers.size === 2 && pinch > 0) {
+    const now = spread();
+    const [a, b] = [...fingers.values()];
+    Module._web_zoom(Math.log2(now / pinch), (a.x + b.x) / 2 * gameScale, (a.y + b.y) / 2 * gameScale);
+    pinch = now;
+  }
+});
+const lift = (e) => {
+  const f = fingers.get(e.pointerId);
+  if (!f) return;
+  const wasOne = fingers.size === 1;
+  fingers.delete(e.pointerId);
+  pinch = 0;
+  if (wasOne && pendingPress) commitPress();
+  if (wasOne) queue.push({ type: "mouseup", x: f.x, y: f.y, buttons: 0 });
+};
+canvas.addEventListener("pointerup", lift);
+canvas.addEventListener("pointercancel", lift);
+for (const t of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
+  window.addEventListener(t, (e) => { if (e.target === canvas) { e.preventDefault(); e.stopPropagation(); } }, { capture: true, passive: false });
+}
+for (const t of ["gesturestart", "gesturechange", "contextmenu"]) document.addEventListener(t, (e) => e.preventDefault());
+
+const pad = { throttle: 0, turn: 0, climb: 0 };
+const sendPad = () => Module._web_pad(pad.throttle, pad.turn, pad.climb);
+const stick = byId("stick"), knob = byId("knob");
+let stickId = null;
+function moveStick(e) {
+  const r = stick.getBoundingClientRect();
+  const reach = r.width / 2 - 25;
+  let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+  const d = Math.hypot(dx, dy);
+  if (d > reach) { dx *= reach / d; dy *= reach / d; }
+  knob.style.transform = `translate(${dx}px, ${dy}px)`;
+  pad.turn = dx / reach;
+  pad.throttle = -dy / reach;
+  sendPad();
+}
+function releaseStick() {
+  stickId = null;
+  knob.style.transform = "";
+  pad.turn = 0; pad.throttle = 0;
+  sendPad();
+}
+stick.addEventListener("pointerdown", (e) => { e.preventDefault(); stickId = e.pointerId; stick.setPointerCapture(stickId); moveStick(e); });
+stick.addEventListener("pointermove", (e) => { if (e.pointerId === stickId) moveStick(e); });
+stick.addEventListener("pointerup", (e) => { if (e.pointerId === stickId) releaseStick(); });
+stick.addEventListener("pointercancel", (e) => { if (e.pointerId === stickId) releaseStick(); });
+
+for (const [id, value] of [["up", 1], ["down", -1]]) {
+  const b = byId(id);
+  const off = () => { if (pad.climb === value) { pad.climb = 0; sendPad(); } b.classList.remove("on"); };
+  b.addEventListener("pointerdown", (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); pad.climb = value; b.classList.add("on"); sendPad(); });
+  b.addEventListener("pointerup", off);
+  b.addEventListener("pointercancel", off);
+}
+for (const id of ["panel", "fly", "street", "auto", "exit"]) {
+  byId(id).addEventListener("click", () => Module._web_action(ACTION[id]));
+}
+
+let lastState = -1;
+function syncHud() {
+  const s = Module._web_state();
+  if (s === lastState) return;
+  lastState = s;
+  const nav = !!(s & BIT.navigate), street = !!(s & BIT.street), steering = !!(s & BIT.steering), route = !!(s & BIT.route);
+  const show = (id, on) => byId(id).classList.toggle("off", !on);
+  show("panel", !nav);
+  byId("panel").textContent = s & BIT.panelHidden ? "Plan" : "Map";
+  show("fly", !nav);
+  show("street", true);
+  byId("street").classList.toggle("on", street);
+  show("auto", nav && route);
+  byId("auto").textContent = steering ? "Autopilot" : "Steer";
+  show("exit", street);
+  const controls = nav && (steering || street);
+  show("stick", controls);
+  show("lift", controls);
+  const wide = window.innerWidth > window.innerHeight;
+  hud.querySelector(".bar").classList.toggle("stack", nav && !wide);
+  hud.classList.toggle("wide-nav", nav && !street && wide);
+  const clear = street ? Math.round(STREET_HUD_H / gameScale) + 12 : wide ? 12 : Math.round(SHEET_H / gameScale) + 12;
+  hud.style.setProperty("--clear", `${clear}px`);
+  Module._web_stick_top((window.innerHeight - clear - STICK_SIZE) * gameScale);
+  if (!controls && (pad.throttle || pad.turn || pad.climb)) { releaseStick(); pad.climb = 0; sendPad(); }
+}
+
+var Module = {
+  canvas,
+  print: (t) => console.log(t),
+  printErr: (t) => console.error(t),
+  instantiateWasm(imports, done) {
+    const merged = { ...odinImports, ...imports };
+    // Not every static host sends application/wasm, which streaming requires.
+    const load = async () => {
+      const res = await fetch("index.wasm");
+      if (!res.ok) throw new Error(`index.wasm: HTTP ${res.status}`);
+      const isWasm = (res.headers.get("content-type") || "").startsWith("application/wasm");
+      if (isWasm && WebAssembly.instantiateStreaming) return WebAssembly.instantiateStreaming(res, merged);
+      return WebAssembly.instantiate(await res.arrayBuffer(), merged);
+    };
+    load().then((r) => {
+      odinMemory.setExports(r.instance.exports);
+      odinMemory.setMemory(r.instance.exports.memory);
+      done(r.instance);
+    }).catch((e) => { console.error("[web] start failed:", e.stack || e); statusEl.textContent = "Drift could not load: " + e.message; });
+    return {};
+  },
+  onRuntimeInitialized() {
+    if (!Module._web_init()) { statusEl.textContent = "Drift could not start."; return; }
+    fit();
+    addEventListener("resize", () => { fit(); lastState = -1; });
+    addEventListener("orientationchange", () => { fit(); lastState = -1; });
+    statusEl.remove();
+    hud.hidden = false;
+    const frame = () => {
+      flushInput();
+      if (!Module._web_frame()) return;
+      syncHud();
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  },
+};
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>
