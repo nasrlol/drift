@@ -78,7 +78,7 @@ DARIO: SHIP + CONTROLS
 [x] limits: accel +1.2 / -1.6 m/s^2, smoothed turn rate, ceiling 900 m, min 28 m above terrain
 [ ] ship drifts with wind_at, battery drain from Lars's energy model, solar charging
 [x] warnings as flags in the ship state (terrain, no-fly), UI only reads them
-[ ] docking: within 30 m horizontal, 25 m vertical of the hub tower
+[x] docking: within 30 m horizontal, 25 m vertical of the hub tower
 [ ] sim speed 1x / 5x / 15x / 40x = more fixed steps per frame, never a bigger dt
 [x] map mode: Controls pan / zoom the camera while there is no ship (WASD, R/F, sticks)
 [ ] drive mode: Controls go to ship_step, camera follows ship, key to switch back to map mode

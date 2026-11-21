@@ -26,6 +26,9 @@ Ship :: struct {
 	speed:     f32,
 	turn_rate: f32,
 	warnings:  bit_set[Ship_Warning],
+	// Set while within reach of a hub tower, dock_hub is only meaningful then.
+	docked:    bool,
+	dock_hub:  int,
 }
 
 SHIP_MAX_SPEED :: 35.0
@@ -37,6 +40,8 @@ SHIP_CLIMB_RATE :: 5.0
 SHIP_CEILING :: 900.0
 SHIP_MIN_CLEARANCE :: 28.0
 SHIP_TERRAIN_WARN_M :: 60.0
+DOCK_HORIZONTAL_KM :: 0.030
+DOCK_VERTICAL_M :: 25.0
 
 // Runs once per fixed step on w.ship. Reads only the ship, the controls, the terrain and the weather.
 ship_step :: proc(w: ^World, c: Controls, dt: f32) {
@@ -70,6 +75,17 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	for z in w.no_fly {
 		if z.radius > 0 && s.alt < z.ceiling && linalg.length(s.pos - z.center) < z.radius {
 			s.warnings += {.No_Fly}
+		}
+	}
+
+	s.docked = false
+	for i in 0 ..< w.m.hub_count {
+		hub := w.m.hubs[i].pos
+		top := height_at(w, hub.x, hub.y) + HUB_TOWER_M
+		if linalg.length(s.pos - hub) <= DOCK_HORIZONTAL_KM && abs(s.alt - top) <= DOCK_VERTICAL_M {
+			s.docked = true
+			s.dock_hub = i
+			break
 		}
 	}
 }
