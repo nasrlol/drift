@@ -122,9 +122,9 @@ extra:
     at x 149.0, y 73.4 km. The zones in test/data/no_fly.txt are made-up (#52). Expected files change only
     with the owner's approval.
 design (airship.odin = model + drawing, camera.odin = camera, pilot_ui.odin = flying controls on screen):
-[ ] airship model: low-poly mesh built once at startup, sizes and colors from the design doc
-[ ] airship draw: heading + crab angle into the wind, bank in turns, props spin with speed, nav lights
-[ ] airship on the flat map: 70-90 px long, low above the ground, soft shadow ellipse
+[x] airship model: low-poly mesh built once at startup, sizes and colors from the design doc
+[x] airship draw: heading + crab angle into the wind, bank in turns, props spin with speed, nav lights
+[x] airship on the flat map: 70-90 px long, low above the ground, soft shadow ellipse
 [ ] camera.odin: move View + map / drive camera out of game.odin (after #57), Camera3D, zero = whole map
 [ ] camera: ease-out glide on zoom (0.6 s) within ZOOM_MIN / ZOOM_MAX, compass button resets north
 [ ] cam_fit(w, min, max, screen rect): fit routes beside the plan panel in 0.8 s ease-out

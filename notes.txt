@@ -340,6 +340,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
                   R/F climb up / down (arrows = W/A/S/D, PgUp / PgDn = R / F), gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
+  airship.odin    Airship (in World): low-poly model from docs/drift-design.pdf built once in game_init (airship_build, flat
+                  shaded vertex colors, ~900 triangles, 3 prop meshes spin with speed) and uploaded to the GPU; the GL objects
+                  live in raylib so they survive hot reload. airship_draw(w, cam): soft shadow, then the model through an
+                  orthographic Camera3D (1 unit = 1 px, tilt 0.7 rad from the south) moved so it lands on the ship, 80 px
+                  long at every zoom. Nose follows ship.heading (so the crab against the wind shows), banks with turn_rate.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   from.z / to.z are the tower tops (headless: height_at + HUB_TOWER_M).

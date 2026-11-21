@@ -64,6 +64,7 @@ World :: struct {
 	theme:        Theme, // zero = night (the design default), T toggles
 	palette:      Palette, // PALETTES[theme], copied every frame, read through palette(w)
 	wind:         Wind_Particles,
+	airship:      Airship,
 }
 
 @(export)
@@ -103,6 +104,7 @@ game_init :: proc() -> rawptr {
 
 	weather_load_snapshot(w, SNAPSHOT_PATH)
 	identity_load_or_create(w)
+	if rl.IsWindowReady() do airship_build(&w.airship)
 	w.replay.steps = make([]Control_Step, REPLAY_MAX_STEPS, virtual.arena_allocator(&w.perm))
 	logf(w, "game", "build %s", BUILD_MODE)
 	logf(
@@ -320,9 +322,8 @@ game_update :: proc(memory: rawptr) -> bool {
 			if lm.map_lines.vertexCount > 0 do rl.DrawMesh(lm.map_lines, lm.material, rl.Matrix(1))
 			rl.DrawMesh(lm.wind, lm.material, rl.Matrix(1))
 		}
-		// 8 px marker pointing along the heading, DrawPoly puts the first corner at the rotation angle.
-		rl.DrawPoly(w.ship.pos, 3, 8 / cam.zoom, math.to_degrees(w.ship.heading) - 90, pal.accent)
 		rl.EndMode2D()
+		airship_draw(w, cam)
 
 		// Labels in screen space, so dots and text keep their pixel size at every zoom.
 		// Names are 0-terminated UTF-8 from the bake, the default raylib font covers Latin-1 (Liege has an e grave).
