@@ -1,6 +1,7 @@
 package game
 
 import "core:math"
+import "core:mem"
 import "core:mem/virtual"
 
 Route_Mode :: enum u8 {
@@ -36,14 +37,30 @@ GRID_DIRS :: [10][3]int {
 }
 
 // Search state per node, fixed size inside World: allocated once with it, reused by every route.
-// cost and parent of a node only count when visit[node] == search, so a new route bumps search
-// instead of clearing 2.4 MB. Zero is valid: no node has been visited yet.
+// cost, parent and slot of a node only count when visit[node] == search, so a new route bumps search
+// instead of clearing 4.9 MB. Zero is valid: no node has been visited yet, the open heap is empty.
 Grid :: struct {
-	search: u32,
-	visit:  [GRID_NODES]u32,
-	cost:   [GRID_NODES]f32,
-	parent: [GRID_NODES]Node,
+	search:   u32,
+	heap_len: u32,
+	visit:    [GRID_NODES]u32,
+	cost:     [GRID_NODES]f32, // km from the start along the best path found so far
+	parent:   [GRID_NODES]Node,
+	slot:     [GRID_NODES]u32, // index in heap while open, HEAP_CLOSED once expanded
+	heap:     [GRID_NODES]Heap_Item, // binary min-heap on f, the open set of A*
 }
+
+// f = cost + estimate to the goal, the key of the open heap.
+Heap_Item :: struct {
+	f: f32,
+	n: Node,
+}
+
+HEAP_CLOSED :: max(u32)
+
+// On an open 8-direction grid thousands of nodes have (almost) the same f, so plain A* expands a wide
+// band around the line: 35k nodes corner to corner. Weighting the estimate a little prefers nodes
+// closer to the goal: 286 nodes, at most 0.1 % longer than the cheapest path.
+ESTIMATE_TIE_BREAK :: 1.001
 
 grid_node :: proc(c: [3]int) -> Node {
 	return Node(c.z * GRID_LAYER_CELLS + c.y * GRID_W + c.x)
@@ -98,15 +115,98 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 		g.visit = {}
 		g.search = 1
 	}
+	g.heap_len = 0
 
 	start := grid_node_at(from) or_return
-	_ = grid_node_at(to) or_return
+	goal := grid_node_at(to) or_return
 	g.visit[start] = g.search
 	g.cost[start] = 0
 	g.parent[start] = start
+	g.slot[start] = 0
+	g.heap_len = 1
+	grid_heap_up(g, start, grid_estimate(start, goal) * ESTIMATE_TIE_BREAK)
 
-	path = make([][3]f32, 2, virtual.arena_allocator(&w.route_mem))
-	path[0] = from
-	path[1] = to
-	return path, true
+	dirs := GRID_DIRS
+	for g.heap_len > 0 {
+		n := g.heap[0].n
+		g.slot[n] = HEAP_CLOSED
+		g.heap_len -= 1
+		if g.heap_len > 0 {
+			last := g.heap[g.heap_len]
+			i: u32 = 0
+			for {
+				c := 2 * i + 1
+				if c >= g.heap_len do break
+				if c + 1 < g.heap_len && g.heap[c + 1].f < g.heap[c].f do c += 1
+				if g.heap[c].f >= last.f do break
+				g.heap[i] = g.heap[c]
+				g.slot[g.heap[i].n] = i
+				i = c
+			}
+			g.heap[i] = last
+			g.slot[last.n] = i
+		}
+
+		if n == goal {
+			count := 1
+			for p := goal; p != start; p = g.parent[p] do count += 1
+			err: mem.Allocator_Error
+			path, err = make([][3]f32, max(count, 2), virtual.arena_allocator(&w.route_mem))
+			if err != nil do return nil, false
+			i := len(path) - 1
+			for p := goal;; p = g.parent[p] {
+				path[i] = grid_node_pos(p)
+				if p == start do break
+				i -= 1
+			}
+			path[0] = from
+			path[len(path) - 1] = to
+			return path, true
+		}
+
+		for d in dirs {
+			next := grid_neighbor(n, d) or_continue
+			// For a single step the estimate is exact: 1 or sqrt 2 cells, or one layer of climb.
+			cost := g.cost[n] + grid_estimate(n, next)
+			if g.visit[next] == g.search {
+				if g.slot[next] == HEAP_CLOSED || cost >= g.cost[next] do continue
+			} else {
+				g.visit[next] = g.search
+				g.slot[next] = g.heap_len
+				g.heap_len += 1
+			}
+			g.cost[next] = cost
+			g.parent[next] = n
+			grid_heap_up(g, next, cost + grid_estimate(next, goal) * ESTIMATE_TIE_BREAK)
+		}
+	}
+	return nil, false
+}
+
+// Cost in km of the cheapest path from a to b on an empty grid: octile distance over the cells plus
+// the altitude change. Never more than the real cost, and consistent, so A* finds the cheapest path
+// and never has to reopen an expanded node.
+grid_estimate :: proc(a, b: Node) -> f32 {
+	ca := grid_cell(a)
+	cb := grid_cell(b)
+	dx := abs(ca.x - cb.x)
+	dy := abs(ca.y - cb.y)
+	alt := LAYER_ALT
+	flat := f32(max(dx, dy) - min(dx, dy)) + math.SQRT_TWO * f32(min(dx, dy))
+	return flat * GRID_CELL_KM + abs(alt[ca.z] - alt[cb.z]) / 1000
+}
+
+// Gives n priority f and moves it up from its slot to its place in the open heap.
+// Used both for a newly opened node (slot = the end of the heap) and for a cheaper path to an open one.
+grid_heap_up :: proc(g: ^Grid, n: Node, f: f32) {
+	i := g.slot[n]
+	for i > 0 {
+		p := (i - 1) / 2
+		if g.heap[p].f <= f do break
+		g.heap[i] = g.heap[p]
+		g.slot[g.heap[i].n] = i
+		i = p
+	}
+	g.heap[i] = {f, n}
+	g.slot[n] = i
 }
