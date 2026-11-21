@@ -3,6 +3,8 @@ package game
 
 import "core:crypto/ed25519"
 import "core:fmt"
+import "core:math"
+import "core:math/linalg"
 import "core:mem/virtual"
 import "core:strings"
 import curl "vendor:curl"
@@ -13,6 +15,19 @@ SIM_DT :: 1.0 / SIM_HZ
 MAX_FRAME_DT :: 0.25
 // Keys 1..4. More simulated time per frame means more fixed steps, dt stays SIM_DT.
 SIM_SPEEDS :: [4]f64{1, 5, 15, 40}
+
+// Camera: zoom is log2 relative to the fitted view, so zero is the whole map.
+ZOOM_MIN :: -1
+ZOOM_MAX :: 7
+WHEEL_ZOOM_STEP :: 0.25
+PAD_ZOOM_PER_S :: 2
+PAD_PAN_PX_PER_S :: 600
+PAD_DEADZONE :: 0.15
+
+View :: struct {
+	pan:  [2]f32, // km from the map centre to the screen centre
+	zoom: f32,
+}
 
 // Set by compile.sh with -define: debug builds get DRIFT_DEBUG, profile builds DRIFT_PROFILE, release neither.
 DRIFT_DEBUG :: #config(DRIFT_DEBUG, false)
@@ -39,6 +54,7 @@ World :: struct {
 	accum:        f64,
 	sim_speed:    int, // index into SIM_SPEEDS, 0 = 1x
 	prof:         Profiler,
+	view:         View,
 }
 
 @(export)
@@ -131,18 +147,51 @@ game_update :: proc(memory: rawptr) -> bool {
 		fmt.print(strings.to_string(b))
 	}
 
+	// km -> px: Camera2D zoom is px per km, w.view.pan is where the screen centre looks.
+	// Drag with the left mouse button or the right stick to pan, wheel or triggers to zoom.
+	// Zooming keeps the point under the cursor (wheel) or the screen centre (triggers) in place.
+	cam: rl.Camera2D
+	{
+		v := &w.view
+		dt := rl.GetFrameTime()
+		centre := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())} / 2
+		fit := 0.95 * min(centre.x * 2 / MAP_W_KM, centre.y * 2 / MAP_H_KM)
+		z0 := fit * math.pow(f32(2), v.zoom)
+
+		if rl.IsMouseButtonDown(.LEFT) do v.pan -= rl.GetMouseDelta() / z0
+		zoom := rl.GetMouseWheelMove() * WHEEL_ZOOM_STEP
+		anchor := rl.GetMousePosition()
+		if rl.IsGamepadAvailable(0) {
+			stick := [2]f32{rl.GetGamepadAxisMovement(0, .RIGHT_X), rl.GetGamepadAxisMovement(0, .RIGHT_Y)}
+			if linalg.length(stick) > PAD_DEADZONE do v.pan += stick * PAD_PAN_PX_PER_S * dt / z0
+			// Triggers rest at -1 and read 0 before the first press, the difference is 0 in both cases.
+			pad_zoom :=
+				(rl.GetGamepadAxisMovement(0, .RIGHT_TRIGGER) -
+					rl.GetGamepadAxisMovement(0, .LEFT_TRIGGER)) /
+				2
+			if abs(pad_zoom) > PAD_DEADZONE {
+				zoom += pad_zoom * PAD_ZOOM_PER_S * dt
+				anchor = centre
+			}
+		}
+		v.zoom = clamp(v.zoom + zoom, ZOOM_MIN, ZOOM_MAX)
+		z1 := fit * math.pow(f32(2), v.zoom)
+		v.pan += (anchor - centre) * (1 / z0 - 1 / z1)
+		half := [2]f32{MAP_W_KM, MAP_H_KM} / 2
+		v.pan = linalg.clamp(v.pan, -half, half)
+
+		cam = {
+			offset = centre,
+			target = half + v.pan,
+			zoom   = z1,
+		}
+	}
+
 	rl.BeginDrawing()
 	t = prof_begin()
 	rl.ClearBackground(rl.RAYWHITE)
 	{
-		// km -> px: Camera2D zoom is px per km, the map centre lands on the screen centre.
 		// Points are [2]f32 km, the same layout as rl.Vector2, so the strips draw straight from map memory.
-		sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
-		cam := rl.Camera2D {
-			offset = {sw / 2, sh / 2},
-			target = {MAP_W_KM / 2, MAP_H_KM / 2},
-			zoom   = 0.95 * min(sw / MAP_W_KM, sh / MAP_H_KM),
-		}
 		colors := [Map_Kind]rl.Color {
 			.Border   = rl.DARKGRAY,
 			.River    = rl.BLUE,
