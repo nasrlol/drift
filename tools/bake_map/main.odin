@@ -25,7 +25,24 @@ Map_Header :: struct {
 	line_count, point_count, city_count: u32,
 	hub_count, names_size:               u32,
 	name_cell_count, name_run_count:     u32,
+	area_count, area_point_count:        u32,
 }
+// Triangles area_points[start:][:count], 3 points each, of one land use polygon.
+Map_Area :: struct {
+	start, count, kind: u32,
+}
+// Same order as Area_Kind in map.odin. belgium.bin lists the areas in this order.
+Area_Kind :: enum u32 {
+	City,
+	Park,
+	Farmland,
+	Marsh,
+	Beach,
+	Water,
+}
+// Polygons smaller than this are dropped: they are a few pixels at the zoom that shows them, and they are
+// most of the polygons (see notes.txt for the numbers).
+AREA_MIN_KM2 :: 0.5
 // name, ref: offsets into the names blob, 0 = none.
 Map_Line :: struct {
 	start, count, kind: u32,
@@ -140,13 +157,14 @@ add_line :: proc(coords: json.Value, kind: Kind, name, ref: u32) {
 	flush(&start, kind, name, ref)
 }
 
-bake_layer :: proc(path: string, kind: Kind, is_cities := false) {
+// The features of a geojson file, gunzipped first when the name ends in .gz.
+read_features :: proc(path: string) -> json.Array {
 	data, err := os.read_entire_file(path, context.allocator)
 	if err != nil {
 		fmt.eprintln("can't read", path, err)
 		os.exit(1)
 	}
-	// roads.geojson is 32 MB, git keeps it gzipped (3.9 MB, #71).
+	// Big extracts are kept gzipped in git (roads.geojson is 32 MB, 3.9 MB gzipped, #71).
 	if strings.has_suffix(path, ".gz") {
 		unzipped: [dynamic]u8
 		if zerr := deflate.inflate_gzip(&unzipped, data); zerr != nil {
@@ -160,8 +178,11 @@ bake_layer :: proc(path: string, kind: Kind, is_cities := false) {
 		fmt.eprintln("bad json in", path, jerr)
 		os.exit(1)
 	}
+	return root.(json.Object)["features"].(json.Array)
+}
 
-	for f in root.(json.Object)["features"].(json.Array) {
+bake_layer :: proc(path: string, kind: Kind, is_cities := false) {
+	for f in read_features(path) {
 		feature := f.(json.Object)
 		geom := feature["geometry"].(json.Object)
 		coords := geom["coordinates"]
@@ -212,12 +233,192 @@ bake_layer :: proc(path: string, kind: Kind, is_cities := false) {
 	}
 }
 
+// Land use polygons -> triangles. Only the outer ring is kept: holes (a clearing in a forest, a lake in a
+// park) are dropped, so they are drawn filled. The water polygons are separate areas and drawn on top of the
+// land kinds (Water is the last kind), so a lake in a park still shows as water. Triangulated by ear clipping
+// in map space, then each triangle is clipped to the map rectangle, so every point stays inside the map.
+bake_areas :: proc(path: string) -> (areas: [dynamic]Map_Area, area_points: [dynamic][2]f32) {
+	Polygon :: struct {
+		kind:      Area_Kind,
+		triangles: [][2]f32,
+	}
+	polygons: [dynamic]Polygon
+	dropped_small, dropped_other: int
+	// Triangles cover the ring exactly unless ear clipping had to force a cut in a self-crossing ring.
+	ring_area, triangle_area: f64
+	for f in read_features(path) {
+		feature := f.(json.Object)
+		geom := feature["geometry"].(json.Object)
+		props := feature["properties"].(json.Object)
+
+		landuse, _ := props["landuse"].(json.String)
+		natural, _ := props["natural"].(json.String)
+		leisure, _ := props["leisure"].(json.String)
+		kind: Area_Kind
+		switch {
+		case landuse == "residential" ||
+		     landuse == "commercial" ||
+		     landuse == "industrial" ||
+		     landuse == "retail":
+			kind = .City
+		case landuse == "forest" || natural == "wood" || leisure == "park":
+			kind = .Park
+		case landuse == "farmland" || landuse == "farmyard" || landuse == "orchard" || landuse == "vineyard":
+			kind = .Farmland
+		case natural == "wetland":
+			kind = .Marsh
+		case natural == "beach" || natural == "sand":
+			kind = .Beach
+		case natural == "water":
+			kind = .Water
+		case:
+			fmt.eprintfln(
+				"%s: landuse=%q natural=%q leisure=%q is not an area kind we bake",
+				path,
+				landuse,
+				natural,
+				leisure,
+			)
+			os.exit(1)
+		}
+
+		// GDAL 3.8 turns a polygon simplified below its tolerance into a line or a collection, those are skipped.
+		rings: [dynamic]json.Value
+		switch geom["type"].(json.String) {
+		case "Polygon":
+			append(&rings, geom["coordinates"].(json.Array)[0])
+		case "MultiPolygon":
+			for p in geom["coordinates"].(json.Array) do append(&rings, p.(json.Array)[0])
+		case:
+			dropped_other += 1
+		}
+
+		for r in rings {
+			ring: [dynamic][2]f32
+			for c in r.(json.Array) {
+				p := to_point(c)
+				if len(ring) == 0 || ring[len(ring) - 1] != p do append(&ring, p)
+			}
+			if len(ring) > 1 && ring[0] == ring[len(ring) - 1] do pop(&ring)
+			if len(ring) < 3 do continue
+
+			// Shoelace; made positive so convex corners have a positive cross product below.
+			area: f32
+			for p, i in ring {
+				q := ring[(i + 1) % len(ring)]
+				area += p.x * q.y - q.x * p.y
+			}
+			if area < 0 do slice.reverse(ring[:])
+			if abs(area) / 2 < AREA_MIN_KM2 {
+				dropped_small += 1
+				continue
+			}
+			triangles := triangulate(ring[:])
+			ring_area += f64(abs(area) / 2)
+			for t := 0; t + 3 <= len(triangles); t += 3 {
+				triangle_area += f64(abs(cross(triangles[t], triangles[t + 1], triangles[t + 2])) / 2)
+			}
+			append(&polygons, Polygon{kind, triangles})
+		}
+	}
+	slice.stable_sort_by(polygons[:], proc(a, b: Polygon) -> bool {return a.kind < b.kind})
+
+	for poly in polygons {
+		start := u32(len(area_points))
+		for t := 0; t + 3 <= len(poly.triangles); t += 3 do clip_triangle(&area_points, poly.triangles[t:][:3])
+		if n := u32(len(area_points)) - start; n > 0 do append(&areas, Map_Area{start, n, u32(poly.kind)})
+	}
+	fmt.printfln(
+		"areas: %d polygons kept, %d below %v km2 dropped, %d degenerate geometries skipped, %d triangles, rings %.1f km2, triangles %.1f km2",
+		len(polygons),
+		dropped_small,
+		AREA_MIN_KM2,
+		dropped_other,
+		len(area_points) / 3,
+		ring_area,
+		triangle_area,
+	)
+	return
+}
+
+cross :: proc(a, b, c: [2]f32) -> f32 {
+	return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+// Ear clipping, O(n^2). ring is counter-clockwise in the sense that convex corners have cross > 0.
+// The simplified rings can touch or cross themselves; when a full round finds no ear the corner at hand is
+// cut anyway, so a bad ring gives a few wrong triangles instead of an endless loop.
+triangulate :: proc(ring: [][2]f32) -> [][2]f32 {
+	n := len(ring)
+	out := make([dynamic][2]f32, 0, 3 * (n - 2))
+	prev := make([]int, n)
+	next := make([]int, n)
+	for i in 0 ..< n {
+		prev[i] = (i + n - 1) % n
+		next[i] = (i + 1) % n
+	}
+	i, left, misses := 0, n, 0
+	for left > 3 {
+		a, b, c := ring[prev[i]], ring[i], ring[next[i]]
+		ear := cross(a, b, c) > 0
+		// No other corner may lie in the ear (on its edge counts as in).
+		for j := next[next[i]]; ear && j != prev[i]; j = next[j] {
+			p := ring[j]
+			if p == a || p == b || p == c do continue
+			if cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0 do ear = false
+		}
+		if ear || misses >= left {
+			if cross(a, b, c) != 0 do append(&out, a, b, c)
+			next[prev[i]], prev[next[i]] = next[i], prev[i]
+			left -= 1
+			misses = 0
+			i = prev[i]
+		} else {
+			misses += 1
+			i = next[i]
+		}
+	}
+	a, b, c := ring[prev[i]], ring[i], ring[next[i]]
+	if cross(a, b, c) != 0 do append(&out, a, b, c)
+	return out[:]
+}
+
+// Sutherland-Hodgman against the map rectangle, the result (convex) as a triangle fan.
+clip_triangle :: proc(out: ^[dynamic][2]f32, tri: [][2]f32) {
+	poly: [dynamic][2]f32
+	append(&poly, ..tri)
+	for edge in 0 ..< 4 {
+		inside :: proc(p: [2]f32, edge: int) -> f32 {
+			switch edge {
+			case 0:
+				return p.x
+			case 1:
+				return MAP_W_KM - p.x
+			case 2:
+				return p.y
+			}
+			return MAP_H_KM - p.y
+		}
+		clipped: [dynamic][2]f32
+		for p, k in poly {
+			q := poly[(k + 1) % len(poly)]
+			dp, dq := inside(p, edge), inside(q, edge)
+			if dp >= 0 do append(&clipped, p)
+			if (dp >= 0) != (dq >= 0) do append(&clipped, p + (q - p) * (dp / (dp - dq)))
+		}
+		poly = clipped
+		if len(poly) < 3 do return
+	}
+	for k in 1 ..< len(poly) - 1 do append(out, poly[0], poly[k], poly[k + 1])
+}
+
 main :: proc() {
 	append(&names, 0)
 	bake_layer("assets/geojson/border.geojson", .Border)
 	bake_layer("assets/geojson/rivers.geojson", .River)
 	bake_layer("assets/geojson/roads.geojson.gz", .Motorway) // kind comes from each road's highway tag
 	bake_layer("assets/geojson/cities.geojson", .Border, is_cities = true)
+	areas, area_points := bake_areas("assets/geojson/areas.geojson.gz")
 
 	// OSM cuts a road into a new way at every tag change, so most lines are a few points long and the line
 	// table outweighs the points. Join lines of one kind that meet end to end where no third line of that
@@ -343,15 +544,17 @@ main :: proc() {
 	for len(names) % 4 != 0 do append(&names, 0)
 
 	h := Map_Header {
-		magic           = MAP_MAGIC,
-		version         = MAP_VERSION,
-		line_count      = u32(len(lines)),
-		point_count     = u32(len(points)),
-		city_count      = u32(len(cities)),
-		hub_count       = u32(len(hubs)),
-		names_size      = u32(len(names)),
-		name_cell_count = u32(len(name_cells)),
-		name_run_count  = u32(len(name_runs)),
+		magic            = MAP_MAGIC,
+		version          = MAP_VERSION,
+		line_count       = u32(len(lines)),
+		point_count      = u32(len(points)),
+		city_count       = u32(len(cities)),
+		hub_count        = u32(len(hubs)),
+		names_size       = u32(len(names)),
+		name_cell_count  = u32(len(name_cells)),
+		name_run_count   = u32(len(name_runs)),
+		area_count       = u32(len(areas)),
+		area_point_count = u32(len(area_points)),
 	}
 
 	out: [dynamic]u8
@@ -363,18 +566,22 @@ main :: proc() {
 	append(&out, ..names[:])
 	append(&out, ..slice.to_bytes(name_cells))
 	append(&out, ..slice.to_bytes(name_runs[:]))
+	append(&out, ..slice.to_bytes(areas[:]))
+	append(&out, ..slice.to_bytes(area_points[:]))
 
 	if err := os.write_entire_file("assets/belgium.bin", out[:]); err != nil {
 		fmt.eprintln("can't write assets/belgium.bin", err)
 		os.exit(1)
 	}
 	fmt.printfln(
-		"assets/belgium.bin: %d lines, %d points, %d cities, %d hubs, %d bytes of names, %d bytes",
+		"assets/belgium.bin: %d lines, %d points, %d cities, %d hubs, %d bytes of names, %d areas, %d area points, %d bytes",
 		h.line_count,
 		h.point_count,
 		h.city_count,
 		h.hub_count,
 		h.names_size,
+		h.area_count,
+		h.area_point_count,
 		len(out),
 	)
 }

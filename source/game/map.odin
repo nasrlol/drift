@@ -23,6 +23,7 @@ Map_Header :: struct {
 	line_count, point_count, city_count: u32,
 	hub_count, names_size:               u32,
 	name_cell_count, name_run_count:     u32,
+	area_count, area_point_count:        u32,
 }
 // name, ref: offsets into Map.names (map_name), 0 = none. ref is the OSM road number, e.g. "E40;A10".
 Map_Line :: struct {
@@ -33,6 +34,19 @@ Map_Line :: struct {
 // one cell of the name index.
 Map_Name_Run :: struct {
 	line, start, count: u32,
+}
+// One land use polygon as triangles: area_points[start:][:count], 3 points per triangle.
+Map_Area :: struct {
+	start, count, kind: u32,
+}
+// belgium.bin lists the areas in this order, so water is drawn over the land kinds.
+Area_Kind :: enum u32 {
+	City,
+	Park,
+	Farmland,
+	Marsh,
+	Beach,
+	Water,
 }
 Map_City :: struct {
 	pos:  [2]f32,
@@ -54,18 +68,21 @@ Map_Kind :: enum u32 {
 }
 
 Map :: struct {
-	lines:      []Map_Line,
-	points:     [][2]f32,
-	cities:     []Map_City,
+	lines:       []Map_Line,
+	points:      [][2]f32,
+	cities:      []Map_City,
 	// Copied, not sliced: a hub id is an index into this fixed array.
-	hubs:       [MAX_HUBS]Map_Hub,
-	hub_count:  int,
+	hubs:        [MAX_HUBS]Map_Hub,
+	hub_count:   int,
 	// 0-terminated UTF-8 strings, offset 0 is the empty string, the last byte is always 0.
-	names:      []u8,
+	names:       []u8,
 	// Name index: the runs of cell c are name_runs[name_cells[c]:name_cells[c + 1]], c = y * NAME_GRID_W + x.
 	// Lists every labelled line: a road or river with a name, or a motorway with a ref.
-	name_cells: []u32,
-	name_runs:  []Map_Name_Run,
+	name_cells:  []u32,
+	name_runs:   []Map_Name_Run,
+	// Land use polygons sorted by kind (Area_Kind order), holes dropped (see tools/bake_map).
+	areas:       []Map_Area,
+	area_points: [][2]f32,
 }
 
 // map_nearest_name ranks a line by distance x weight, so a bigger road wins over a smaller one that is a little
@@ -116,6 +133,8 @@ load_map :: proc() -> (m: Map, ok: bool) {
 	m.names = take(data, &off, h.names_size, u8, &bad)
 	m.name_cells = take(data, &off, h.name_cell_count, u32, &bad)
 	m.name_runs = take(data, &off, h.name_run_count, Map_Name_Run, &bad)
+	m.areas = take(data, &off, h.area_count, Map_Area, &bad)
+	m.area_points = take(data, &off, h.area_point_count, [2]f32, &bad)
 	if bad || off != len(data) do return {}, false
 
 	if len(m.names) == 0 || m.names[0] != 0 || m.names[len(m.names) - 1] != 0 do return {}, false
@@ -132,6 +151,11 @@ load_map :: proc() -> (m: Map, ok: bool) {
 		// A segment k uses points k and k + 1, both inside the line.
 		if r.start < l.start || u64(r.start) + u64(r.count) >= u64(l.start) + u64(l.count) do return {}, false
 	}
+	for a in m.areas {
+		if u64(a.start) + u64(a.count) > u64(len(m.area_points)) || a.count % 3 != 0 do return {}, false
+		if a.kind > u32(max(Area_Kind)) do return {}, false
+	}
+	for p in m.area_points do if !finite(p) do return {}, false
 	for p in m.points do if !finite(p) do return {}, false
 	for c in m.cities do if !finite(c.pos) do return {}, false
 	for hub in hubs do if !finite(hub.pos) do return {}, false
