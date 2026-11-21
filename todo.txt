@@ -15,15 +15,15 @@ DONE
 
 FIRST, TOGETHER (so everyone can work in parallel)
 [ ] weather arena in World (when the snapshot loader exists)
-[ ] in-app profiler: timed blocks per system, on-screen overlay in debug builds
+[x] in-app profiler: timed blocks per system, on-screen overlay in debug builds
     (frame ms, update / draw split, route ms, weather load ms, arena usage, last 120 frames graph)
-[ ] headless mode: --headless --snapshot <file> --inputs <file>, prints result as text and exits
-[ ] state dump to text (key + flag) and plain text log with system name and tick
-[ ] keep full debug build under 2 s (compile.sh prints the time)
-[ ] add #config(DRIFT_DEBUG / DRIFT_PROFILE) in code, then the matching -define in compile.sh
-[ ] hubs: fixed array of Belgian hubs (start with the 15 cities), baked into belgium.bin
-[ ] bench/ program: times every system, prints min/avg/max, run it before every merge
-[ ] test/ program: fixed snapshot + fixed inputs -> compare routes and maneuvers to stored results
+[x] headless mode: --headless --snapshot <file> --inputs <file>, prints result as text and exits
+[x] state dump to text (key + flag) and plain text log with system name and tick
+[x] keep full debug build under 2 s (compile.sh prints the time). ~0.9 s on 2026-11-21, keep checking
+[x] add #config(DRIFT_DEBUG / DRIFT_PROFILE) in code, then the matching -define in compile.sh
+[x] hubs: fixed array of Belgian hubs (start with the 15 cities), baked into belgium.bin
+[x] bench/ program: times every system, prints min/avg/max, run it before every merge
+[x] test/ program: fixed snapshot + fixed inputs -> compare routes and maneuvers to stored results
 
 NASR: MAP + RENDERING + UI
 [ ] load belgium.bin and draw lines (km -> px: scale + offset)
@@ -33,7 +33,7 @@ NASR: MAP + RENDERING + UI
 [ ] download Copernicus GLO-90 tiles N49-N51, E002-E006 (sea tiles 404, fine)
 [ ] gdalbuildvrt + gdalwarp to our projection, 250 m cells, raw i16
     (eqc, lat_ts=50.5, lon_0=2.38, R=6378137 so it matches the bin)
-[ ] bake heightmap block into belgium.bin, MAP_VERSION 2
+[ ] bake heightmap block into belgium.bin, MAP_VERSION 3
 [ ] height_at(x, y) bilinear
 [ ] bake hillshade into a texture at build time, draw it as one quad
 [ ] build static map meshes once at startup, never per frame
