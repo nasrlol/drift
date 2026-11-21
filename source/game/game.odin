@@ -3,6 +3,8 @@ package game
 
 import "core:crypto/ed25519"
 import "core:fmt"
+import "core:math"
+import "core:math/linalg"
 import "core:mem/virtual"
 import "core:strings"
 import curl "vendor:curl"
@@ -11,6 +13,20 @@ import rl "vendor:raylib"
 SIM_HZ :: 60
 SIM_DT :: 1.0 / SIM_HZ
 MAX_FRAME_DT :: 0.25
+// Keys 1..4. More simulated time per frame means more fixed steps, dt stays SIM_DT.
+SIM_SPEEDS :: [4]f64{1, 5, 15, 40}
+
+// Camera: zoom is log2 relative to the fitted view, so zero is the whole map.
+ZOOM_MIN :: -1
+ZOOM_MAX :: 7
+WHEEL_ZOOM_STEP :: 0.25
+ZOOM_PER_S :: 2
+PAN_PX_PER_S :: 600
+
+View :: struct {
+	pan:  [2]f32, // km from the map centre to the screen centre
+	zoom: f32,
+}
 
 // Set by compile.sh with -define: debug builds get DRIFT_DEBUG, profile builds DRIFT_PROFILE, release neither.
 DRIFT_DEBUG :: #config(DRIFT_DEBUG, false)
@@ -29,9 +45,16 @@ World :: struct {
 	identity:     ed25519.Private_Key, // zero until identity_load_or_create succeeds
 	identity_pub: [32]u8,
 	grid:         Grid,
+	controls:     Controls,
+	ship:         Ship,
+	drive_mode:   bool, // zero = map mode: Controls move the camera. Drive mode: Controls steer the ship
+	replay:       Replay,
+	no_fly:       [MAX_NO_FLY]No_Fly_Zone,
 	tick:         u64,
 	accum:        f64,
+	sim_speed:    int, // index into SIM_SPEEDS, 0 = 1x
 	prof:         Profiler,
+	view:         View,
 }
 
 @(export)
@@ -58,6 +81,7 @@ game_init :: proc() -> rawptr {
 	game_hot_reloaded(w)
 	weather_load_snapshot(w, SNAPSHOT_PATH)
 	identity_load_or_create(w)
+	w.replay.steps = make([]Control_Step, REPLAY_MAX_STEPS, virtual.arena_allocator(&w.perm))
 	logf(w, "game", "build %s", BUILD_MODE)
 	logf(
 		w,
@@ -86,6 +110,7 @@ game_hot_reloaded :: proc(memory: rawptr) {
 		)
 	}
 	w.m = m
+	w.grid.terrain_built = false
 }
 
 @(export)
@@ -97,9 +122,23 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	t := prof_begin()
 	weather_poll(w)
+	w.controls = read_controls()
 
-	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT)
+	if rl.IsKeyPressed(.M) do w.drive_mode = !w.drive_mode
+	for key, i in ([?]rl.KeyboardKey{.ONE, .TWO, .THREE, .FOUR}) {
+		if rl.IsKeyPressed(key) do w.sim_speed = i
+	}
+	speeds := SIM_SPEEDS
+	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT) * speeds[w.sim_speed]
 	for w.accum >= SIM_DT {
+		if w.drive_mode {
+			step := controls_pack(w.controls)
+			if w.replay.count < len(w.replay.steps) {
+				w.replay.steps[w.replay.count] = step
+				w.replay.count += 1
+			}
+			ship_step(w, controls_unpack(step), SIM_DT)
+		}
 		w.tick += 1
 		w.accum -= SIM_DT
 	}
@@ -111,18 +150,48 @@ game_update :: proc(memory: rawptr) -> bool {
 		fmt.print(strings.to_string(b))
 	}
 
+	// km -> px: Camera2D zoom is px per km, w.view.pan is where the screen centre looks.
+	// Map mode: the ship controls move the camera, so keyboard and gamepad work the same way as when flying.
+	// Throttle / turn pan, climb zooms around the screen centre. The mouse stays camera only: drag pans, the
+	// wheel zooms keeping the point under the cursor in place.
+	// Drive mode (M toggles): the controls go to the ship and the camera sits on it, only the wheel zooms.
+	cam: rl.Camera2D
+	{
+		v := &w.view
+		c := w.controls
+		if w.drive_mode do c = {}
+		dt := rl.GetFrameTime()
+		centre := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())} / 2
+		fit := 0.95 * min(centre.x * 2 / MAP_W_KM, centre.y * 2 / MAP_H_KM)
+		z0 := fit * math.pow(f32(2), v.zoom)
+
+		v.pan += [2]f32{c.turn, -c.throttle} * PAN_PX_PER_S * dt / z0
+		if rl.IsMouseButtonDown(.LEFT) && !w.drive_mode do v.pan -= rl.GetMouseDelta() / z0
+		zoom := c.climb * ZOOM_PER_S * dt
+		anchor := centre
+		if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+			zoom += wheel * WHEEL_ZOOM_STEP
+			anchor = rl.GetMousePosition()
+		}
+		v.zoom = clamp(v.zoom + zoom, ZOOM_MIN, ZOOM_MAX)
+		z1 := fit * math.pow(f32(2), v.zoom)
+		v.pan += (anchor - centre) * (1 / z0 - 1 / z1)
+		half := [2]f32{MAP_W_KM, MAP_H_KM} / 2
+		if w.drive_mode do v.pan = w.ship.pos - half
+		v.pan = linalg.clamp(v.pan, -half, half)
+
+		cam = {
+			offset = centre,
+			target = half + v.pan,
+			zoom   = z1,
+		}
+	}
+
 	rl.BeginDrawing()
 	t = prof_begin()
 	rl.ClearBackground(rl.RAYWHITE)
 	{
-		// km -> px: Camera2D zoom is px per km, the map centre lands on the screen centre.
 		// Points are [2]f32 km, the same layout as rl.Vector2, so the strips draw straight from map memory.
-		sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
-		cam := rl.Camera2D {
-			offset = {sw / 2, sh / 2},
-			target = {MAP_W_KM / 2, MAP_H_KM / 2},
-			zoom   = 0.95 * min(sw / MAP_W_KM, sh / MAP_H_KM),
-		}
 		colors := [Map_Kind]rl.Color {
 			.Border   = rl.DARKGRAY,
 			.River    = rl.BLUE,
@@ -132,7 +201,17 @@ game_update :: proc(memory: rawptr) -> bool {
 		for l in w.m.lines {
 			rl.DrawLineStrip(raw_data(w.m.points[l.start:]), i32(l.count), colors[Map_Kind(l.kind)])
 		}
+		// 8 px marker pointing along the heading, DrawPoly puts the first corner at the rotation angle.
+		rl.DrawPoly(w.ship.pos, 3, 8 / cam.zoom, math.to_degrees(w.ship.heading) - 90, rl.RED)
 		rl.EndMode2D()
+
+		// Cities in screen space, so dots and text keep their pixel size at every zoom.
+		// Names are 0-terminated UTF-8 from the bake, the default raylib font covers Latin-1 (Liege has an e grave).
+		for &c in w.m.cities {
+			p := rl.GetWorldToScreen2D(c.pos, cam)
+			rl.DrawCircleV(p, 3, rl.BLACK)
+			rl.DrawText(cstring(raw_data(c.name[:])), i32(p.x) + 6, i32(p.y) - 5, 10, rl.BLACK)
+		}
 	}
 	prof_end(w, .Draw, t)
 

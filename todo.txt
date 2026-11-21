@@ -27,8 +27,8 @@ FIRST, TOGETHER (so everyone can work in parallel)
 
 NASR: MAP + RENDERING + UI
 [x] load belgium.bin and draw lines (km -> px: scale + offset)
-[ ] camera: pan + zoom to cursor (mouse wheel / controller)
-[ ] draw cities + names
+[x] camera: pan + zoom to cursor (mouse wheel / controller)
+[x] draw cities + names
 [ ] "(c) OpenStreetMap contributors" on screen
 [ ] download Copernicus GLO-90 tiles N49-N51, E002-E006 (sea tiles 404, fine)
 [ ] gdalbuildvrt + gdalwarp to our projection, 250 m cells, raw i16
@@ -52,7 +52,7 @@ later:
 
 LARS: ROUTING + NAVIGATION
 [x] 3D grid: 1 km cells x 3 layers (203k nodes), all buffers allocated once, reused per route
-[ ] blocked bitset built once per weather hour: terrain + margin, no-fly zones (fixed array, max 8)
+[x] blocked bitset: terrain + 75 m margin, grid edge, no-fly zones (fixed array, max 8), free start / goal node
 [x] A*: 8 dirs + up/down, binary heap in a fixed array, no allocation during search
 [ ] cost per mode: fastest (time), greenest (energy), calmest (time x gusts)
 [ ] ground speed: wind along track + sqrt(v^2 - crosswind^2), retry +6 m/s if < 2.5, block if < 1.5
@@ -73,24 +73,25 @@ DARIO: SHIP + CONTROLS
     and check the game reloads ("[host] reloaded game"). Also try compile.bat release. Report what breaks.
     Result in notes.txt (SMOKE TEST): rebuild while running fails, needs a compile.bat fix from the owner.
 [x] Controls struct: throttle, turn, climb (-1..1)
-[ ] keyboard WASD + R/F, controller sticks (deadzone)
-[ ] ship_step(dt, controls), fixed timestep 60 Hz (accumulator), pure function of state + controls + world
-[ ] limits: accel +1.2 / -1.6 m/s^2, smoothed turn rate, ceiling 900 m, min 28 m above terrain
+[x] keyboard WASD + R/F, controller sticks (deadzone)
+[x] ship_step(dt, controls), fixed timestep 60 Hz (accumulator), pure function of state + controls + world
+[x] limits: accel +1.2 / -1.6 m/s^2, smoothed turn rate, ceiling 900 m, min 28 m above terrain
 [ ] ship drifts with wind_at, battery drain from Lars's energy model, solar charging
-[ ] warnings as flags in the ship state (terrain, no-fly), UI only reads them
-[ ] docking: within 30 m horizontal, 25 m vertical of the hub tower
-[ ] sim speed 1x / 5x / 15x / 40x = more fixed steps per frame, never a bigger dt
-[ ] camera follows ship
-[ ] record Controls per step for replay (flat array, a few bytes per step)
-[ ] bench: ship_step cost per step
+[x] warnings as flags in the ship state (terrain, no-fly), UI only reads them
+[x] docking: within 30 m horizontal, 25 m vertical of the hub tower
+[x] sim speed 1x / 5x / 15x / 40x = more fixed steps per frame, never a bigger dt
+[x] map mode: Controls pan / zoom the camera while there is no ship (WASD, R/F, sticks)
+[x] drive mode: Controls go to ship_step, camera follows ship, key to switch back to map mode
+[x] record Controls per step for replay (flat array, a few bytes per step)
+[x] bench: ship_step cost per step
 extra:
 [ ] real no-fly zones: bake airports (CTR), nuclear plants, military areas from one pinned source
     (skeyes eAIP ENR 5.1, dated AIRAC cycle) into belgium.bin, lat / lon -> km with the map projection,
     ceilings ft -> m, circles (polygons approximated). Copy them into w.no_fly at startup, raise MAX_NO_FLY
     or keep baked zones in their own array. Source, date and license in notes.txt.
-[ ] no-fly test zones (after #16): test/data/no_fly.txt lines 2, 6, 10, 11 are made-up circles on hub positions
-    (Brussels centre, not the airport). Mark them as made-up in the file, and add a case with the real baked zones
-    (e.g. a route past Brussels Airport at x 149.0, y 73.4 km). Expected files change only with the owner's approval.
+[ ] test case with the real baked no-fly zones (after the item above), e.g. a route past Brussels Airport
+    at x 149.0, y 73.4 km. The zones in test/data/no_fly.txt are made-up (#52). Expected files change only
+    with the owner's approval.
 
 ANDREI: WEATHER + NETWORK
 [x] Open-Meteo hourly forecast, next 9 hours, grid over Belgium, pressure levels 975/950/925 hPa
@@ -99,10 +100,10 @@ ANDREI: WEATHER + NETWORK
 [x] validate everything (ranges, NaN, missing), reject bad snapshots
 [x] save snapshot to disk with its hash, load on startup, refresh every 15 min (thread, timeout)
 [x] wind_at(x, y, layer, hour), gust_at, cloud_at: bilinear, no allocation
-[ ] bench: wind_at cost, snapshot load time
+[x] bench: wind_at cost, snapshot load time
 network + carpooling (after routing works):
 [x] ed25519 key pair per user (core:crypto)
-[ ] signed message format: offer, request, accept, review (fixed-size binary, not JSON)
+[x] signed message format: offer, request, accept, review (fixed-size binary, not JSON)
 [ ] offers include hub ids, times, seats, weather snapshot hash
 [ ] simple relay: store messages, forward to subscribers
 [ ] publish weather snapshot to relay, fetch by hash

@@ -52,10 +52,28 @@ Measured (2026-11-21, macOS arm64): one fetch ~400 ms, ~1.2 MB scratch (json val
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
   game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing
-                  Map drawing: a Camera2D per frame fits 0..MAP_W_KM x 0..MAP_H_KM (286 x 237 km) to 95% of the
-                  window, zoom = px per km, map centre on screen centre. Each Map_Line is one rl.DrawLineStrip
+                  Sim speed: keys 1..4 set w.sim_speed = 1x / 5x / 15x / 40x (SIM_SPEEDS). The frame time (capped at
+                  0.25 s) is multiplied before it goes into the accumulator, so 40x runs up to 40 steps per 60 fps frame
+                  (600 at most after a hitch) and every step still has dt = 1 / 60.
+                  Camera: w.view (View) = pan (km from the map centre to the screen centre) + zoom (log2 relative
+                  to the fitted view, ZOOM_MIN -1 .. ZOOM_MAX 7). Zero = the whole map fitted to 95% of the window.
+                  Each frame it becomes a Camera2D, zoom = px per km. Pan is clamped so the screen centre stays on
+                  the map. Two modes, key M toggles, w.drive_mode (zero = map mode):
+                  Map mode: the camera reads w.controls, throttle / turn pan (600 px/s), climb zooms (2 per s) around
+                  the screen centre. So WASD and the left stick pan, R/F and right stick Y zoom. Mouse (camera only,
+                  not in Controls): left drag pans, wheel zooms (0.25 per notch) around the cursor. The ship does not
+                  step and nothing is recorded.
+                  Drive mode: Controls go to ship_step and the replay record, the camera sits on the ship, only the
+                  wheel zooms. The ship is drawn as an 8 px red triangle pointing along its heading in both modes.
+                  Map drawing: each Map_Line is one rl.DrawLineStrip
                   straight from w.m.points ([2]f32 km has the rl.Vector2 layout, no copy, no allocation).
                   Colors: border dark grey, rivers blue, motorways orange. 10872 strips, 36k points per frame.
+                  Measured 2026-11-21 (Asahi M2, 800 x 450): draw 8.7 ms debug, 7.3 ms profile, over the 4 ms budget.
+                  The cost is raylib pushing 36k vertices one by one through its batch every frame. Fix: the
+                  "static map meshes" todo (upload once at startup, one draw call per kind).
+                  Cities: after EndMode2D, each w.m.cities pos goes through GetWorldToScreen2D, black 3 px dot +
+                  name (default font, 10 px) right of it, so both keep their pixel size at every zoom. No overlap
+                  culling yet (labels todo). The default font covers Latin-1, "Liege" with e grave draws correctly.
   map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
                   load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
                   Hubs are copied into a fixed array w.m.hubs[:w.m.hub_count], hub id = index.
@@ -86,6 +104,17 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     Present but wrong size or invalid: logged and left alone (it is the user's reputation),
                     w.identity stays zero and network features stay off. w.identity_pub = public key,
                     logged as the first 8 bytes in hex. Moves to the user data folder with the release item.
+                  Carpool messages: Message is 184 bytes, fixed size, little endian, no implicit padding
+                    (#assert). Header: magic "DRMS", version 1, kind (Offer / Request / Accept / Review),
+                    time (unix s, set by the author), author (ed25519 public key). Body is a raw union:
+                      Offer   from_hub, to_hub, seats 1..8, mode, depart, arrive, weather snapshot hash, energy_kwh
+                      Request offer id, from_hub, to_hub, seats 1..8
+                      Accept  offer id, request id
+                      Review  subject public key, accept id, stars 1..5
+                    sig = ed25519 over bytes 0..119. Message id = sha256 of all 184 bytes.
+                    msg_sign(w, m) fills magic, version, author, sig (start from a zeroed Message).
+                    msg_read(w, bytes) for anything from outside: size, header, field ranges, then signature.
+                    Measured (macOS arm64, -o:speed): sign ~33 us, read + verify ~44 us.
                   The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
   debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
                   Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =
@@ -100,6 +129,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   cache/weather.snap format) and does the work and is what test/ calls.
                   Inputs: one command per line, # comment. "route <from hub> <to hub> <mode> <hour>",
                   hub = index into w.m.hubs, mode fastest / greenest / calmest, hour 0..8.
+                  "no_fly <x km> <y km> <radius km> <ceiling m>" fills the next free slot of w.no_fly.
                   Output per route: "route 6 -> 11 fastest hour 0: 2 points, 104.812 km", then x y alt per point.
                   --dump appends the state dump after the result.
                   Log: logf(w, system, format, args) prints "[route t=1234] message" to stderr, t = w.tick.
@@ -107,14 +137,39 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   (fetch thread, argument parsing) prints "[system] message" with fmt.eprint.
                   State dump: dump_world(w, out) writes tick, build, map counts, hubs, weather start / sha256 /
                   fetched_at, a weather line per hour
-                  (max wind per layer, max gust, mean cloud) and arena used / reserved. No timings, so two dumps
+                  (max wind per layer, max gust, mean cloud), no-fly zones, blocked nodes per layer
+                  and arena used / reserved. No timings, so two dumps
                   of the same run are identical. F5 in the app prints it to stdout, --dump in headless mode.
                   Windows release is -subsystem:windows and has no console: use the debug or profile exe there.
-  ship.odin       Controls struct: throttle, turn, climb, each -1..1, zero = neutral. Filled by input, read by ship_step.
+  ship.odin       Controls struct: throttle, turn, climb, each -1..1, zero = neutral. Filled by input, read by the
+                  camera in map mode (game.odin), by ship_step in drive mode.
+                  Ship: pos (km, map space), alt (m), heading (rad clockwise from north), speed (m/s), turn_rate (rad/s).
+                  ship_step(w, controls, dt) runs once per fixed 60 Hz step in game_update on w.ship, reads only the
+                  ship, the controls and height_at. Limits: speed follows max(throttle, 0) * 35 m/s with +1.2 / -1.6
+                  m/s^2, turn rate follows turn * 0.6 rad/s with a 0.5 s time constant, climb 5 m/s, altitude clamped
+                  to height_at + 28 m .. 900 m. Wind: ground velocity = heading * speed + wind_at of the layer nearest
+                  to the altitude, hour = tick / (60 * 3600). Battery comes later.
+                  Ship.warnings: bit_set of Terrain (less than 60 m above the ground) and No_Fly (inside a w.no_fly
+                  circle below its ceiling), rebuilt every step. The UI only reads it.
+                  Ship.docked / dock_hub: set when within 30 m horizontally and 25 m vertically of a hub's tower top
+                  (ground + HUB_TOWER_M), first hub in index order, rebuilt every step.
+                  Replay: every step the controls are packed to Control_Step ([3]i8, 3 bytes) and the ship steps with the
+                  unpacked value, so the recording reproduces the path exactly. w.replay.steps is 60 * 3600 steps (1 h,
+                  648 KB) from the perm arena, w.replay.count says how many are filled, recording stops when full.
+                  Bench (profile build, 2026-11-21, Windows, height_at still a stub): ship_step min 59 / avg 65 / max 319 ns
+                  against the 1 us budget. It is ~2 sin/cos, wind_at (8 ns), 15 hub distances and 8 zone checks. The tower
+                  height_at is only called for a hub that is within 30 m horizontally, not for all 15, because the real
+                  height_at will cost more than the stub.
+  input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
+                  R/F climb up / down, gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
+                  add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   Path lives in w.route_mem until the next call: from, the centres of the grid nodes
-                  in between, to. ok = false also when from or to lies outside the routing grid.
+                  in between, to. A* never enters a blocked node (see below).
+                  ok = false also when from or to has no free node within 5 cells (outside the grid,
+                  inside a no-fly zone): grid_free_node_near picks the closest free cell centre, lowest free
+                  layer first (spec), the altitude of the end point is not used.
                   Grid: 286 x 237 cells of 1 km x 3 layers (LAYER_ALT) = 203,346 nodes, covers every point
                   in belgium.bin (x 0.6..285.2, y 1.0..236.5 km). node = layer * 286 * 237 + y * 286 + x,
                   each layer a contiguous row-major plane. grid_node_at(pos) snaps to the cell under x, y
@@ -134,6 +189,23 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Measured (cloud box, -o:speed): 2025 routes between all city pairs x 3 x 3 layers,
                   avg 14 us, worst 0.19 ms; corner to corner expands 286 nodes (35k without the weight).
                   Debug build: avg 0.14 ms, worst 0.6 ms. With test walls the cost matched a plain Dijkstra.
+                  Blocked nodes (spec): highest ground in the cell + 75 m above the layer, the outer ring of
+                  cells, or a no-fly zone below its ceiling. w.no_fly: [8]No_Fly_Zone (centre km, radius km,
+                  ceiling m), radius 0 = unused slot, zero = no zones. A zone blocks every cell it overlaps,
+                  not only the cells whose centre it covers. grid_blocked(g, n) reads one bit.
+                  Two bitsets of 25 KB in w.grid: terrain (edge + ground, 25 height_at samples per cell every
+                  250 m = the heightmap spacing, 1.7M calls) and blocked = terrain + zones. route() builds terrain
+                  on first use and after a hot reload, and rebuilds blocked when w.no_fly differs from the zones
+                  it was built with. Nothing in it depends on the forecast hour, so changing hour costs nothing.
+                  A* skips blocked neighbours. With blocked also the free regions are labelled (flood fill over
+                  the A* steps, grid.region per node, the open heap is the stack): start and goal in different
+                  regions fail at once. Without it a walled-in hub expanded every reachable node (33 ms -o:speed).
+                  Measured (cloud box, -o:speed / debug): terrain + regions on first use 4 / 120 ms with the
+                  height_at stub, zones + regions after a zone change 4 / 42 ms, cached route unchanged
+                  (bench three modes avg 22 -> 26 us, mostly the two 11 x 11 free node searches).
+                  Checked against a brute force over all 203k nodes (zones overlapping, at the grid edge,
+                  partly outside, smaller than a cell, NaN / Inf zones ignored), a whole-grid closest free node,
+                  and 135 routes with random zones against a Dijkstra on the blocked grid (same cost within 0.1 %).
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
                   Each case = snapshot + inputs through game.headless_run, output compared line by line to the
@@ -143,6 +215,9 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
                   calm.snap: zero wind / gust / cloud, start 1795176000. nan_wind.snap: same with
                   wind[3][1][20].x = NaN, must be rejected by weather_valid. routes.txt: one route per mode, hours 0 / 4 / 8,
                   a route to the same hub. calm_routes.expected: A* grid paths (unsmoothed, wind not used yet).
+                  no_fly.txt: Brussels inside an 8 km zone (no route from or to it), a 3 km zone on the
+                  Mechelen - Leuven line (goes around), Antwerpen under a 400 m zone (leaves from layer 1),
+                  Mechelen in a 2 km zone (ends at the closest free node outside it).
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
                   (copy a cache/weather.snap), the calm one does not exercise the wind.
 bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.
@@ -170,10 +245,13 @@ World memory
 
 BUILD
 compile.sh [debug|profile|release] [extra odin flags], build.sh wraps it with build-notify
+  Linux and macOS. macOS has bash 3.2 and BSD tools: raylib is copied only when newer with [ -nt ]
+  (no cp -u), the build time comes from perl Time::HiRes (no date %N), no mold, game.dylib + libraylib.620.dylib,
+  rpath @loader_path (the dylib's install name is @rpath/libraylib.620.dylib).
 compile.bat same modes on Windows (no mold, raylib.dll copied to build\, random pdb name per build
   so a loaded pdb never blocks the next build, host not rebuilt while drift.exe runs,
   release uses -subsystem:windows). format.bat / check.bat run the .sh versions with Git for Windows sh.
-  all modes: -vet -vet-cast -strict-style -warnings-as-errors -linker:mold, prints build time
+  all modes: -vet -vet-cast -strict-style -warnings-as-errors, -linker:mold on Linux, prints build time
   debug:   host + game.so, -debug -o:none -use-separate-modules (~900 ms for both, 2026-11-21 after
            profiler / headless / log / dump: 874-917 ms, main before them 767-875 ms; limit 2 s)
            game.so uses raylib as a shared lib (RAYLIB_SHARED), copied to build/, rpath $ORIGIN,
