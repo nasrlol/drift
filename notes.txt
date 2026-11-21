@@ -1,0 +1,73 @@
+MAP DATA
+
+Source: OpenStreetMap extract of Belgium from Geofabrik (ODbL, credit "(c) OpenStreetMap contributors")
+  https://download.geofabrik.de/europe/belgium/belgium-261119.osm.pbf
+  saved as assets/raw/belgium.osm.pbf (668 MB, not in git)
+  note: the "belgium-latest" link was broken (404), so we use a dated file
+
+Tool: GDAL (ogr2ogr), installed with micromamba, no sudo:
+  micromamba create -n gis -c conda-forge gdal
+
+tools/extract_map.sh
+  pulls 4 layers out of the .pbf into assets/geojson/ (1.7 MB total)
+    border.geojson     Belgium outline (1 polygon)
+    rivers.geojson     waterway=river
+    motorways.geojson  highway=motorway
+    cities.geojson     place=city (15 points)
+  keeps only the name field, simplifies lines, 5 decimal coordinates
+  takes a few minutes (most of it on the border)
+
+tools/bake_map/  (odin run tools/bake_map, from repo root)
+  reads the geojson files, writes assets/belgium.bin (422 KB)
+  projection: equirectangular, km, origin top-left (lon 2.38, lat 51.56), y down
+  10872 lines, 36364 points, 15 cities
+
+belgium.bin format (version 1, all little endian, 4-byte aligned)
+  header  magic "DRFT", version, line_count, point_count, city_count (5 x u32)
+  lines   start, count, kind (3 x u32)   kind: 0 border, 1 river, 2 motorway
+  points  x, y (2 x f32, km)
+  cities  pos (2 x f32), name (32 bytes, 0-terminated)
+
+CODE LAYOUT
+source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
+  game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing
+  map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
+                  load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
+  terrain.odin    height_at(w, x, y) -> m. Stub: returns 0
+  weather.odin    wind_at(w, x, y, layer, hour) -> m/s. Stub: returns zero
+  route.odin      route(w, from, to, mode) -> path of [3]f32 (x km, y km, alt m). Stub: straight line,
+                  path lives in w.route_mem until the next call
+source/host/      debug host: loads build/game.so, checks its mtime every frame, copies it to
+                  build/game_N.so and loads the copy, unloads the old one after. Compares memory_size,
+                  refuses a reload if World changed (restart needed). Run from the repo root.
+source/release/   release main: calls the game package directly, one static exe
+
+World memory
+  World is bootstrapped inside its own perm arena (virtual memory), so it survives reloads.
+  Arenas: perm (World, map, long lived), route_mem (reset per route), frame (temp_allocator, reset per frame).
+  game_update sets context.allocator = perm and context.temp_allocator = frame.
+
+BUILD
+compile.sh [debug|profile|release] [extra odin flags], build.sh wraps it with build-notify
+  all modes: -vet -vet-cast -strict-style -warnings-as-errors -linker:mold, prints build time
+  debug:   host + game.so, -debug -o:none -use-separate-modules (~900 ms for both)
+           game.so uses raylib as a shared lib (RAYLIB_SHARED), copied to build/, rpath $ORIGIN,
+           so raylib state survives reloads. Outputs are written to a temp name, then moved.
+  profile: source/release, -debug -o:speed, single exe (~2 s)
+  release: source/release, -o:speed -disable-assert, single exe (~1.7 s)
+  ASAN=1 adds -sanitize:address
+release exe links raylib statically, map is embedded, only depends on libc, libm and X11
+
+PROJECT SETUP
+ols.json, odinfmt.json   Odin language server + formatter (tabs, 110 columns)
+.editorconfig            tabs, LF, final newline
+.gitattributes           LF everywhere, *.bin / *.pbf / *.pdf binary, geojson marked generated
+.githooks/pre-commit     format check (if odinfmt installed) + check.sh + debug build + test/.
+                         enable: git config core.hooksPath .githooks
+.github/workflows/ci.yml ubuntu 24.04, Odin dev-2026-11a, odinfmt check, check.sh (+ PR size),
+                         debug + release build, bake reproduces belgium.bin, test/
+.github/CODEOWNERS       protected files need review from @nasrlol
+check.sh                 allowed imports, no raylib in sim files, banned file names, one test file,
+                         max 1 MB per file (assets excepted), --pr <base>: max 400 changed lines
+AGENTS.md                entry point for agents and new people, points to rules / notes / todo
+format.sh                formats all tracked .odin files with odinfmt, --check only reports (hook + CI)

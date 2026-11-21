@@ -1,0 +1,124 @@
+DONE
+[x] World struct, perm / route / frame arenas, fixed 60 Hz timestep
+[x] hot reload: source/host loads build/game.so, reloads on rebuild
+[x] release: source/release, one static exe
+[x] stubs: height_at (flat), wind_at (zero), route (straight line)
+[x] AGENTS.md, README.md, check.sh, CODEOWNERS, pinned Odin dev-2026-11a in CI
+[x] build modes debug / profile / release, mold linker, build time
+[x] ols.json, odinfmt.json, .editorconfig, .gitignore, .gitattributes
+[x] shared pre-commit hook (.githooks), GitHub Actions CI
+[x] download Belgium OSM data
+[x] install GDAL (micromamba)
+[x] extract border, rivers, motorways, cities to geojson
+[x] bake geojson -> belgium.bin
+
+FIRST, TOGETHER (so everyone can work in parallel)
+[ ] agree on the stub signatures in source/game (height_at, wind_at, route), change them now or never
+[ ] weather arena in World (when the snapshot loader exists)
+[ ] in-app profiler: timed blocks per system, on-screen overlay in debug builds
+    (frame ms, update / draw split, route ms, weather load ms, arena usage, last 120 frames graph)
+[ ] headless mode: --headless --snapshot <file> --inputs <file>, prints result as text and exits
+[ ] state dump to text (key + flag) and plain text log with system name and tick
+[ ] keep full debug build under 2 s (compile.sh prints the time)
+[ ] add #config(DRIFT_DEBUG / DRIFT_PROFILE) in code, then the matching -define in compile.sh
+[ ] hubs: fixed array of Belgian hubs (start with the 15 cities), baked into belgium.bin
+[ ] bench/ program: times every system, prints min/avg/max, run it before every merge
+[ ] test/ program: fixed snapshot + fixed inputs -> compare routes and maneuvers to stored results
+
+NASR: MAP + RENDERING + UI
+[ ] load belgium.bin and draw lines (km -> px: scale + offset)
+[ ] camera: pan + zoom to cursor (mouse wheel / controller)
+[ ] draw cities + names
+[ ] "(c) OpenStreetMap contributors" on screen
+[ ] download Copernicus GLO-90 tiles N49-N51, E002-E006 (sea tiles 404, fine)
+[ ] gdalbuildvrt + gdalwarp to our projection, 250 m cells, raw i16
+    (eqc, lat_ts=50.5, lon_0=2.38, R=6378137 so it matches the bin)
+[ ] bake heightmap block into belgium.bin, MAP_VERSION 2
+[ ] height_at(x, y) bilinear
+[ ] bake hillshade into a texture at build time, draw it as one quad
+[ ] build static map meshes once at startup, never per frame
+[ ] day / night theme: one palette struct, swap the pointer
+[ ] routes as screen-width strips, built once per route, alternatives grey
+[ ] wind particles: SoA arrays (x[], y[], age[]), one update loop, one draw batch, fixed count
+[ ] labels: collect into a flat array per frame (temp allocator), cull, draw in one pass
+[ ] immediate mode UI (raygui or our own), no retained widget tree
+[ ] plan screen: from/to hub, mode, departure +0..+8 h, route cards with time/kWh, start
+[ ] navigate screen: banner, then-card, speed, battery, used, solar, height, sim speed
+[ ] layers toggles: wind, gusts, no-fly, solar, altitude layer
+[ ] A* scan animation: replay the expanded-node order Lars records, no extra work in the router
+later:
+[ ] bake 3 detail levels + 10 km cell grid, draw only visible cells
+[ ] 3D terrain view
+
+LARS: ROUTING + NAVIGATION
+[ ] 3D grid: 1 km cells x 3 layers (~190k nodes), all buffers allocated once, reused per route
+[ ] blocked bitset built once per weather hour: terrain + margin, no-fly zones (fixed array, max 8)
+[ ] A*: 8 dirs + up/down, binary heap in a fixed array, no allocation during search
+[ ] cost per mode: fastest (time), greenest (energy), calmest (time x gusts)
+[ ] ground speed: wind along track + sqrt(v^2 - crosswind^2), retry +6 m/s if < 2.5, block if < 1.5
+[ ] energy: battery 180 kWh start 86%, P(v, g) = 3 + 0.0085 v^3 + 6 g, solar from cloud cover, climb cost
+[ ] path cleanup: skip redundant nodes, Chaikin, ramp to tower top, 40 m terrain clearance
+[ ] metrics: time, kWh, gust index, vs straight-line baseline
+[ ] record expanded-node order into a flat array (for the scan animation)
+[ ] user-reported gust zones (fixed array, max 4), reroute around them
+[ ] reroute: > 190 m off path for 1.2 s -> route from current position, same buffers
+[ ] maneuvers: computed once per route into a flat array (depart, turn, climb/descend, arrive)
+[ ] navigation state: next maneuver, distance, then-card, ETA, all derived from path index
+[ ] autopilot: follow route (lookahead point), outputs Controls struct
+[ ] switch manual <-> autopilot
+[ ] bench: one route < 10 ms, three modes < 30 ms
+
+DARIO: SHIP + CONTROLS
+[ ] Controls struct: throttle, turn, climb (-1..1)
+[ ] keyboard WASD + R/F, controller sticks (deadzone)
+[ ] ship_step(dt, controls), fixed timestep 60 Hz (accumulator), pure function of state + controls + world
+[ ] limits: accel +1.2 / -1.6 m/s^2, smoothed turn rate, ceiling 900 m, min 28 m above terrain
+[ ] ship drifts with wind_at, battery drain from Lars's energy model, solar charging
+[ ] warnings as flags in the ship state (terrain, no-fly), UI only reads them
+[ ] docking: within 30 m horizontal, 25 m vertical of the hub tower
+[ ] sim speed 1x / 5x / 15x / 40x = more fixed steps per frame, never a bigger dt
+[ ] camera follows ship
+[ ] record Controls per step for replay (flat array, a few bytes per step)
+[ ] bench: ship_step cost per step
+
+ANDREI: WEATHER + NETWORK
+[ ] Open-Meteo hourly forecast, next 9 hours, grid over Belgium, pressure levels 975/950/925 hPa
+[ ] also fetch gusts and cloud cover
+[ ] store as flat arrays [hour][layer][cell], changing departure hour is an index, not a recompute
+[ ] validate everything (ranges, NaN, missing), reject bad snapshots
+[ ] save snapshot to disk with its hash, load on startup, refresh every 15 min (thread, timeout)
+[ ] wind_at(x, y, layer, hour), gust_at, cloud_at: bilinear, no allocation
+[ ] bench: wind_at cost, snapshot load time
+network + carpooling (after routing works):
+[ ] ed25519 key pair per user (core:crypto)
+[ ] signed message format: offer, request, accept, review (fixed-size binary, not JSON)
+[ ] offers include hub ids, times, seats, weather snapshot hash
+[ ] simple relay: store messages, forward to subscribers
+[ ] publish weather snapshot to relay, fetch by hash
+[ ] matching: filter offers by grid cell + hour, then detour check with the router
+[ ] verify offer route/energy by recomputing it locally
+[ ] energy split: own share + detour cost for passenger
+[ ] accept handshake, live position encrypted between matched users (x25519 + chacha20poly1305)
+[ ] signed reviews for reputation
+
+EXTRA (future, not now: C API so the core can be ported to Swift / Kotlin apps)
+[ ] split repo: core/ (all logic, no raylib, C API) and app/ (desktop raylib frontend)
+[ ] write drift.h: create/destroy, load_map, load_weather, route start/poll, ship_step, getters
+[ ] app/ only talks to core through the C API, same as Swift / Kotlin will
+[ ] core parses weather bytes (drift_load_weather), app/ does the fetch
+[ ] build core as static lib (-build-mode:lib) and check drift.h links from a tiny C program
+[ ] iOS: core as static lib with -subtarget:iphone, Swift calls drift.h via a module map
+[ ] Android: core as .so with -subtarget:android (NDK linker), Kotlin calls it through JNI
+[ ] native rendering per platform (Metal / Vulkan or raylib), core unchanged
+
+RELEASE (single executable)
+[ ] release build compiles the game into the exe, no hot reload dll
+[ ] embed a fallback weather snapshot with #load so the exe runs offline on first start
+[ ] weather cache in the user's data folder, not next to the exe
+[ ] curl: link statically or use the OS HTTP API, so the exe has no libcurl dependency
+[ ] Linux: build on an old glibc (CI, ubuntu 22.04) so it runs on most distros
+[ ] Windows: static CRT, single .exe
+[ ] macOS: universal binary (arm64 + x86_64), signed
+
+NOT DOING
+film, procedural world, web stack, touch / responsive layout, speech, extruded buildings, shadows

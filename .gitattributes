@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.bin binary
+*.pbf binary
+*.pdf binary
+*.geojson linguist-generated -diff

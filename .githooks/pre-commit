@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+if command -v odinfmt >/dev/null 2>&1; then
+	./format.sh --check
+else
+	echo "pre-commit: odinfmt not installed, skipping format check (CI still checks it)"
+fi
+./check.sh
+./compile.sh debug
+
+if ls test/*.odin >/dev/null 2>&1; then
+	odin run test -out:build/test
+fi

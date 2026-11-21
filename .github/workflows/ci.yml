@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libcurl4-openssl-dev
+
+      - uses: laytan/setup-odin@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release: dev-2026-11a
+
+      - name: Build odinfmt
+        run: |
+          git clone --depth 1 https://github.com/DanielGavin/ols.git /tmp/ols
+          (cd /tmp/ols && ./odinfmt.sh)
+          echo "/tmp/ols" >> "$GITHUB_PATH"
+
+      - name: Check formatting
+        run: ./format.sh --check
+
+      - name: Checks
+        run: ./check.sh
+
+      - name: Pull request size
+        if: github.event_name == 'pull_request'
+        run: ./check.sh --pr origin/${{ github.base_ref }}
+
+      - name: Build debug
+        run: ./compile.sh debug
+
+      - name: Build release
+        run: ./compile.sh release
+
+      - name: Bake reproduces belgium.bin
+        run: |
+          odin run tools/bake_map -vet -strict-style -out:build/bake_map
+          git diff --exit-code assets/belgium.bin
+
+      - name: Tests
+        run: |
+          if ls test/*.odin >/dev/null 2>&1; then
+            odin run test -out:build/test
+          fi

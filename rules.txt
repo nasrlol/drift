@@ -1,0 +1,185 @@
+RULES
+
+Build
+- Code must build with: -vet -strict-style -warnings-as-errors
+- Plain ASCII in every file.
+- Everything is written in Odin: app, tools, bake steps, tests, benchmarks. No other languages.
+  Only exception: build glue (build.sh, compile.sh, format.sh, .githooks, CI config).
+- Build modes: ./build.sh debug (default), profile (optimized + debug info, benchmarks run here), release.
+- Release is one executable per platform with all data embedded. No dll, no data files next to it.
+- Fast builds. A full debug build takes under 2 seconds. A slow build is a bug, fix it like one.
+- compile.sh prints the build time. If it goes up, find out which change did it.
+
+Dependencies
+- Minimize them. Allowed: Odin core, vendor:raylib, vendor:curl, and the external data sources / APIs
+  listed in notes.txt (OpenStreetMap, Copernicus, Open-Meteo).
+- Do not exaggerate: one weather API, one map source, one elevation source. No second one "just in case".
+- Anything else needs agreement and a reason. Prefer writing the few hundred lines we need ourselves.
+
+Debuggable by humans and LLMs
+- Always build with debug info. Use a debugger, not print statements.
+- Everything an LLM needs is text: logs, errors, bench and test output, state dumps.
+- Logs are plain text, one event per line, with system name and tick: "[route t=1234] no path, 3 cells blocked".
+- Error messages say what, where and with which values. Never just "failed".
+- Headless mode: run without a window from the command line with a snapshot and recorded inputs,
+  print the result and exit. Anyone (or an LLM) can reproduce a bug with one command.
+- State dump: a key or flag writes the World as readable text (ship, route, weather summary, arena usage).
+- Same input always gives the same output (see Determinism), so a bug report is a command plus a file.
+- Keep notes.txt current. It is the map of the code for the next person and the next LLM.
+
+Simplicity
+- Write the simplest thing that works. No abstractions for things that do not exist yet.
+- Plain procs and structs. No interfaces, no callbacks, no generic code unless it removes real duplication.
+- One way to do each thing. Do not add a second.
+- Delete dead code. Do not comment it out.
+- Comments explain why, never what. No comments that restate the code.
+
+Files and procs (Carmack style)
+- Few files. One file per system (map, terrain, weather, route, ship, nav, render, ui), not one per type or proc.
+  A 2000 line file that reads top to bottom beats 30 files of 60 lines.
+- New file only when a system is really separate. Never "utils", "helpers", "common" or "types" files.
+- Long procs are fine. Code that runs in order is written in order: step 1, step 2, step 3, in one proc.
+- A proc that is called from one place is inlined into that place. Use a block { } with a short comment
+  if you want to separate the steps.
+- Make a proc only when it is called from several places, or it is a real API (height_at, wind_at, route).
+- No layers that only pass calls through. If a proc just calls another proc, delete it.
+- Keep state changes visible: you can see what a proc reads and writes by reading the proc, not five others.
+
+Formatting (enforced, not discussed)
+- All Odin code is formatted by odinfmt with the repo's odinfmt.json. Nobody formats by hand.
+- ./format.sh formats everything. Run it before committing, or set your editor to format on save via ols.
+- The pre-commit hook and CI reject unformatted code.
+- Formatting changes go in their own commit, never mixed with logic changes.
+
+Data and memory
+- Data lives in flat arrays and slices. No linked lists, no pointer-heavy trees.
+- Fixed-size arrays when the maximum is known (grid, nodes, hubs).
+- Zero is initialization. Every struct is valid when all its bytes are zero. No init procs needed
+  to make a struct usable, no constructors. Pick field meanings so that zero is the sensible default.
+- Resetting is zeroing: clearing an arena or a struct puts it back in a valid state.
+- All memory comes from arenas (core:mem/virtual). No general heap allocation, no malloc / free per object.
+- Arenas by lifetime, each reset or freed as a whole, never object by object:
+    permanent: lives as long as the app (map, grid buffers, World). Owned by the host for hot reload.
+    weather:   one per snapshot, freed when a new snapshot replaces it.
+    route:     reset at the start of every route / reroute.
+    frame:     context.temp_allocator, reset once per frame (labels, UI, scratch).
+- At startup set context.allocator to the permanent arena. Code that allocates says which arena it uses.
+- No free / delete of single objects. If you need that, the lifetime is wrong, pick another arena.
+- No allocation in the frame loop except the frame arena.
+- Print arena usage in the bench program. Arena sizes are known and written in notes.txt.
+
+Performance
+- Know the size of your data and the cost of your loops. Write it down in notes.txt for anything big.
+- Do the work at build time if you can (bake), at startup if you must, per frame only if needed.
+- Profile everything you build. Use spall (core:prof/spall) and look at the trace before you call it done.
+- Benchmark every system that runs per frame or per route (wind sampling, A*, ship step, drawing).
+  Time it with core:time, report min / avg / max over many runs, write the numbers in notes.txt.
+- Benchmark again after every change to that system. A slowdown needs a reason or gets reverted.
+- Measure before and after optimizing. No guessing.
+- SIMD when possible. Hot loops over arrays (particles, wind sampling, projection, cost evaluation)
+  use #simd vectors or core:simd. Lay data out as SoA so it can be loaded in vector-width chunks.
+- Write the scalar version first, then the SIMD version, keep it only if the benchmark shows it is faster.
+- 60 fps on a normal laptop is a hard requirement.
+- Always compare measured performance to what the hardware should do. Before you measure, estimate:
+  bytes touched / memory bandwidth, and operations / (clock x SIMD width x cores).
+  If the real number is more than 2-3x off the estimate, find out why before moving on.
+- Reference numbers for a modern laptop:
+    clock ~3-4 GHz, L1 hit ~1 ns, L2 ~4 ns, RAM miss ~80-100 ns
+    memory bandwidth ~20-50 GB/s, SIMD 4-8 floats per instruction (NEON / AVX)
+    one frame at 60 fps = 16.6 ms, at 120 fps = 8.3 ms
+- Budgets (fail the bench if exceeded):
+    app start to first frame < 100 ms
+    frame (update + draw) < 4 ms, the rest is headroom
+    one route < 10 ms, three modes < 30 ms
+    weather snapshot load < 5 ms
+    ship_step < 1 us
+- "Fast enough" means close to the hardware estimate, not "it feels ok".
+
+Determinism
+- Simulation runs on a fixed timestep, never on frame time.
+- Same map, same weather snapshot, same inputs must give the same result.
+- No randomness without an explicit seed.
+- Weather is only read from a snapshot file, never straight from the network into the simulation.
+- In simulation code: no iterating over Odin maps (order is not defined), no wall-clock time, no threads.
+
+Structure
+- Simulation code (wind, route, ship) never calls raylib. Rendering reads simulation state, never changes it.
+- Network and file IO stay out of the frame loop. Use a thread, hand over finished data.
+- Errors are values. Check them. No ignoring a returned error or ok.
+
+Hot reloading (required)
+- In debug the app is a small host exe (source/host) plus the game library (source/game, build/game.so).
+  Rebuild with ./compile.sh debug while it runs, the host picks up the new library.
+- Release links the game package straight into one exe (source/release). No library there.
+- Nobody restarts the app to see a code change. If your change breaks hot reload, fix that first.
+- All state lives in one World struct in virtual memory that survives reloads. The host keeps the pointer
+  and passes it to every call. No globals in the game package.
+- The game exports a fixed set of procs: memory_size, init_window, init, hot_reloaded, update, shutdown,
+  shutdown_window. Adding one means updating source/host and source/release too.
+- Changing the layout of World needs a full restart. The host compares memory_size and says so.
+- No pointers into library memory (strings, procs, constants, #load data, allocators) kept in World across
+  a reload. Re-point them in game_hot_reloaded. Store arenas in World, build allocators per call.
+
+Tests
+- Few tests, end to end. A handful of fixed snapshots + inputs -> compare routes, maneuvers, ship path.
+- One test/ program. No test file per source file, no hundreds of tiny tests.
+- No mocks, no test frameworks, no testing private helpers.
+- A test must catch a real bug we care about. If nobody can say which bug, delete it.
+- The bench/ program and the snapshot tests are the safety net. Keep both fast (seconds, not minutes).
+
+External data and APIs
+- Prefer data you can download once and bake. Only call an API at runtime when the data changes (weather).
+- Pin the source: dated files, exact URLs, API version. Never depend on a "latest" link.
+- Write down every source in notes.txt: URL, date, license, how it was processed.
+- Raw downloads go in assets/raw/ and stay out of git. Commit only small baked results.
+- Conversion is an Odin program in tools/. Anyone must be able to rebuild every asset from the raw data.
+- Treat everything from outside as untrusted: check sizes, ranges, NaN, missing fields. Reject bad data, do not crash.
+- Convert external formats at the edge, once. The rest of the program only sees our own structs.
+- Every runtime fetch is cached to disk and the app works offline from the last cache.
+- Network calls never block the frame loop. Timeout on every request.
+- Respect rate limits and terms of use. Fetch no more often than the data actually changes.
+- Respect licenses. Attribution on screen where required (OpenStreetMap).
+- No API keys in the repo.
+
+Process
+- Small commits that build. One change per commit.
+- Update notes.txt when something is built, todo.txt when the plan changes.
+- If you cannot explain your code in a few sentences, simplify it.
+
+Git
+- main always builds. Nobody pushes to main directly, merge from your branch.
+- One branch per track: nasr/map, lars/routing, dario/ship, andrei/weather.
+- Run once after cloning: git config core.hooksPath .githooks (pre-commit builds and runs tests).
+- Do not skip the hook. If it fails, fix the code.
+- Commit messages: short, imperative, what changed ("add wind_at bilinear sampling").
+- Commit baked assets the build needs (assets/belgium.bin). Never commit raw downloads or build output.
+- Tag every working demo: demo-1, demo-2, ...
+- Odin version is pinned: dev-2026-11a, for everyone and in CI. Upgrading is one agreed commit.
+- Claim before you start: mark the todo item [~] yourname. One person or agent per item.
+- Pull requests: one todo item, under 400 changed lines outside assets/ (CI rejects bigger ones).
+- CI is the real gate. Hooks can be skipped locally, CI cannot. Nothing merges with a red CI.
+- Protected files need the owner's review (.github/CODEOWNERS): rules.txt, AGENTS.md, CI, hooks,
+  build scripts, benchmark budgets, expected test results. Never loosen a check to make a change pass.
+- A pull request that claims a speedup includes profile-build bench output for main and the branch.
+- Mechanical rules are checked by ./check.sh: allowed imports, no raylib in simulation code,
+  banned file names, one test file, max file size, pull request size.
+
+EXTRA: API (future, not now. When we port the core to Swift / Kotlin apps)
+- We only write native code. No web views, no JS, no interpreters.
+- All logic (map, terrain, weather, routing, ship, navigation, network protocol) lives in core/.
+  core/ never imports raylib, never opens windows, never draws.
+- core/ is exposed through a C API: @export procs with "c" calling convention, plus a hand-written drift.h.
+- The desktop app uses the same C API as iOS and Android will. If it is not in the API, the app cannot use it.
+- Opaque handle: drift_create() -> ^World, drift_destroy(world). No hidden global state.
+- Only plain data crosses the API: fixed-size structs, i32 / u32 / f32 / f64, pointer + count.
+  No Odin strings, slices, maps, unions, any or context across the boundary.
+- Strings out are fixed-size 0-terminated buffers. Strings in are pointer + length.
+- Every call returns an error enum. No panics, no asserts that can fire on bad input.
+- No callbacks into the host. The host calls, core answers, the host polls.
+- Core does no networking and no platform file IO. The host fetches bytes (curl, URLSession, OkHttp)
+  and hands them to core: drift_load_map(bytes), drift_load_weather(bytes).
+- Core allocates its big buffers once in drift_create. Pointers it returns stay valid until the next call
+  that changes that data. Document this per call in drift.h.
+- One World is used from one thread at a time. Long work (routing) has a start call and a poll call.
+- drift_api_version() so apps can refuse a mismatched core.
+- Changing a struct in drift.h is a breaking change. Add fields at the end, bump the version.
