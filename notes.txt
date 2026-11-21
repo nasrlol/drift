@@ -104,14 +104,15 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     Present but wrong size or invalid: logged and left alone (it is the user's reputation),
                     w.identity stays zero and network features stay off. w.identity_pub = public key,
                     logged as the first 8 bytes in hex. Moves to the user data folder with the release item.
-                  Carpool messages: Message is 184 bytes, fixed size, little endian, no implicit padding
-                    (#assert). Header: magic "DRMS", version 1, kind (Offer / Request / Accept / Review),
+                  Carpool messages: Message is 208 bytes, fixed size, little endian, no implicit padding
+                    (#assert). Header: magic "DRMS", version 2, kind (Offer / Request / Accept / Review),
                     time (unix s, set by the author), author (ed25519 public key). Body is a raw union:
                       Offer   from_hub, to_hub, seats 1..8, mode, depart, arrive, weather snapshot hash, energy_kwh
-                      Request offer id, from_hub, to_hub, seats 1..8
-                      Accept  offer id, request id
+                      Request offer id, from_hub, to_hub, seats 1..8, passenger x25519 public key (not zero)
+                      Accept  offer id, request id, driver x25519 public key (not zero)
                       Review  subject public key, accept id, stars 1..5
-                    sig = ed25519 over bytes 0..119. Message id = sha256 of all 184 bytes.
+                    sig = ed25519 over bytes 0..143. Message id = sha256 of all 208 bytes. Version 2 since the
+                    trip key exchange; node hello version 2 too, so old nodes are refused.
                     msg_sign(w, m) fills magic, version, author, sig (start from a zeroed Message).
                     msg_read(bytes) -> (m, why) for anything from outside: msg_check (size, header, field
                     ranges) then the signature. why is "" or a constant reason, the caller logs it (network
@@ -130,7 +131,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     store_load(s, path, now, scratch) at start: header + field check per message (no
                     signatures: only verified messages are ever written), then store_rewrite writes it again without
                     expired / dropped ones (temp file + rename). Also rewritten when it reaches 2 x STORE_MAX
-                    messages. A size that is not a multiple of 184 (killed mid-append) moves to
+                    messages. A size that is not a multiple of 208 (killed mid-append, or a v1 file) moves to
                     messages.log.bad and the store starts empty; peers send the messages again.
                     Load of a full file ~12 ms (linear dedupe, 4k x 4k id compares), so it runs on the
                     network thread, not in game_init.
@@ -179,6 +180,31 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     the check at start are deleted. snap_read(sha256, out) for the game: a passenger
                     recomputes an offer's route with the driver's weather (matching / verify items).
                     Weather still only reaches the simulation through a file and snapshot_check.
+                  Trip and live position (w.trip, one trip at a time, zero = none, frame loop only):
+                    trip_keypair(w) -> x25519 public key, fresh per trip, goes into the signed Request
+                      (passenger) or Accept (driver), so the key exchange is authenticated by ed25519.
+                    trip_start(w, request, accept, driver): checks accept answers that request and offer and
+                      that this user is the author of its side, x25519 shared secret (all zero = low order
+                      point, refused), key = HKDF-SHA256(salt accept id, ikm shared, info "drift live position
+                      v1"), wipes the private half. Trip id = accept id. trip_end(w) wipes it.
+                    Live_Packet (88 bytes): trip id, seq, from_driver, Live_Position (x, y km, alt m, time)
+                      encrypted with ChaCha20-Poly1305, header bytes as aad. Nonce = seq + direction byte, so
+                      both directions share the key but never a nonce. live_seal / live_open; open drops the
+                      own direction, seq <= last accepted (replay) and anything that does not verify.
+                    Game side: live_send(w, pos) seals and leaves the packet in w.node.live_out, live_poll(w)
+                      opens the newest one the node thread found. No network in the frame loop.
+                    Through peers (node_live, sync thread, every 1 s while live_out is set): the packet goes
+                      to this node's own table and to up to 8 peers that synced in the last minute ('L'),
+                      and each is asked for the other direction's latest ('M'); the highest seq wins. Not
+                      gossiped: it reaches the other side through any node both talk to. Nodes keep the
+                      latest packet per trip and direction, 1024 slots, 60 s, memory only, never on disk,
+                      and cannot read them. A node cannot tell garbage with a higher seq from a real packet,
+                      so someone who knows a trip id can spoil it at one node; the receiver asks every node
+                      it reaches and only keeps what verifies.
+                    Tested: two processes, offer -> request -> accept through sync, both started the same
+                      trip, positions both ways every second (heard 19 of 24, only the newest is kept).
+                      The 21 checks from #25 (replay, flipped ciphertext, changed seq, own direction, guessed
+                      key, low order point, a third user claiming the passenger role) pass on the node table.
                   Headless node: drift --headless --node [--port <n>] (debug host and release exe). game_init,
                     then node_poll, no window and no frame loop, runs until killed. Same store, sync, peer
                     files and cache/ as the game, so run it in its own directory. Exits 1 when it cannot

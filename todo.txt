@@ -106,7 +106,7 @@ The central relay (#18, #22, #25) was dropped; reuse its code from those branche
 [ ] matching: filter offers by grid cell + hour, then detour check with the router
 [ ] verify offer route/energy by recomputing it locally
 [ ] energy split: own share + detour cost for passenger
-[ ] accept handshake, live position encrypted between matched users (x25519 + chacha20poly1305),
+[x] accept handshake, live position encrypted between matched users (x25519 + chacha20poly1305),
     through peers, reuse the crypto from #25 (#43)
 [ ] signed reviews for reputation
 

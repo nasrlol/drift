@@ -46,6 +46,7 @@ World :: struct {
 	identity_pub: [32]u8,
 	store:        Store, // carpool messages, see net.odin
 	node:         Net_Node, // peer to peer threads and peers, see net.odin
+	trip:         Trip, // the accepted trip in progress, frame loop only
 	grid:         Grid,
 	controls:     Controls,
 	ship:         Ship,

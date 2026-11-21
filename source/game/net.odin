@@ -4,8 +4,11 @@ package game
 import "base:runtime"
 import "core:c"
 import "core:crypto"
+import "core:crypto/chacha20poly1305"
 import "core:crypto/ed25519"
 import "core:crypto/hash"
+import "core:crypto/hkdf"
+import "core:crypto/x25519"
 import "core:encoding/json"
 import "core:fmt"
 import "core:math"
@@ -413,7 +416,7 @@ identity_load_or_create :: proc(w: ^World) {
 // no implicit padding, so the relay can store and forward them without parsing.
 // The signature covers every byte before sig. A message id is the sha256 of all its bytes, sig included.
 MSG_MAGIC :: 0x534d5244 // "DRMS"
-MSG_VERSION :: 1
+MSG_VERSION :: 2
 MSG_MAX_SEATS :: 8
 
 Msg_Kind :: enum u8 {
@@ -437,16 +440,19 @@ Msg_Offer :: struct {
 }
 
 // A passenger asks for seats on an offer, possibly boarding / leaving at other hubs (detour).
+// x25519 is the passenger's half of the trip key exchange (see trip_start), new for every request.
 Msg_Request :: struct {
 	offer:            [32]u8, // message id
 	from_hub, to_hub: u16le,
 	seats:            u8,
 	_:                [3]u8,
+	x25519:           [32]u8,
 }
 
-// The driver accepts one request.
+// The driver accepts one request, x25519 is the driver's half of the trip key exchange.
 Msg_Accept :: struct {
 	offer, request: [32]u8, // message ids
+	x25519:         [32]u8,
 }
 
 // After a trip, one side rates the other. accept proves the trip was agreed between them.
@@ -472,8 +478,8 @@ Message :: struct {
 	},
 	sig:     [64]u8,
 }
-#assert(size_of(Msg_Offer) == 64 && size_of(Msg_Request) == 40 && size_of(Msg_Accept) == 64)
-#assert(size_of(Msg_Review) == 72 && size_of(Message) == 184 && offset_of(Message, sig) == 120)
+#assert(size_of(Msg_Offer) == 64 && size_of(Msg_Request) == 72 && size_of(Msg_Accept) == 96)
+#assert(size_of(Msg_Review) == 72 && size_of(Message) == 208 && offset_of(Message, sig) == 144)
 
 // Fills magic, version, author and sig. The caller sets kind, time and the body, starting from a zeroed
 // Message so unused body bytes are zero. False when this user has no identity yet.
@@ -511,9 +517,9 @@ msg_check :: proc(b: []u8) -> (m: Message, why: string) {
 			o.energy_kwh < 1000
 	case .Request:
 		r := m.request
-		fields_ok = r.from_hub != r.to_hub && r.seats >= 1 && r.seats <= MSG_MAX_SEATS
+		fields_ok = r.from_hub != r.to_hub && r.seats >= 1 && r.seats <= MSG_MAX_SEATS && r.x25519 != {}
 	case .Accept:
-		fields_ok = true
+		fields_ok = m.accept.x25519 != {}
 	case .Review:
 		fields_ok = m.review.stars >= 1 && m.review.stars <= 5
 	}
@@ -659,7 +665,9 @@ store_load :: proc(s: ^Store, path: string, now: i64, scratch: mem.Allocator) {
 		for at := 0; at < len(data); at += size_of(Message) {
 			m, why := msg_check(data[at:][:size_of(Message)])
 			if why != "" {
-				fmt.eprintfln("[net] %s: message %d: %s, skipped", path, at / size_of(Message), why)
+				if bad == 0 {
+					fmt.eprintfln("[net] %s: message %d: %s, skipped", path, at / size_of(Message), why)
+				}
 				bad += 1
 				continue
 			}
@@ -740,12 +748,13 @@ store_rewrite :: proc(s: ^Store, path: string) {
 //   'P' count u32le, msgs    -> added u32le (count <= SYNC_BATCH)
 //   'N'                      -> count u8, count peers: family u8 (4 / 6), address [16]u8, port u16le
 //   'W' sha256               -> u8 1 + the Snapshot (22736 bytes), or u8 0 when it does not have it
+//   'L' / 'M'                live positions, see node_live
 // Sync is by message id, never by position: positions only mean something inside one store.
 // Every message from a peer goes through msg_read before store_add, the id of a 'G' answer must be one
 // that was asked for.
 NODE_PORT :: 7419
 NODE_MAGIC :: 0x504e5244 // "DRNP"
-NODE_VERSION :: 1
+NODE_VERSION :: 2 // 2: messages are 208 bytes
 NET_TIMEOUT_MS :: 5000
 SERVE_MAX_MS :: 30_000 // one connection, so a slow peer cannot keep serve busy
 SYNC_S :: 30
@@ -777,33 +786,40 @@ Peer :: struct {
 
 // Zero is valid: not started, NODE_PORT, no peers. Lives in World, so the threads stop before a reload.
 Net_Node :: struct {
-	port:        int, // 0 = NODE_PORT; set another one to run two nodes on one machine
-	started:     bool,
-	loaded:      bool, // store and peer files read, once per run
-	id:          [8]u8, // random per run, tells a node it dialed itself
-	peers_dirty: bool, // learned peers changed, write PEERS_PATH
-	own:         [4]net.Endpoint, // addresses that turned out to be this node, never added again
-	own_count:   int,
-	stop:        bool, // atomic
-	listening:   bool,
-	listener:    net.TCP_Socket,
-	server:      ^thread.Thread,
-	syncer:      ^thread.Thread,
-	mem:         virtual.Arena, // sync thread scratch
-	peers_lock:  sync.Mutex,
-	peers:       [MAX_PEERS]Peer,
-	peer_count:  int,
-	snaps_lock:  sync.Mutex, // taken before w.store.lock, never after
-	snaps:       [SNAP_KEEP][32]u8, // sha256 of the snapshots in SNAP_DIR
-	snap_time:   [SNAP_KEEP]i64, // their fetched_at
-	snap_count:  int,
+	port:         int, // 0 = NODE_PORT; set another one to run two nodes on one machine
+	started:      bool,
+	loaded:       bool, // store and peer files read, once per run
+	id:           [8]u8, // random per run, tells a node it dialed itself
+	peers_dirty:  bool, // learned peers changed, write PEERS_PATH
+	own:          [4]net.Endpoint, // addresses that turned out to be this node, never added again
+	own_count:    int,
+	stop:         bool, // atomic
+	listening:    bool,
+	listener:     net.TCP_Socket,
+	server:       ^thread.Thread,
+	syncer:       ^thread.Thread,
+	mem:          virtual.Arena, // sync thread scratch
+	peers_lock:   sync.Mutex,
+	peers:        [MAX_PEERS]Peer,
+	peer_count:   int,
+	snaps_lock:   sync.Mutex, // taken before w.store.lock, never after
+	snaps:        [SNAP_KEEP][32]u8, // sha256 of the snapshots in SNAP_DIR
+	snap_time:    [SNAP_KEEP]i64, // their fetched_at
+	snap_count:   int,
 	// Per thread, too big for a thread stack.
-	sync_ids:    [STORE_MAX][32]u8,
-	sync_msgs:   [SYNC_BATCH]Message,
-	serve_ids:   [STORE_MAX][32]u8,
-	serve_msgs:  [SYNC_BATCH]Message,
-	sync_snap:   Snapshot,
-	serve_snap:  Snapshot,
+	sync_ids:     [STORE_MAX][32]u8,
+	sync_msgs:    [SYNC_BATCH]Message,
+	serve_ids:    [STORE_MAX][32]u8,
+	serve_msgs:   [SYNC_BATCH]Message,
+	sync_snap:    Snapshot,
+	serve_snap:   Snapshot,
+	live_lock:    sync.Mutex,
+	live_slots:   [LIVE_SLOTS]Live_Packet, // latest per trip and direction, from anyone (see node_live)
+	live_at:      [LIVE_SLOTS]i64, // unix s it arrived, 0 = empty
+	live_out:     Live_Packet, // the game's latest, set by live_send
+	live_in:      Live_Packet, // the other side's newest, taken by live_poll
+	live_has_out: bool,
+	live_has_in:  bool,
 }
 
 // Called every frame, like weather_poll: starts the node after game start and after every reload.
@@ -976,6 +992,19 @@ node_serve :: proc(w: ^World, s: net.TCP_Socket, from: net.Endpoint) {
 			head := u32le(added)
 			if !net_send(s, mem.ptr_to_bytes(&head)) do return
 			got += added
+		case 'L':
+			p: Live_Packet
+			if !net_recv(s, mem.ptr_to_bytes(&p)) do return
+			live_put(n, &p, time.time_to_unix(time.now()))
+			if !net_send(s, []u8{0}) do return
+		case 'M':
+			req: [33]u8
+			if !net_recv(s, req[:]) do return
+			trip: [32]u8
+			copy(trip[:], req[:32])
+			p, have := live_get(n, trip, req[32], time.time_to_unix(time.now()))
+			if !net_send(s, []u8{u8(have)}) do return
+			if have && !net_send(s, mem.ptr_to_bytes(&p)) do return
 		case 'W':
 			want: [32]u8
 			if !net_recv(s, want[:]) do return
@@ -1054,8 +1083,13 @@ node_sync_thread :: proc(t: ^thread.Thread) {
 		virtual.arena_free_all(&n.mem)
 		n.loaded = true
 	}
+	live_next: i64
 	for !sync.atomic_load(&n.stop) {
 		now := time.time_to_unix(time.now())
+		if now >= live_next {
+			node_live(w)
+			live_next = now + LIVE_S
+		}
 		p: Peer
 		due := -1
 		{
@@ -1585,4 +1619,253 @@ node_load_snaps :: proc(w: ^World) {
 		if got == size_of(Snapshot) && snap != nil do snap_put(w, snap)
 	}
 	fmt.eprintfln("[net] %d weather snapshots in %s", n.snap_count, SNAP_DIR)
+}
+
+// Live position between the two users of one accepted trip. Not a signed Message: sent about once a
+// second, passed on by nodes that keep it only in memory and cannot read it, readable only by the two.
+// Key exchange: each side makes a fresh x25519 key pair (trip_keypair) and puts the public half in its
+// signed Request / Accept, so the exchange is authenticated by the ed25519 identities.
+// key = HKDF-SHA256(salt = accept id, ikm = x25519 shared secret, info = LIVE_INFO).
+// Nonce = seq (8 bytes LE) + from_driver + 3 zero bytes: both directions share the key, never a nonce.
+LIVE_INFO :: "drift live position v1"
+
+// Zero is no trip. One trip at a time.
+Trip :: struct {
+	own_x25519:  [32]u8, // private half, wiped once the key is derived
+	accept:      [32]u8, // message id, names the trip
+	key:         [32]u8,
+	driver:      bool,
+	active:      bool,
+	sent, heard: u64, // last sequence numbers sent and accepted, replays and old packets are dropped
+}
+
+Live_Position :: struct {
+	x, y, alt: f32le, // km, km, m
+	_:         [4]u8,
+	time:      i64le, // unix seconds
+}
+
+Live_Packet :: struct {
+	trip:        [32]u8, // accept id, so nodes can keep the latest packet per trip and direction
+	seq:         u64le,
+	from_driver: u8,
+	_:           [7]u8,
+	box:         [size_of(Live_Position)]u8, // encrypted Live_Position
+	tag:         [chacha20poly1305.TAG_SIZE]u8, // authenticates box and every header byte before it
+}
+#assert(size_of(Live_Position) == 24 && size_of(Live_Packet) == 88 && offset_of(Live_Packet, box) == 48)
+
+// Before signing a Request (passenger) or an Accept (driver): a fresh key pair, the public half goes
+// into the message. Starting a new one drops the trip in progress.
+trip_keypair :: proc(w: ^World) -> (public: [32]u8) {
+	w.trip = {}
+	crypto.rand_bytes(w.trip.own_x25519[:])
+	x25519.scalarmult_basepoint(public[:], w.trip.own_x25519[:])
+	return
+}
+
+// Both sides call it with the same two verified messages (from msg_read). driver = this user sent accept.
+trip_start :: proc(w: ^World, request, accept: ^Message, driver: bool) -> bool {
+	t := &w.trip
+	defer crypto.zero_explicit(&t.own_x25519, size_of(t.own_x25519))
+	if request.kind != .Request || accept.kind != .Accept || accept.accept.request != msg_id(request) {
+		logf(w, "net", "trip: accept does not answer this request")
+		return false
+	}
+	own_side := driver ? accept.author : request.author
+	if accept.accept.offer != request.request.offer || own_side != w.identity_pub {
+		logf(w, "net", "trip: wrong offer, or this user is not the %s", driver ? "driver" : "passenger")
+		return false
+	}
+	shared: [32]u8
+	defer crypto.zero_explicit(&shared, size_of(shared))
+	peer := driver ? request.request.x25519 : accept.accept.x25519
+	x25519.scalarmult(shared[:], t.own_x25519[:], peer[:])
+	if shared == {} {
+		logf(w, "net", "trip: peer x25519 key %016x is a low order point", key_short(peer))
+		return false
+	}
+	t.accept = msg_id(accept)
+	hkdf.extract_and_expand(.SHA256, t.accept[:], shared[:], transmute([]u8)string(LIVE_INFO), t.key[:])
+	t.driver = driver
+	t.active = true
+	t.sent, t.heard = 0, 0
+	logf(w, "net", "trip %016x started as %s", key_short(t.accept), driver ? "driver" : "passenger")
+	return true
+}
+
+live_seal :: proc(w: ^World, pos: Live_Position) -> (p: Live_Packet, ok: bool) {
+	t := &w.trip
+	if !t.active do return
+	t.sent += 1
+	p.trip = t.accept
+	p.seq = u64le(t.sent)
+	p.from_driver = u8(t.driver)
+	pos := pos
+	nonce := live_nonce(&p)
+	ctx: chacha20poly1305.Context
+	chacha20poly1305.init(&ctx, t.key[:])
+	header := mem.ptr_to_bytes(&p)[:offset_of(Live_Packet, box)]
+	chacha20poly1305.seal(&ctx, p.box[:], p.tag[:], nonce[:], header, mem.ptr_to_bytes(&pos))
+	chacha20poly1305.reset(&ctx)
+	return p, true
+}
+
+// For packets from peers: only the other side of this trip, only newer than the last one, only
+// when the tag verifies.
+live_open :: proc(w: ^World, p: ^Live_Packet) -> (pos: Live_Position, ok: bool) {
+	t := &w.trip
+	if !t.active || p.trip != t.accept || p.from_driver != u8(!t.driver) || u64(p.seq) <= t.heard do return
+	nonce := live_nonce(p)
+	ctx: chacha20poly1305.Context
+	chacha20poly1305.init(&ctx, t.key[:])
+	header := mem.ptr_to_bytes(p)[:offset_of(Live_Packet, box)]
+	ok = chacha20poly1305.open(&ctx, mem.ptr_to_bytes(&pos), nonce[:], header, p.box[:], p.tag[:])
+	chacha20poly1305.reset(&ctx)
+	if !ok {
+		logf(w, "net", "trip %016x: live packet %d does not verify, dropped", key_short(t.accept), p.seq)
+		return {}, false
+	}
+	t.heard = u64(p.seq)
+	return pos, true
+}
+
+live_nonce :: proc(p: ^Live_Packet) -> (nonce: [chacha20poly1305.IV_SIZE]u8) {
+	(^u64le)(&nonce[0])^ = p.seq
+	nonce[8] = p.from_driver
+	return
+}
+
+// The game's side of the transport, frame loop only. live_send seals the position and leaves the packet
+// for the node thread, live_poll returns the newest position from the other side that verifies.
+// Starting a trip needs a restart of neither: the node thread only looks at live_out.
+live_send :: proc(w: ^World, pos: Live_Position) -> bool {
+	p := live_seal(w, pos) or_return
+	n := &w.node
+	sync.mutex_lock(&n.live_lock)
+	defer sync.mutex_unlock(&n.live_lock)
+	n.live_out = p
+	n.live_has_out = true
+	return true
+}
+
+live_poll :: proc(w: ^World) -> (pos: Live_Position, ok: bool) {
+	n := &w.node
+	p: Live_Packet
+	{
+		sync.mutex_lock(&n.live_lock)
+		defer sync.mutex_unlock(&n.live_lock)
+		if !n.live_has_in do return
+		p = n.live_in
+		n.live_has_in = false
+	}
+	return live_open(w, &p)
+}
+
+// After the trip: forget the key and stop sending.
+trip_end :: proc(w: ^World) {
+	crypto.zero_explicit(&w.trip, size_of(w.trip))
+	n := &w.node
+	sync.mutex_lock(&n.live_lock)
+	defer sync.mutex_unlock(&n.live_lock)
+	n.live_has_out, n.live_has_in = false, false
+}
+
+// Live packets between nodes. Not gossiped like messages: the sender leaves its packet ('L') at its own
+// node and at every peer that synced recently, the other side asks those same nodes ('M'). Any node both
+// are connected to carries it. Nodes keep the latest packet per trip and direction, in memory only, for
+// LIVE_TTL_S, and cannot read them. So a node cannot tell a real packet from garbage with a higher seq:
+// whoever knows a trip id (accept ids are public) can spoil it at one node. The receiver asks every node
+// it reaches and keeps the newest packet that verifies, so it has to be every node.
+//   'L' packet (88 bytes)         -> u8 0
+//   'M' trip id, from_driver u8   -> u8 1 + packet, or u8 0
+LIVE_S :: 1
+LIVE_TTL_S :: 60
+LIVE_SLOTS :: 1024
+LIVE_PEERS :: 8
+
+// Stores p unless the slot for its trip and direction already has a newer one. Full: the oldest goes.
+live_put :: proc(n: ^Net_Node, p: ^Live_Packet, now: i64) {
+	sync.mutex_lock(&n.live_lock)
+	defer sync.mutex_unlock(&n.live_lock)
+	oldest := 0
+	for &q, i in n.live_slots {
+		if n.live_at[i] != 0 && q.trip == p.trip && q.from_driver == p.from_driver {
+			if p.seq > q.seq {
+				q = p^
+				n.live_at[i] = now
+			}
+			return
+		}
+		if n.live_at[i] < n.live_at[oldest] do oldest = i
+	}
+	n.live_slots[oldest] = p^
+	n.live_at[oldest] = now
+}
+
+live_get :: proc(n: ^Net_Node, trip: [32]u8, from_driver: u8, now: i64) -> (p: Live_Packet, ok: bool) {
+	sync.mutex_lock(&n.live_lock)
+	defer sync.mutex_unlock(&n.live_lock)
+	for q, i in n.live_slots {
+		if n.live_at[i] == 0 || now - n.live_at[i] > LIVE_TTL_S do continue
+		if q.trip == trip && q.from_driver == from_driver do return q, true
+	}
+	return
+}
+
+// Every LIVE_S on the sync thread while the game has a packet to send. Leaves it at this node and at
+// up to LIVE_PEERS peers that synced recently, asks each for the other side's latest, hands the one
+// with the highest seq to the game (live_poll opens it there).
+node_live :: proc(w: ^World) {
+	n := &w.node
+	now := time.time_to_unix(time.now())
+	out: Live_Packet
+	{
+		sync.mutex_lock(&n.live_lock)
+		defer sync.mutex_unlock(&n.live_lock)
+		if !n.live_has_out do return
+		out = n.live_out
+	}
+	live_put(n, &out, now)
+	want := out.from_driver ~ 1
+	best, found := live_get(n, out.trip, want, now)
+
+	eps: [LIVE_PEERS]net.Endpoint
+	count := 0
+	{
+		sync.mutex_lock(&n.peers_lock)
+		defer sync.mutex_unlock(&n.peers_lock)
+		for p in n.peers[:n.peer_count] {
+			if count == LIVE_PEERS do break
+			if now - p.last_ok > 2 * SYNC_S do continue
+			eps[count] = p.ep
+			count += 1
+		}
+	}
+	for ep in eps[:count] {
+		s, dialed := net_dial(ep, &n.stop)
+		if !dialed do continue
+		defer net.close(s)
+		if _, _, ok := node_hello(n, s); !ok do continue
+		put: [1 + size_of(Live_Packet)]u8
+		put[0] = 'L'
+		mem.copy(&put[1], &out, size_of(Live_Packet))
+		get: [34]u8
+		get[0] = 'M'
+		copy(get[1:], out.trip[:])
+		get[33] = want
+		status, have: [1]u8
+		if !net_send(s, put[:]) || !net_recv(s, status[:]) do continue
+		if !net_send(s, get[:]) || !net_recv(s, have[:]) || have[0] != 1 do continue
+		p: Live_Packet
+		if !net_recv(s, mem.ptr_to_bytes(&p)) || p.trip != out.trip || p.from_driver != want do continue
+		if !found || p.seq > best.seq do best, found = p, true
+	}
+	if !found do return
+	sync.mutex_lock(&n.live_lock)
+	defer sync.mutex_unlock(&n.live_lock)
+	if !n.live_has_in || best.seq > n.live_in.seq {
+		n.live_in = best
+		n.live_has_in = true
+	}
 }
