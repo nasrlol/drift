@@ -166,6 +166,19 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     address is never added again this run.
                     Measured (localhost): two nodes with 120 + 80 messages both end with 200 in one sync.
                     Three nodes where B and C only know A: after one round each knows the other two.
+                  Weather between peers: Snapshot = Snapshot_Header + Weather, the exact file / wire bytes.
+                    snapshot_check(bytes) -> (^Snapshot, why): size, magic, version, sha256, weather_valid.
+                    The one check for disk (weather_load_snapshot, cache/snaps) and network.
+                    cache/snaps/<sha256 hex>.snap, max SNAP_KEEP = 32 (~730 KB): the node's own snapshot
+                    (fetch thread after every fetch, cache/weather.snap at start) and every snapshot a live
+                    offer in the store names (offer.weather). After each sync the node asks that peer
+                    ('W' + sha256) for up to 4 it does not have; a peer that lacks one answers 0 and it
+                    does not count. Kept only when snapshot_check passes and the hash is the one asked
+                    for. Full: drop the oldest (fetched_at) that no live offer names, else the oldest.
+                    Names are written from the hash digit by digit, never from peer text. Files that fail
+                    the check at start are deleted. snap_read(sha256, out) for the game: a passenger
+                    recomputes an offer's route with the driver's weather (matching / verify items).
+                    Weather still only reaches the simulation through a file and snapshot_check.
                   Headless node: drift --headless --node [--port <n>] (debug host and release exe). game_init,
                     then node_poll, no window and no frame loop, runs until killed. Same store, sync, peer
                     files and cache/ as the game, so run it in its own directory. Exits 1 when it cannot

@@ -55,6 +55,13 @@ Snapshot_Header :: struct {
 	hash:           [32]u8,
 }
 
+// The whole snapshot file (and what peers send) as one struct, no padding between the two parts.
+Snapshot :: struct {
+	header:  Snapshot_Header,
+	weather: Weather,
+}
+#assert(size_of(Snapshot) == size_of(Snapshot_Header) + size_of(Weather))
+
 // Zero is valid: no thread, fetch on the first update.
 // The thread owns mem and result while it runs. The frame loop only looks at them after is_done.
 Fetch :: struct {
@@ -238,33 +245,33 @@ weather_load_snapshot :: proc(w: ^World, path: string) -> bool {
 		logf(w, "weather", "no snapshot at %s (%v)", path, err)
 		return false
 	}
-	want := size_of(Snapshot_Header) + size_of(Weather)
-	if len(data) != want {
-		logf(w, "weather", "%s is %d bytes, want %d, ignored", path, len(data), want)
+	snap, why := snapshot_check(data)
+	if snap == nil {
+		logf(w, "weather", "%s: %s, ignored", path, why)
 		return false
 	}
-	h := (^Snapshot_Header)(raw_data(data))
-	if h.magic != SNAPSHOT_MAGIC || h.version != SNAPSHOT_VERSION {
-		logf(w, "weather", "%s has magic %x version %d, ignored", path, h.magic, h.version)
-		return false
+	w.weather = snap.weather
+	w.weather_hash = snap.header.hash
+	f.fetched_at = snap.header.fetched_at
+	f.next = snap.header.fetched_at + REFRESH_S
+	logf(w, "weather", "loaded %s, start %d, fetched at %d", path, w.weather.start, snap.header.fetched_at)
+	return true
+}
+
+// The one check for snapshot bytes, from disk or from a peer: size, magic, version, the sha256 in the
+// header against the weather bytes, value ranges. data must be 8 byte aligned (arena memory or a Snapshot).
+// Returns nil and a constant reason when anything is off.
+snapshot_check :: proc(data: []u8) -> (snap: ^Snapshot, why: string) {
+	if len(data) != size_of(Snapshot) do return nil, "wrong size"
+	snap = (^Snapshot)(raw_data(data))
+	if snap.header.magic != SNAPSHOT_MAGIC || snap.header.version != SNAPSHOT_VERSION {
+		return nil, "wrong magic or version"
 	}
 	digest: [32]u8
-	hash.hash_bytes_to_buffer(.SHA256, data[size_of(Snapshot_Header):], digest[:])
-	if digest != h.hash {
-		logf(w, "weather", "%s hash mismatch, file is corrupt, ignored", path)
-		return false
-	}
-	snap := (^Weather)(raw_data(data[size_of(Snapshot_Header):]))
-	if !weather_valid(snap) {
-		logf(w, "weather", "%s has values out of range, ignored", path)
-		return false
-	}
-	w.weather = snap^
-	w.weather_hash = h.hash
-	f.fetched_at = h.fetched_at
-	f.next = h.fetched_at + REFRESH_S
-	logf(w, "weather", "loaded %s, start %d, fetched at %d", path, w.weather.start, h.fetched_at)
-	return true
+	hash.hash_bytes_to_buffer(.SHA256, mem.ptr_to_bytes(&snap.weather), digest[:])
+	if digest != snap.header.hash do return nil, "hash mismatch, corrupt"
+	if !weather_valid(&snap.weather) do return nil, "values out of range"
+	return snap, ""
 }
 
 // Called every frame. Starts a fetch thread when one is due, takes over its result when it is done.
@@ -316,15 +323,18 @@ fetch_thread :: proc(t: ^thread.Thread) {
 	if err := os.make_directory("cache"); err != nil && err != .Exist {
 		fmt.eprintln("[weather] cannot create cache/:", err)
 	}
-	file: [size_of(Snapshot_Header) + size_of(Weather)]u8
-	mem.copy(&file[0], &f.result, size_of(Snapshot_Header))
-	mem.copy(&file[size_of(Snapshot_Header)], &f.weather, size_of(Weather))
+	snap := Snapshot {
+		header  = f.result,
+		weather = f.weather,
+	}
 	tmp := SNAPSHOT_PATH + ".tmp"
-	if err := os.write_entire_file(tmp, file[:]); err != nil {
+	if err := os.write_entire_file(tmp, mem.ptr_to_bytes(&snap)); err != nil {
 		fmt.eprintfln("[weather] cannot write %s: %v, snapshot used but not saved", tmp, err)
 	} else if err = os.rename(tmp, SNAPSHOT_PATH); err != nil {
 		fmt.eprintfln("[weather] cannot rename %s to %s: %v", tmp, SNAPSHOT_PATH, err)
 	}
+	// Offers made with this snapshot name its hash, peers will ask for it.
+	snap_put(w, &snap)
 	f.ok = true
 }
 
@@ -729,6 +739,7 @@ store_rewrite :: proc(s: ^Store, path: string) {
 //   'G' count u32le, ids     -> count u32le, the messages it has of those (count <= SYNC_BATCH)
 //   'P' count u32le, msgs    -> added u32le (count <= SYNC_BATCH)
 //   'N'                      -> count u8, count peers: family u8 (4 / 6), address [16]u8, port u16le
+//   'W' sha256               -> u8 1 + the Snapshot (22736 bytes), or u8 0 when it does not have it
 // Sync is by message id, never by position: positions only mean something inside one store.
 // Every message from a peer goes through msg_read before store_add, the id of a 'G' answer must be one
 // that was asked for.
@@ -782,11 +793,17 @@ Net_Node :: struct {
 	peers_lock:  sync.Mutex,
 	peers:       [MAX_PEERS]Peer,
 	peer_count:  int,
+	snaps_lock:  sync.Mutex, // taken before w.store.lock, never after
+	snaps:       [SNAP_KEEP][32]u8, // sha256 of the snapshots in SNAP_DIR
+	snap_time:   [SNAP_KEEP]i64, // their fetched_at
+	snap_count:  int,
 	// Per thread, too big for a thread stack.
 	sync_ids:    [STORE_MAX][32]u8,
 	sync_msgs:   [SYNC_BATCH]Message,
 	serve_ids:   [STORE_MAX][32]u8,
 	serve_msgs:  [SYNC_BATCH]Message,
+	sync_snap:   Snapshot,
+	serve_snap:  Snapshot,
 }
 
 // Called every frame, like weather_poll: starts the node after game start and after every reload.
@@ -959,6 +976,12 @@ node_serve :: proc(w: ^World, s: net.TCP_Socket, from: net.Endpoint) {
 			head := u32le(added)
 			if !net_send(s, mem.ptr_to_bytes(&head)) do return
 			got += added
+		case 'W':
+			want: [32]u8
+			if !net_recv(s, want[:]) do return
+			have := [1]u8{snap_read(want, &n.serve_snap) ? 1 : 0}
+			if !net_send(s, have[:]) do return
+			if have[0] == 1 && !net_send(s, mem.ptr_to_bytes(&n.serve_snap)) do return
 		case 'N':
 			list: [1 + MAX_PEERS * PEER_ENTRY]u8
 			count := 0
@@ -1027,6 +1050,7 @@ node_sync_thread :: proc(t: ^thread.Thread) {
 	if !n.loaded {
 		store_load(&w.store, STORE_PATH, time.time_to_unix(time.now()), virtual.arena_allocator(&n.mem))
 		node_load_peers(n)
+		node_load_snaps(w)
 		virtual.arena_free_all(&n.mem)
 		n.loaded = true
 	}
@@ -1198,6 +1222,52 @@ node_sync :: proc(w: ^World, ep: net.Endpoint, since: i64) -> Sync_Result {
 		if node_add_peer(n, peer, false) do learned += 1
 	}
 	if learned > 0 do fmt.eprintfln("[net] %s told us %d new peers", ep_text(ep, buf[:]), learned)
+
+	// Snapshots that live offers refer to and we do not have, a few per sync. Asking for one the peer does
+	// not have costs 34 bytes and does not count.
+	wanted: [SNAP_KEEP][32]u8
+	count := 0
+	{
+		st := &w.store
+		now := time.time_to_unix(time.now())
+		sync.mutex_lock(&st.lock)
+		defer sync.mutex_unlock(&st.lock)
+		next: for &m in st.msgs[:st.count] {
+			if m.kind != .Offer || m.offer.weather == {} || msg_expires(&m) <= now do continue
+			for h in wanted[:count] {
+				if h == m.offer.weather do continue next
+			}
+			wanted[count] = m.offer.weather
+			count += 1
+			if count == SNAP_KEEP do break
+		}
+	}
+	fetched := 0
+	for h in wanted[:count] {
+		if fetched == SNAP_PER_SYNC do break
+		if snap_has(n, h) do continue
+		req: [33]u8
+		req[0] = 'W'
+		h := h
+		copy(req[1:], h[:])
+		have: [1]u8
+		if !net_send(s, req[:]) || !net_recv(s, have[:]) do return .Failed
+		if have[0] != 1 do continue
+		if !net_recv(s, mem.ptr_to_bytes(&n.sync_snap)) do return .Failed
+		snap, why := snapshot_check(mem.ptr_to_bytes(&n.sync_snap))
+		if snap == nil || snap.header.hash != h {
+			fmt.eprintfln(
+				"[net] %s: snapshot %016x refused: %s",
+				ep_text(ep, buf[:]),
+				key_short(h),
+				snap == nil ? why : "other hash than asked for",
+			)
+			continue
+		}
+		snap_put(w, snap)
+		fetched += 1
+		fmt.eprintfln("[net] got snapshot %016x from %s", key_short(h), ep_text(ep, buf[:]))
+	}
 	return .Ok
 }
 
@@ -1371,4 +1441,148 @@ node_run :: proc(port: int) -> bool {
 		sync.mutex_unlock(&w.store.lock)
 		fmt.eprintfln("[node] %d messages, %d peers, %d reachable", count, w.node.peer_count, ok)
 	}
+}
+
+// Weather snapshots between peers. An offer names the snapshot its route was planned with (offer.weather),
+// so a passenger can recompute the same route with the same wind. A node keeps up to SNAP_KEEP snapshots
+// as files in SNAP_DIR, named by their sha256 in hex: its own (the fetch thread, SNAPSHOT_PATH at start)
+// and the ones that live offers in its store refer to, asked from the peer it syncs with ('W'). A full
+// directory drops the oldest snapshot no live offer refers to, or else the oldest one.
+// Snapshots only ever reach the simulation through a file and snapshot_check, never straight off the wire.
+SNAP_DIR :: "cache/snaps"
+SNAP_KEEP :: 32
+SNAP_PER_SYNC :: 4
+
+// "cache/snaps/<64 hex digits>.snap". Built from the hash digit by digit, never from text a peer sent.
+snap_path :: proc(h: [32]u8, buf: []u8) -> string {
+	HEX :: "0123456789abcdef"
+	digits := HEX
+	b := strings.builder_from_bytes(buf)
+	strings.write_string(&b, SNAP_DIR + "/")
+	for x in h {
+		strings.write_byte(&b, digits[x >> 4])
+		strings.write_byte(&b, digits[x & 15])
+	}
+	strings.write_string(&b, ".snap")
+	return strings.to_string(b)
+}
+
+snap_has :: proc(n: ^Net_Node, h: [32]u8) -> bool {
+	sync.mutex_lock(&n.snaps_lock)
+	defer sync.mutex_unlock(&n.snaps_lock)
+	for x in n.snaps[:n.snap_count] {
+		if x == h do return true
+	}
+	return false
+}
+
+// The snapshot with sha256 h from SNAP_DIR into out, checked. False when it is not there or not valid.
+// Any thread; the game will use it to recompute an offer's route with the driver's weather.
+snap_read :: proc(h: [32]u8, out: ^Snapshot) -> bool {
+	buf: [128]u8
+	path := snap_path(h, buf[:])
+	f, err := os.open(path)
+	if err != nil do return false
+	defer os.close(f)
+	n, rerr := os.read_full(f, mem.ptr_to_bytes(out))
+	if rerr != nil || n != size_of(Snapshot) do return false
+	snap, _ := snapshot_check(mem.ptr_to_bytes(out))
+	return snap != nil && snap.header.hash == h
+}
+
+// Writes a checked snapshot to SNAP_DIR (temp file + rename) and adds it to the index, making room first.
+snap_put :: proc(w: ^World, snap: ^Snapshot) {
+	n := &w.node
+	h := snap.header.hash
+	sync.mutex_lock(&n.snaps_lock)
+	defer sync.mutex_unlock(&n.snaps_lock)
+	for x in n.snaps[:n.snap_count] {
+		if x == h do return
+	}
+	buf, tmp_buf: [128]u8
+	path := snap_path(h, buf[:])
+	tmp := fmt.bprintf(tmp_buf[:], "%s.tmp", path)
+	if !os.exists(path) {
+		if err := os.make_directory_all(SNAP_DIR); err != nil && err != .Exist {
+			fmt.eprintfln("[net] cannot create %s: %v", SNAP_DIR, err)
+			return
+		}
+		if err := os.write_entire_file(tmp, mem.ptr_to_bytes(snap)); err != nil {
+			fmt.eprintfln("[net] cannot write %s: %v", tmp, err)
+			return
+		}
+		if err := os.rename(tmp, path); err != nil {
+			fmt.eprintfln("[net] cannot rename %s: %v", tmp, err)
+			return
+		}
+	}
+	if n.snap_count == SNAP_KEEP {
+		victim, victim_used := -1, true
+		now := time.time_to_unix(time.now())
+		st := &w.store
+		sync.mutex_lock(&st.lock)
+		for x, i in n.snaps[:n.snap_count] {
+			used := false
+			for &m in st.msgs[:st.count] {
+				if m.kind == .Offer && m.offer.weather == x && msg_expires(&m) > now {
+					used = true
+					break
+				}
+			}
+			better := victim < 0 || (victim_used && !used)
+			better ||= used == victim_used && n.snap_time[i] < n.snap_time[victim]
+			if better do victim, victim_used = i, used
+		}
+		sync.mutex_unlock(&st.lock)
+		os.remove(snap_path(n.snaps[victim], buf[:]))
+		n.snap_count -= 1
+		n.snaps[victim] = n.snaps[n.snap_count]
+		n.snap_time[victim] = n.snap_time[n.snap_count]
+	}
+	n.snaps[n.snap_count] = h
+	n.snap_time[n.snap_count] = snap.header.fetched_at
+	n.snap_count += 1
+}
+
+// At start, on the sync thread: index SNAP_DIR (files that fail snapshot_check are deleted), then make sure
+// the snapshot the game runs on (SNAPSHOT_PATH) is in it. Allocates in w.node.mem.
+node_load_snaps :: proc(w: ^World) {
+	n := &w.node
+	files, err := os.read_all_directory_by_path(SNAP_DIR, virtual.arena_allocator(&n.mem))
+	if err != nil && err != .Not_Exist {
+		fmt.eprintfln("[net] cannot list %s: %v", SNAP_DIR, err)
+	}
+	for f in files {
+		h: [32]u8
+		name := f.name
+		ok := len(name) == 69 && strings.has_suffix(name, ".snap")
+		for i := 0; ok && i < 64; i += 1 {
+			c := name[i]
+			d: u8
+			switch c {
+			case '0' ..= '9':
+				d = c - '0'
+			case 'a' ..= 'f':
+				d = c - 'a' + 10
+			case:
+				ok = false
+			}
+			h[i / 2] |= d << (i % 2 == 0 ? 4 : 0)
+		}
+		if !ok do continue
+		if !snap_read(h, &n.sync_snap) {
+			buf: [128]u8
+			fmt.eprintfln("[net] %s is not a valid snapshot, deleted", f.name)
+			os.remove(snap_path(h, buf[:]))
+			continue
+		}
+		snap_put(w, &n.sync_snap)
+	}
+	if own, oerr := os.open(SNAPSHOT_PATH); oerr == nil {
+		got, _ := os.read_full(own, mem.ptr_to_bytes(&n.sync_snap))
+		os.close(own)
+		snap, _ := snapshot_check(mem.ptr_to_bytes(&n.sync_snap))
+		if got == size_of(Snapshot) && snap != nil do snap_put(w, snap)
+	}
+	fmt.eprintfln("[net] %d weather snapshots in %s", n.snap_count, SNAP_DIR)
 }
