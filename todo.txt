@@ -96,6 +96,9 @@ design (route.odin, nav.odin = simulation; nav_ui.odin = drawing):
 [ ] nav_ui: road sign (real name) at the next maneuver, pill 26 px under the ship with the layer (LAYER_ALT)
 [ ] nav_ui: yellow warning pill 170 px from the top
 [ ] nav_ui: sheet: ETA (green + leaf), "km, arrive hh:mm", stat chips (speed, battery, used, solar, height)
+streets (#67, on dev):
+[~] lars: more streets: trunk / primary / secondary (tertiary if it fits) from the same pbf, Map_Kind per class
+[ ] road graph: keep junctions, bake nodes + edges, ground vehicle moves along edges (waiting: #68)
 
 DARIO: SHIP + CONTROLS
 [x] Windows smoke test: compile.bat debug, run build\drift.exe from the repo root, rebuild once while it runs
