@@ -14,6 +14,7 @@ World :: struct {
 	route_mem: virtual.Arena,
 	frame:     virtual.Arena,
 	m:         Map,
+	weather:   Weather,
 	tick:      u64,
 	accum:     f64,
 }
