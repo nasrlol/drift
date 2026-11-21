@@ -1,0 +1,135 @@
+name,size_bytes,offset_or_align,align
+World,12546176,16
+perm,64,0,8
+route_mem,64,64,8
+frame,64,128,8
+m,1496,192,8
+world_map,64,1688,8
+globe,336,1752,8
+weather,22688,2088,8
+weather_hash,32,24776,1
+fetch,22832,24808,8
+identity,304,47640,8
+identity_pub,32,47944,1
+store,983080,47976,8
+node,488984,1031056,8
+trip,120,1520040,8
+live_send_s,4,1520160,4
+partner,12,1520164,4
+partner_seen,1,1520176,1
+grid,9475272,1520184,8
+belgium,1084512,10995456,1
+controls,12,12079968,4
+ship,104,12079984,8
+screen,1,12080088,1
+plan,184,12080096,8
+plan_mem,64,12080280,8
+routes,576,12080344,8
+nav,184,12080920,8
+nav_wind,1,12081104,1
+replay,24,12081112,8
+no_fly,128,12081136,4
+gust_zones,48,12081264,4
+tick,8,12081312,8
+accum,8,12081320,8
+prof,520,12081328,8
+cam,176,12081848,4
+ui,1448,12082024,8
+loading_s,4,12083472,4
+scan_s,4,12083476,4
+fonts,3592,12083480,8
+line_meshes,752,12087072,8
+labels,16400,12087824,8
+palette,220,12104224,1
+wind,18008,12104444,4
+airship,2616,12122456,8
+buildings,4176,12125072,8
+cloud_sprites,24,12129248,4
+nature,26112,12129272,8
+towns,26112,12155384,8
+cruise,4,12181496,4
+cruise_on_road,1,12181500,1
+car_anim,40,12181504,4
+car_skin,1,12181544,1
+music,294984,12181552,8
+others,15360,12476536,4
+other_count,8,12491896,8
+others_copied_s,4,12491904,4
+presence_send_s,4,12491908,4
+presence_copy_s,4,12491912,4
+street,52880,12491920,16
+pose_prev,24,12544800,8
+pose,24,12544824,8
+collide,400,12544848,8
+script,920,12545248,8
+pad,3,12546168,1
+TYPE Map,1496,8
+PADDING Map,0
+TYPE Grid,9475272,8
+PADDING Grid,7
+TYPE Weather,22688,8
+PADDING Weather,0
+TYPE Buildings,4176,8
+PADDING Buildings,7
+TYPE Tile_Cache,26112,8
+PADDING Tile_Cache,0
+TYPE Tile,136,8
+PADDING Tile,7
+TYPE Wind_Particles,18008,4
+PADDING Wind_Particles,3
+TYPE Cloud_Sprites,24,4
+PADDING Cloud_Sprites,3
+TYPE Map_Labels,16400,8
+PADDING Map_Labels,7
+TYPE Line_Meshes,752,8
+PADDING Line_Meshes,7
+TYPE Other_Car,60,4
+PADDING Other_Car,2
+TYPE Airship,2616,8
+PADDING Airship,11
+TYPE Street,52880,16
+PADDING Street,33
+TYPE Store,983080,8
+PADDING Store,7
+TYPE Net_Node,488984,8
+PADDING Net_Node,17
+TYPE Fetch,22832,8
+PADDING Fetch,6
+TYPE Ship,104,8
+PADDING Ship,20
+TYPE Cam,176,4
+PADDING Cam,8
+TYPE Ui,1448,8
+PADDING Ui,18
+TYPE Fonts,3592,8
+PADDING Fonts,0
+TYPE Nav,184,8
+PADDING Nav,26
+TYPE Plan,184,8
+PADDING Plan,25
+TYPE Planned_Route,192,8
+PADDING Planned_Route,3
+TYPE Maneuver,184,8
+PADDING Maneuver,11
+TYPE Replay,24,8
+PADDING Replay,0
+TYPE Collide,400,8
+PADDING Collide,7
+TYPE Script,920,8
+PADDING Script,13
+TYPE Palette,220,1
+PADDING Palette,0
+TYPE Profiler,520,8
+PADDING Profiler,7
+TYPE Globe_GPU,336,8
+PADDING Globe_GPU,11
+TYPE World_Map,64,8
+PADDING World_Map,0
+TYPE Soundtrack,294984,8
+PADDING Soundtrack,10
+TYPE Car_Anim,40,4
+PADDING Car_Anim,3
+TYPE Trip,120,8
+PADDING Trip,6
+TYPE Pad,3,1
+PADDING Pad,0
