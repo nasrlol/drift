@@ -59,7 +59,7 @@ LARS: ROUTING + NAVIGATION
 [ ] energy: battery 180 kWh start 86%, P(v, g) = 3 + 0.0085 v^3 + 6 g, solar from cloud cover, climb cost
 [ ] path cleanup: skip redundant nodes, Chaikin, ramp to tower top, 40 m terrain clearance
 [ ] metrics: time, kWh, gust index, vs straight-line baseline
-[ ] record expanded-node order into a flat array (for the scan animation)
+[~] lars: record expanded-node order into a flat array (for the scan animation)
 [ ] user-reported gust zones (fixed array, max 4), reroute around them
 [ ] reroute: > 190 m off path for 1.2 s -> route from current position, same buffers
 [ ] maneuvers: computed once per route into a flat array (depart, turn, climb/descend, arrive)
