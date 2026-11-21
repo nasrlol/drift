@@ -45,6 +45,11 @@ CASES :: [?]Case {
 	},
 	// A reported gust zone is avoided, closes every layer, and applies together with the no-fly zones.
 	{"gust", "test/data/calm.snap", "test/data/gust.txt", "test/data/gust.expected"},
+	// The demo: plan Brussels -> Gent, the three summaries and maneuvers, fly greenest with the autopilot,
+	// report a gust after 5 minutes, reroute around it and dock in Gent.
+	{"demo_flow", "test/data/windy.snap", "test/data/demo_flow.txt", "test/data/demo_flow.expected"},
+	// Long routes with layer changes: the why line and the climb / continue / approach maneuvers.
+	{"maneuvers", "test/data/windy.snap", "test/data/maneuvers.txt", "test/data/maneuvers.expected"},
 	// A NaN in the wind field must reject the snapshot, not reach the router.
 	{"nan_wind", "test/data/nan_wind.snap", "test/data/routes.txt", ""},
 }

@@ -1,0 +1,3 @@
+# Demo: plan Brussels -> Gent, fly the greenest route, report a gust after 5 minutes, dock in Gent.
+plan 5 9 0
+fly greenest 7200 300

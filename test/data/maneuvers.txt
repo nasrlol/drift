@@ -1,0 +1,4 @@
+# Hubs: 1 Tournai, 2 Hasselt, 6 Oostende, 7 Brugge, 10 Liege, 12 Namur.
+plan 6 12 3
+plan 1 2 5
+plan 10 7 8

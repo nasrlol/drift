@@ -100,7 +100,7 @@ Maneuver :: struct {
 	s_km:       f32, // horizontal distance along the path
 	text:       [48]u8,
 	sub:        [48]u8,
-	road:       [32]u8, // the nearest real road or river, or the layer ("Skyway 550")
+	road:       [64]u8, // the nearest real road or river, or the layer ("Skyway 550")
 }
 
 // A route of plan_routes or a reroute. path, times, dist and maneuvers live in w.plan_mem until the next
@@ -588,7 +588,10 @@ build_maneuvers :: proc(
 		p := path[m.path_index]
 		name, _, found := map_nearest_name(w, p.xy, ROAD_NAME_KM)
 		if found {
-			copy(m.road[:len(m.road) - 1], name)
+			// Cut on a character boundary: a long bilingual Brussels name must not end in half a letter.
+			keep := min(len(name), len(m.road) - 1)
+			for keep > 0 && keep < len(name) && name[keep] & 0xc0 == 0x80 do keep -= 1
+			copy(m.road[:], name[:keep])
 		} else {
 			layer_name(m.road[:len(m.road) - 1], layer_at(p.z))
 		}
