@@ -18,6 +18,10 @@ MODE_AIRSPEED :: [Route_Mode]f32 {
 	.Calmest  = 13,
 }
 
+// Energy model (spec). The battery holds BATTERY_KWH, a ship leaves with BATTERY_START of it.
+BATTERY_KWH :: 180
+BATTERY_START :: 0.86
+
 // Ground speed rules in m/s (spec): below GROUND_RETRY the ship throttles up by GROUND_RETRY_BOOST, below
 // GROUND_MIN even then the edge is blocked.
 GROUND_RETRY :: 2.5
@@ -89,14 +93,16 @@ Grid :: struct {
 	blocked_zones: [MAX_NO_FLY]No_Fly_Zone,
 	// Connected free region of each node (A* steps), 0 for a blocked node. Built with blocked.
 	region:        [GRID_NODES]u32,
-	// wind_at and gust_at at every node centre for weather_hour, shared by the three modes and by every
-	// route in that hour. Rebuilt when the hour or its forecast differs from the copy it was built from.
-	// Zero is a valid cache: a calm hour 0.
+	// wind_at and gust_at at every node centre and cloud_at at every cell centre (cloud cover has no layers)
+	// for weather_hour, shared by the three modes and by every route in that hour. Rebuilt when the hour or
+	// its forecast differs from the copy it was built from. Zero is a valid cache: a calm, clear hour 0.
 	wind:          [GRID_NODES][2]f32,
 	gust:          [GRID_NODES]f32,
+	cloud:         [GRID_LAYER_CELLS]f32,
 	weather_hour:  int,
 	weather_wind:  [WIND_LAYERS][WEATHER_CELLS][2]f32,
 	weather_gust:  [WIND_LAYERS][WEATHER_CELLS]f32,
+	weather_cloud: [WEATHER_CELLS]f32,
 	terrain_built: bool,
 	blocked_built: bool,
 }
@@ -314,10 +320,20 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 	}
 
 	h := clamp(hour, 0, FORECAST_HOURS - 1)
-	if g.weather_hour != h || g.weather_wind != w.weather.wind[h] || g.weather_gust != w.weather.gust[h] {
+	if g.weather_hour != h ||
+	   g.weather_wind != w.weather.wind[h] ||
+	   g.weather_gust != w.weather.gust[h] ||
+	   g.weather_cloud != w.weather.cloud[h] {
 		g.weather_hour = h
 		g.weather_wind = w.weather.wind[h]
 		g.weather_gust = w.weather.gust[h]
+		g.weather_cloud = w.weather.cloud[h]
+		for y in 0 ..< GRID_H {
+			for x in 0 ..< GRID_W {
+				p := grid_node_pos(grid_node({x, y, 0}))
+				g.cloud[y * GRID_W + x] = cloud_at(w, p.x, p.y, h)
+			}
+		}
 		for layer in 0 ..< GRID_LAYERS {
 			for y in 0 ..< GRID_H {
 				for x in 0 ..< GRID_W {
@@ -332,22 +348,28 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 
 	per_km, per_layer: f32
 	{
-		wind_max, gust_min: f32 = 0, 1
+		wind_max, gust_min, cloud_min: f32 = 0, 1, 1
 		for &layer in g.weather_wind do for v in layer do wind_max = max(wind_max, linalg.length(v))
 		for &layer in g.weather_gust do for v in layer do gust_min = min(gust_min, v)
+		for c in g.weather_cloud do cloud_min = min(cloud_min, c)
+		// Bilinear sampling stays between the grid values, so no edge gets more sun than solar_max.
+		solar_max := solar_kw(cloud_min)
 		// Ground speed is at most the airspeed plus the strongest wind as a pure tailwind. The boost only
 		// happens where the ground speed at v, at least v - wind_max, is below GROUND_RETRY. There
 		// sqrt(x + k) <= sqrt(x) + sqrt(k) bounds what the boost adds to sqrt(v^2 - crosswind^2).
 		airspeed := MODE_AIRSPEED
 		v := airspeed[mode]
-		per_km = mode_flight_cost(mode, v, v + wind_max, gust_min, 1)
+		per_km = mode_flight_cost(mode, v, v + wind_max, gust_min, solar_max, 1)
 		if wind_max > v - GROUND_RETRY {
 			boost := v + GROUND_RETRY_BOOST
 			boost_ground := min(boost + wind_max, GROUND_RETRY + math.sqrt(boost * boost - v * v))
-			per_km = min(per_km, mode_flight_cost(mode, boost, boost_ground, gust_min, 1))
+			per_km = min(per_km, mode_flight_cost(mode, boost, boost_ground, gust_min, solar_max, 1))
 		}
 		per_layer = math.inf_f32(1)
-		for l in 1 ..< GRID_LAYERS do per_layer = min(per_layer, mode_climb_cost(mode, abs(alt[l] - alt[l - 1])))
+		for l in 1 ..< GRID_LAYERS {
+			climb := alt[l] - alt[l - 1]
+			per_layer = min(per_layer, mode_climb_cost(mode, climb), mode_climb_cost(mode, -climb))
+		}
 	}
 	g.visit[start] = g.search
 	g.cost[start] = 0
@@ -434,12 +456,12 @@ grid_estimate :: proc(a, b: Node, per_km, per_layer: f32) -> f32 {
 }
 
 // Cost of the edge from node a to its neighbour b in the unit of the mode: seconds for Fastest and
-// Calmest, kWh for Greenest. Wind and gust are the mean of the two node centres, the weather grid is
-// 40 km so that is the value halfway. ok = false when the edge is blocked by the ground speed rules.
+// Calmest, kWh for Greenest. Wind, gust and cloud cover are the mean of the two node centres, the weather
+// grid is 40 km so that is the value halfway. ok = false when the edge is blocked by the ground speed rules.
 edge_cost :: proc(g: ^Grid, a, b: Node, mode: Route_Mode) -> (cost: f32, ok: bool) {
 	pa := grid_node_pos(a)
 	pb := grid_node_pos(b)
-	if pa.xy == pb.xy do return mode_climb_cost(mode, abs(pb.z - pa.z)), true
+	if pa.xy == pb.xy do return mode_climb_cost(mode, pb.z - pa.z), true
 
 	airspeed := MODE_AIRSPEED
 	v := airspeed[mode]
@@ -453,7 +475,9 @@ edge_cost :: proc(g: ^Grid, a, b: Node, mode: Route_Mode) -> (cost: f32, ok: boo
 		ground = ground_speed(v, wind, dir) or_return
 		if ground < GROUND_MIN do return 0, false
 	}
-	return mode_flight_cost(mode, v, ground, (g.gust[a] + g.gust[b]) * 0.5, km), true
+	gust := (g.gust[a] + g.gust[b]) * 0.5
+	cloud := (g.cloud[u32(a) % GRID_LAYER_CELLS] + g.cloud[u32(b) % GRID_LAYER_CELLS]) * 0.5
+	return mode_flight_cost(mode, v, ground, gust, solar_kw(cloud), km), true
 }
 
 // Ground speed in m/s along the unit track dir at airspeed v in wind (spec): the tailwind plus what is left
@@ -465,9 +489,10 @@ ground_speed :: proc(v: f32, wind, dir: [2]f32) -> (ground: f32, ok: bool) {
 	return linalg.dot(wind, dir) + math.sqrt(rest), true
 }
 
-// Cost of km flown at airspeed v and ground speed ground (m/s) through gust index gust (spec, per mode).
-// Rises with gust and v (Greenest) and falls with ground speed, which the A* estimate relies on.
-mode_flight_cost :: proc(mode: Route_Mode, v, ground, gust, km: f32) -> f32 {
+// Cost of km flown at airspeed v and ground speed ground (m/s) through gust index gust under solar kW of
+// sun (spec, per mode). Rises with gust and v, falls with solar (Greenest) and with ground speed, which the
+// A* estimate relies on. power_kw is above the strongest sun at every airspeed, so a cost is never negative.
+mode_flight_cost :: proc(mode: Route_Mode, v, ground, gust, solar, km: f32) -> f32 {
 	dt := km * 1000 / ground
 	switch mode {
 	case .Fastest:
@@ -475,18 +500,31 @@ mode_flight_cost :: proc(mode: Route_Mode, v, ground, gust, km: f32) -> f32 {
 	case .Calmest:
 		return dt * (1 + 7 * gust * gust)
 	case .Greenest:
-		// P(v, g) in kW. Solar yield comes with the energy item.
-		power := 3 + 0.0085 * v * v * v + 6 * gust
-		return power * dt / 3600 + 0.25 * gust * gust * km
+		return (power_kw(v, gust) - solar) * dt / 3600 + 0.25 * gust * gust * km
 	}
 	return 0
 }
 
-// Cost of a vertical edge with climb_m metres of altitude change (spec). Greenest adds the climb and
-// descent energy with the energy item.
+// Cost of a vertical edge that climbs climb_m metres, negative for a descent (spec).
 mode_climb_cost :: proc(mode: Route_Mode, climb_m: f32) -> f32 {
-	if mode == .Greenest do return 0.02
-	return 0.2 * climb_m / 3
+	if mode == .Greenest do return climb_kwh(climb_m) + 0.02
+	return 0.2 * abs(climb_m) / 3
+}
+
+// Power drawn in kW at airspeed v m/s through gust index gust 0..1 (spec P(v, g)).
+power_kw :: proc(v, gust: f32) -> f32 {
+	return 3 + 0.0085 * v * v * v + 6 * gust
+}
+
+// Solar yield in kW under cloud cover 0..1 (spec S(c)): 9 kW of film at 75 %, overcast takes 78 % of it.
+solar_kw :: proc(cloud: f32) -> f32 {
+	return 9 * 0.75 * (1 - 0.78 * cloud)
+}
+
+// Ballonet energy in kWh to change altitude by climb_m metres, negative for a descent (spec):
+// 0.12 kWh per 100 m up, 0.04 kWh per 100 m down.
+climb_kwh :: proc(climb_m: f32) -> f32 {
+	return climb_m > 0 ? 0.0012 * climb_m : -0.0004 * climb_m
 }
 
 // Gives n priority f and moves it up from its slot to its place in the open heap.

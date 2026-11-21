@@ -35,6 +35,13 @@ CASES :: [?]Case {
 		"test/data/headwind_routes.txt",
 		"test/data/headwind_routes.expected",
 	},
+	// Clouds over the shortest path: greenest flies around them for the sun, fastest does not.
+	{
+		"cloudy_routes",
+		"test/data/cloudy.snap",
+		"test/data/cloudy_routes.txt",
+		"test/data/cloudy_routes.expected",
+	},
 	// A NaN in the wind field must reject the snapshot, not reach the router.
 	{"nan_wind", "test/data/nan_wind.snap", "test/data/routes.txt", ""},
 }

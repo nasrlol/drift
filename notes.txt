@@ -142,20 +142,27 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Cost per mode (spec), edge_cost(g, a, b, mode) for neighbour nodes:
                     fastest  18 m/s  seconds          dt                                vertical 0.2 x climb m / 3
                     calmest  13 m/s  seconds          dt x (1 + 7 g^2)                  vertical 0.2 x climb m / 3
-                    greenest 11 m/s  kWh              P(v, g) dt / 3600 + 0.25 g^2 km   vertical 0.02
-                  dt = km x 1000 / ground speed, g = gust index, P = 3 + 0.0085 v^3 + 6 g kW. Wind and gust =
-                  mean of the two node centres. Greenest has no solar yield and no climb energy yet.
+                    greenest 11 m/s  kWh   (P(v, g) - S(c)) dt / 3600 + 0.25 g^2 km   vertical climb_kwh + 0.02
+                  dt = km x 1000 / ground speed, g = gust index, c = cloud cover. Wind, gust and cloud = mean of
+                  the two node centres.
+                  Energy model (spec), in route.odin, also for the ship and the metrics: BATTERY_KWH 180,
+                  BATTERY_START 0.86 (a ship leaves with 154.8 kWh), power_kw(v, g) = 3 + 0.0085 v^3 + 6 g,
+                  solar_kw(c) = 9 x 0.75 x (1 - 0.78 c) (6.75 kW clear, 1.49 kW overcast), climb_kwh(m) =
+                  0.12 kWh per 100 m up, 0.04 per 100 m down (a 250 m layer change: 0.30 / 0.10 kWh).
+                  P(11, 0) = 14.3 kW is above the strongest sun, so greenest edges never cost less than zero.
+                  Calm and clear at 11 m/s: 0.19 kWh per km, overcast 0.32.
                   Ground speed (spec), ground_speed(v, wind, dir): tailwind + sqrt(v^2 - crosswind^2) along the
                   edge. Blocked when the crosswind is stronger than v (no retry, as the spec reads). Under
                   2.5 m/s the edge is flown at v + 6 m/s (that v also goes into P for greenest), still under
                   1.5 m/s it is blocked. NaN wind blocks the edge.
                   Wind cache: grid.wind / grid.gust hold wind_at / gust_at at every node centre for one hour
-                  (12 B x 203k = 2.4 MB in World), rebuilt when the hour or that hour's forecast changes
-                  (compared to a 2.3 KB copy, so a new snapshot is picked up without a flag). The three modes
+                  (12 B x 203k = 2.4 MB in World), grid.cloud cloud_at at every cell centre (one layer, 4 B x 68k
+                  = 271 KB), rebuilt when the hour or that hour's forecast changes (compared to a 2.5 KB copy,
+                  so a new snapshot is picked up without a flag). Zero is a calm, clear hour 0. The three modes
                   and every route in the same hour share it. Build ~2.6 ms -o:speed (406k bilinear samples).
                   Estimate (grid_estimate) = octile km x lowest cost per km + layer changes x cheapest climb.
                   Lowest cost per km = the mode's cost at airspeed + the strongest wind of the hour (as a pure
-                  tailwind) and its calmest gust; bilinear sampling never leaves the range of the grid points,
+                  tailwind), its calmest gust and (greenest) its clearest sky; bilinear sampling never leaves the range of the grid points,
                   so it never overestimates with any snapshot. When the wind can push the ground speed under
                   2.5 m/s (wind_max > v - 2.5) it also takes the cost at v + 6 with ground speed at most
                   min(v + 6 + wind_max, 2.5 + sqrt((v + 6)^2 - v^2)), whichever is lower. Consistent, so an expanded node is never reopened.
@@ -164,6 +171,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   and random wind snapshots. Again with ground speed: same found / not found and cost within
                   3.2e-6 relative (f32 sums in another order) on 4455 routes: all hub pairs x 3 modes x hours
                   0 / 4 / 8 on windy.snap and headwind.snap (1607 found), 405 on random wind up to 35 m/s.
+                  Again with the energy model: 540 routes (180 random hub pairs x 3 modes, calm and clear plus
+                  5 snapshots with random wind up to 36 m/s, gust and cloud 0..1): all found by both, A* at
+                  most 0.0003 % above Dijkstra.
                   Open set: binary min-heap on f in grid.heap (fixed array, 8 B x 203k) with grid.slot
                   (index in the heap, HEAP_CLOSED once expanded) for decrease-key. No allocation during
                   the search, the path is the only allocation (route arena). Search state 24 B x 203k = 4.9 MB.
@@ -194,6 +204,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   6.3-6.8 ms, three modes 14.2-14.9 / 17.0-18.6 ms. The crosswind makes edges dearer than the
                   pure tailwind estimate, so 7-9 % more nodes are visited (fastest 15.3k -> 16.4k, calmest
                   33.7k -> 36.1k, greenest 25.8k -> 28.1k on random wind up to 21 m/s), plus a sqrt per edge.
+                  With the energy model (4-core cloud box, profile, 2 runs each, before / after): route avg
+                  7.7-8.0 / 8.0-8.2 ms, three modes 20.7-21.5 / 22.2-22.5 ms, within the noise of this box.
+                  The cloud cache adds 68k cloud_at calls (~0.7 ms) when the hour changes.
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
                   Each case = snapshot + inputs through game.headless_run, output compared line by line to the
@@ -206,7 +219,7 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
                   windy.snap: same start, every hour: 300 m wind (-4, 0), 550 m calm, 800 m (12, 0) m/s; gust 0.1,
                   0.8 on 800 m at weather grid columns x > 120 km; cloud 0.3. windy_routes.txt: 6 -> 10 in each
                   mode and 10 -> 6 fastest. Expected: fastest stays on 800 m, calmest leaves it at x 136 km,
-                  greenest at x 158 km (both where the gust ramp makes 550 m cheaper), westbound stays on 300 m.
+                  greenest at x 149 km (both where the gust ramp makes 550 m cheaper), westbound stays on 300 m.
                   no_fly.txt: Brussels inside an 8 km zone (no route from or to it), a 3 km zone on the
                   Mechelen - Leuven line (goes around), Antwerpen under a 400 m zone (leaves from layer 1),
                   Mechelen in a 2 km zone (ends at the closest free node outside it).
@@ -217,6 +230,10 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
                   headwind_routes.txt): fastest only goes east on the retry, calmest needs the retry and has no
                   south steps, greenest zigzags on the diagonals (east stays under 1.5 m/s), hour 8 greenest has
                   no safe route. Dropping the retry, the 1.5 floor or the crosswind each changes the output.
+                  cloudy.snap: same start, calm, no gust; hours 0..7 cloud 1 on the weather points x 80..200 km,
+                  y 80..120 km, 0 elsewhere, hour 8 cloud 1 everywhere. cloudy_routes.txt: greenest Oostende ->
+                  Liege flies north of the clouds (225.9 km instead of the shortest 214.7 km), fastest and
+                  greenest in uniform overcast take the shortest grid path. Without the solar term all match.
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
                   (copy a cache/weather.snap), the synthetic ones have uniform wind per layer.
 bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.
