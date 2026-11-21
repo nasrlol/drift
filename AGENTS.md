@@ -29,7 +29,18 @@ If a dependency, API, data source, file, access right, constant, unit or design 
 is missing, unclear or contradicts notes.txt or the spec:
 
 1. Open a question issue for nasr (GitHub nasrlol, owner of every question). Your human runs it,
-   or you run it if you have gh. Fill in the sections of .github/ISSUE_TEMPLATE/question.md:
+   or you run it if you have gh. Use .github/ISSUE_TEMPLATE/question.md. nasr only sees the text,
+   so write it for a person who has not seen your branch:
+   - Title: the question itself, in plain words, ending with "?".
+   - Context: one or two sentences on what you are building and why you need this.
+   - One question per issue, answerable in one line: a value, yes / no, or a letter.
+   - Options A / B, with your pick and why. Implement none of them before the answer.
+   - Code: paste the lines that matter in the issue itself, as a short ```odin block (max about ten
+     lines) with file:line above it, so nasr can answer from the text alone. Do this for the
+     BLOCKED marker, the code that needs the answer, and the spec or notes.txt line if any. Put a
+     permalink under each block. Push your branch first, then build it:
+     `echo "https://github.com/nasrlol/drift/blob/$(git rev-parse HEAD)/<file>#L<from>-L<to>"`
+   - Short: about ten lines plus links. No logs, no long code, no tool or agent names.
 
        gh issue create --repo nasrlol/drift --label question --assignee nasrlol \
          --title "Question: <what is missing>" --body-file <file>
