@@ -53,6 +53,7 @@ World :: struct {
 	drive_mode:   bool, // zero = map mode: Controls move the camera. Drive mode: Controls steer the ship
 	replay:       Replay,
 	no_fly:       [MAX_NO_FLY]No_Fly_Zone,
+	gust_zones:   [MAX_GUST_ZONES]Gust_Zone, // reported in flight, route() goes around them
 	tick:         u64,
 	accum:        f64,
 	sim_speed:    int, // index into SIM_SPEEDS, 0 = 1x

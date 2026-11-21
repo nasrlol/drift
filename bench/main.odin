@@ -62,7 +62,7 @@ main :: proc() {
 	for &p in pts do p = {rnd(&seed) * 285, rnd(&seed) * 229}
 
 	sink: f32
-	wind, gust, cloud, height, ship, route, three, load, load_map: Stat
+	wind, gust, cloud, height, ship, route, three, reroute, load, load_map: Stat
 	for round in 0 ..< ROUNDS {
 		layer, hour := round % game.WIND_LAYERS, round % game.FORECAST_HOURS
 
@@ -114,6 +114,14 @@ main :: proc() {
 		}
 		add(&three, t, 1)
 
+		// A gust cell reported half way: the blocked set and the free regions are rebuilt, then
+		// the route runs again. The zone stays until the next round, so route above never rebuilds.
+		w.gust_zones[0] = {(from.xy + to.xy) / 2, 0.26}
+		t = time.tick_now()
+		path, _ = game.route(w, from, to, .Fastest, hour)
+		add(&reroute, t, 1)
+		sink += f32(len(path))
+
 		// File read (from the page cache), sha256, validation and copy: what startup pays.
 		// It replaces the generated weather, which is put back for the next round.
 		t = time.tick_now()
@@ -145,6 +153,7 @@ main :: proc() {
 	ship_ms := report("ship_step", ship)
 	route_ms := report("route", route)
 	three_ms := report("route, three modes", three)
+	reroute_ms := report("route after gust", reroute)
 	load_ms := report("weather snapshot load", load)
 	report("load_map", load_map)
 	fmt.printfln(
@@ -166,6 +175,7 @@ main :: proc() {
 		{"ship_step", ship_ms, SHIP_STEP_BUDGET_MS},
 		{"route", route_ms, ROUTE_BUDGET_MS},
 		{"route, three modes", three_ms, THREE_MODES_BUDGET_MS},
+		{"route after gust", reroute_ms, ROUTE_BUDGET_MS},
 		{"weather snapshot load", load_ms, WEATHER_LOAD_BUDGET_MS},
 	}
 	for b in budgets {

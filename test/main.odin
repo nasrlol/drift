@@ -43,6 +43,8 @@ CASES :: [?]Case {
 		"test/data/cloudy_routes.txt",
 		"test/data/cloudy_routes.expected",
 	},
+	// A reported gust zone is avoided, closes every layer, and applies together with the no-fly zones.
+	{"gust", "test/data/calm.snap", "test/data/gust.txt", "test/data/gust.expected"},
 	// A NaN in the wind field must reject the snapshot, not reach the router.
 	{"nan_wind", "test/data/nan_wind.snap", "test/data/routes.txt", ""},
 }
