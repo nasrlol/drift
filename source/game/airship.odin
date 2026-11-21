@@ -368,9 +368,11 @@ airship_draw :: proc(w: ^World) {
 	car_draw(w, w.ship.pos, w.ship.alt, an.heading, an, CAR_PX, rl.WHITE)
 }
 
-// Other cars from the presence gossip, a bit smaller and tinted so the own car stands out.
+// Other cars from the presence gossip, a bit smaller and tinted so the own car stands out. Cars in a traffic
+// jam (TRAFFIC_MIN_CARS or more on their way within TRAFFIC_RADIUS_KM, themselves included) turn orange.
 CAR_OTHER_PX :: 80.0
 CAR_OTHER_TINT :: rl.Color{190, 205, 255, 255}
+CAR_JAM_TINT :: rl.Color{255, 150, 90, 255}
 
 others_draw :: proc(w: ^World) {
 	px: f32 = w.screen == .Navigate ? CAR_OTHER_PX : CAR_OTHER_PX * 0.6
@@ -379,6 +381,7 @@ others_draw :: proc(w: ^World) {
 			fly  = o.on_road ? 0 : 1,
 			time = w.car_anim.time + f32(o.author[0]),
 		}
-		car_draw(w, others_draw_pos(w, o), o.alt, o.heading, an, px, CAR_OTHER_TINT)
+		jam := traffic_near(w, o.pos, o.alt, o.on_road, TRAFFIC_RADIUS_KM) >= TRAFFIC_MIN_CARS
+		car_draw(w, others_draw_pos(w, o), o.alt, o.heading, an, px, jam ? CAR_JAM_TINT : CAR_OTHER_TINT)
 	}
 }

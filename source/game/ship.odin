@@ -39,6 +39,7 @@ controls_unpack :: proc(s: Control_Step) -> Controls {
 Ship_Warning :: enum {
 	Terrain,
 	No_Fly,
+	Jam, // in a traffic jam: other cars slow the ship down (ship_jam_factor)
 }
 
 // pos is km in map space (y down), alt is m, heading is radians clockwise from north (up on the map),
@@ -105,6 +106,8 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 		}
 		s.moored = false
 	}
+	// On the road (or landing on it) only the jam warning applies; in the air the warnings are rebuilt below.
+	if s.on_road || s.landing do s.warnings = ship_jam_factor(w) > 1 ? {.Jam} : {}
 	if s.landing && road_landing_step(w, c, dt) do return
 	if s.on_road && road_step(w, c, dt) do return
 
@@ -112,7 +115,8 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	s.turn_rate += (target_turn - s.turn_rate) * min(dt / SHIP_TURN_SMOOTH_S, 1)
 	s.heading = math.mod(s.heading + s.turn_rate * dt, math.TAU)
 
-	target_speed := max(c.throttle, 0) * SHIP_MAX_SPEED
+	// In a traffic jam the ship slows down like the router expects (traffic_factor).
+	target_speed := max(c.throttle, 0) * SHIP_MAX_SPEED / ship_jam_factor(w)
 	if target_speed > s.speed {
 		s.speed = min(s.speed + SHIP_ACCEL * dt, target_speed)
 	} else {
@@ -158,6 +162,8 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 		}
 	}
 
+	if ship_jam_factor(w) > 1 do s.warnings += {.Jam}
+
 	road_try_land(w, c)
 	if s.landing do return
 
@@ -172,4 +178,11 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 			break
 		}
 	}
+}
+
+// How much the other cars around the ship slow it down: 1 when the way is free (see traffic_factor).
+ship_jam_factor :: proc(w: ^World) -> f32 {
+	if w.other_count == 0 do return 1
+	s := &w.ship
+	return traffic_factor(u8(min(traffic_near(w, s.pos, s.alt, s.on_road, TRAFFIC_RADIUS_KM), 255)))
 }

@@ -2,6 +2,7 @@
 package game
 
 import "core:crypto/ed25519"
+import "core:fmt"
 import "core:math"
 import "core:mem"
 import "core:net"
@@ -98,6 +99,7 @@ presence_put :: proc(t: ^Presence_Table, p: ^Presence) {
 		if q.magic == 0 || q.time_ms < t.slots[oldest].time_ms do oldest = i
 	}
 	t.slots[oldest] = p^
+	fmt.eprintfln("[net] presence: car %016x appeared", key_short(p.author))
 }
 
 // The fresh positions to hand out, own one first, at most len(out).

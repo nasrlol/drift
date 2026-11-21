@@ -1,0 +1,29 @@
+# Traffic jams: other cars from the presence gossip (car <x> <y> <alt m>). Brussels -> Gent at hour 3, then
+# 24 cars along 3 km of the way at 300 m. In the open air the routes go round the jam (the fastest one
+# passes 3 route points within 1 km of a car instead of 19).
+plan 5 9 3
+car 128.00 68.50 300
+car 127.96 68.41 300
+car 127.92 68.32 300
+car 127.72 68.22 300
+car 127.68 68.13 300
+car 127.64 68.04 300
+car 127.45 67.95 300
+car 127.40 67.85 300
+car 127.36 67.76 300
+car 127.17 67.67 300
+car 127.13 67.58 300
+car 127.09 67.49 300
+car 126.89 67.39 300
+car 126.85 67.30 300
+car 126.81 67.21 300
+car 126.62 67.12 300
+car 126.57 67.02 300
+car 126.53 66.93 300
+car 126.34 66.84 300
+car 126.30 66.75 300
+car 126.26 66.66 300
+car 126.06 66.56 300
+car 126.02 66.47 300
+car 125.98 66.38 300
+plan 5 9 3

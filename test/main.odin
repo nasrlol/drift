@@ -54,6 +54,7 @@ CASES :: [?]Case {
 	// The airship as a flying car: lands on the nearest road, follows one-way edges, turns at junctions by
 	// the turn input, stops nowhere off the graph; far from any road it does not land.
 	{"drive", "test/data/calm.snap", "test/data/drive.txt", "test/data/drive.expected"},
+	{"traffic", "test/data/calm.snap", "test/data/traffic.txt", "test/data/traffic.expected"},
 	// A NaN in the wind field must reject the snapshot, not reach the router.
 	{"nan_wind", "test/data/nan_wind.snap", "test/data/routes.txt", ""},
 }

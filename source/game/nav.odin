@@ -244,6 +244,10 @@ evaluate :: proc(
 			tail_sum += linalg.dot(wind, dir) * km * 1000 / ground
 		}
 		dt := max(km * 1000 / ground, abs(dz) / EVAL_CLIMB_MS)
+		// A traffic jam slows the piece down as much as it costs the router (traffic_factor).
+		if w.grid.traffic_any {
+			if n, ok := grid_node_at(mid); ok do dt *= traffic_factor(w.grid.traffic[n])
+		}
 		s.seconds += dt
 		s.km += km
 		s.used_kwh += power_kw(v, gust) * dt / 3600 + climb_kwh(dz)

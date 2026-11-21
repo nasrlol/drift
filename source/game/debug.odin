@@ -210,6 +210,26 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 			}
 			w.gust_zones[slot] = {{x, y}, radius}
 			fmt.sbprintfln(out, "gust %d: %.3f %.3f radius %.3f km", slot, x, y, radius)
+		case "car":
+			// car <x km> <y km> <alt m>: another car from the presence gossip, for the traffic jam cost.
+			x, x_ok := strconv.parse_f32(f[1])
+			y, y_ok := strconv.parse_f32(f[2])
+			alt, alt_ok := strconv.parse_f32(f[3])
+			if n != 4 || !x_ok || !y_ok || !alt_ok || !(abs(x) < 1e6 && abs(y) < 1e6 && abs(alt) < 1e5) {
+				logf(w, "headless", "inputs line %d: %q, want: car <x km> <y km> <alt m>", line_no, raw)
+				return false
+			}
+			if w.other_count == len(w.others) {
+				logf(w, "headless", "inputs line %d: already %d cars", line_no, len(w.others))
+				return false
+			}
+			w.others[w.other_count] = {
+				pos = {x, y},
+				alt = alt,
+			}
+			w.others[w.other_count].author[0] = u8(w.other_count)
+			w.other_count += 1
+			fmt.sbprintfln(out, "car %d: %.3f %.3f alt %.0f m", w.other_count - 1, x, y, alt)
 		case "plan":
 			// plan <from hub> <to hub> <hour>: the three routes of the plan screen with their summaries and
 			// maneuvers, as nav.odin plans them.

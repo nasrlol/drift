@@ -377,8 +377,17 @@ nav_ui :: proc(w: ^World) {
 	}
 
 	// Warning pill, centred 170 px from the top.
-	if warning := cstr(n.warning[:]); warning != "" || .No_Fly in s.warnings || .Terrain in s.warnings {
-		if warning == "" do warning = .No_Fly in s.warnings ? "Inside a no-fly zone, climb or leave it" : "Close to the ground, climb"
+	if warning := cstr(n.warning[:]); warning != "" || s.warnings != {} {
+		if warning == "" {
+			switch {
+			case .No_Fly in s.warnings:
+				warning = "Inside a no-fly zone, climb or leave it"
+			case .Terrain in s.warnings:
+				warning = "Close to the ground, climb"
+			case:
+				warning = "Traffic jam, slowing down"
+			}
+		}
 		size := ui_text_size(w, warning, .Figtree_600, 15)
 		box := rl.Rectangle {
 			(f32(rl.GetScreenWidth()) - size.x - 50) / 2,

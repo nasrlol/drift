@@ -133,6 +133,57 @@ Grid :: struct {
 	weather_cloud: [WEATHER_CELLS]f32,
 	terrain_built: bool,
 	blocked_built: bool,
+	// Other cars near each node (traffic_build): a node with TRAFFIC_MIN_CARS or more is a traffic jam and
+	// costs more to cross. traffic_any = some node has a jam, so the cost needs a look at all.
+	traffic:       [GRID_NODES]u8,
+	traffic_any:   bool,
+}
+
+// Traffic jams (Lars, 2026-11-21: many cars close together is a jam). Each other flying car (w.others) counts
+// for the nodes within TRAFFIC_RADIUS_KM in its own layer; cars on the road below do not block the sky. From TRAFFIC_MIN_CARS on, crossing a node costs
+// 1 + TRAFFIC_COST_PER_CAR per car over the minimum, at most TRAFFIC_MAX_FACTOR times as much. Never cheaper,
+// so the A* estimate stays a lower bound. Our values, not from the spec.
+TRAFFIC_RADIUS_KM :: 1.0
+TRAFFIC_MIN_CARS :: 4
+TRAFFIC_COST_PER_CAR :: 0.5
+TRAFFIC_MAX_FACTOR :: 4.0
+
+traffic_factor :: proc(cars: u8) -> f32 {
+	if cars < TRAFFIC_MIN_CARS do return 1
+	return min(1 + TRAFFIC_COST_PER_CAR * f32(cars - TRAFFIC_MIN_CARS + 1), TRAFFIC_MAX_FACTOR)
+}
+
+// Counts the other cars around every node. Cleared and rebuilt per route: a few hundred cars at most.
+traffic_build :: proc(w: ^World, g: ^Grid) {
+	if g.traffic_any || w.other_count > 0 do g.traffic = {}
+	g.traffic_any = false
+	R := int(math.ceil(f32(TRAFFIC_RADIUS_KM) / GRID_CELL_KM))
+	for o in w.others[:w.other_count] {
+		if o.on_road do continue
+		layer := layer_at(o.alt)
+		cx, cy := int(o.pos.x / GRID_CELL_KM), int(o.pos.y / GRID_CELL_KM)
+		for y in max(cy - R, 0) ..= min(cy + R, GRID_H - 1) {
+			for x in max(cx - R, 0) ..= min(cx + R, GRID_W - 1) {
+				centre := ([2]f32{f32(x), f32(y)} + 0.5) * GRID_CELL_KM
+				if linalg.length(centre - o.pos) > TRAFFIC_RADIUS_KM do continue
+				n := grid_node({x, y, layer})
+				if g.traffic[n] < 255 do g.traffic[n] += 1
+				if g.traffic[n] >= TRAFFIC_MIN_CARS do g.traffic_any = true
+			}
+		}
+	}
+}
+
+// Cars within radius_km of pos that share the way: on the road too, or flying in the same layer. For the
+// ship's own speed in a jam and the jam warning.
+traffic_near :: proc(w: ^World, pos: [2]f32, alt: f32, on_road: bool, radius_km: f32) -> int {
+	count := 0
+	layer := layer_at(alt)
+	for o in w.others[:w.other_count] {
+		if o.on_road != on_road || (!on_road && layer_at(o.alt) != layer) do continue
+		if linalg.length(o.pos - pos) <= radius_km do count += 1
+	}
+	return count
 }
 
 // f = cost + estimate to the goal, the key of the open heap.
@@ -229,6 +280,7 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 	}
 	g.heap_len = 0
 	g.expanded_len = 0
+	traffic_build(w, g)
 
 	alt := LAYER_ALT
 	if !g.terrain_built {
@@ -620,6 +672,7 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 				// ok = false: blocked by the ground speed rules.
 				step = flight_cost(mode, wind, unit[k], gust, cloud, km[k]) or_continue
 			}
+			if g.traffic_any do step *= traffic_factor(g.traffic[next])
 			cost := g.cost[n] + step
 			if g.visit[next] == g.search {
 				if g.slot[next] == HEAP_CLOSED || cost >= g.cost[next] do continue
@@ -696,7 +749,8 @@ line_cost :: proc(g: ^Grid, a, b: [3]f32, mode: Route_Mode) -> (cost: f32, free:
 		if grid_blocked(g, n) do return 0, false
 		reach := min(next.x, next.y, total)
 		cloud := g.cloud[u32(n) % GRID_LAYER_CELLS]
-		cost += flight_cost(mode, g.wind[n], dir, g.gust[n], cloud, reach - done) or_return
+		piece := flight_cost(mode, g.wind[n], dir, g.gust[n], cloud, reach - done) or_return
+		cost += g.traffic_any ? piece * traffic_factor(g.traffic[n]) : piece
 		if reach >= total do return cost, true
 		done = reach
 		if abs(next.x - next.y) < CORNER_KM {

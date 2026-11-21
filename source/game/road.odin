@@ -99,8 +99,9 @@ ROAD_LIFT_MS :: 4.0
 ROAD_ALIGN_S :: 2.5
 
 // Throttle on the ground: the same acceleration and limits as flying.
-road_speed :: proc(s: ^Ship, c: Controls, dt: f32) {
-	target := max(c.throttle, 0) * SHIP_MAX_SPEED
+road_speed :: proc(w: ^World, c: Controls, dt: f32) {
+	s := &w.ship
+	target := max(c.throttle, 0) * SHIP_MAX_SPEED / ship_jam_factor(w)
 	if target > s.speed {
 		s.speed = min(s.speed + SHIP_ACCEL * dt, target)
 	} else {
@@ -134,7 +135,7 @@ road_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
 		s.lifting = true
 		return false
 	}
-	road_speed(s, c, dt)
+	road_speed(w, c, dt)
 	road_advance(w, c, dt)
 	s.pos, s.heading = road_at(w, s.road_edge, s.road_s)
 	s.alt = height_at(w, s.pos.x, s.pos.y)
@@ -154,7 +155,7 @@ road_landing_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
 		s.landing = false
 		return false
 	}
-	road_speed(s, c, dt)
+	road_speed(w, c, dt)
 	road_advance(w, c, dt)
 	goal, h := road_at(w, s.road_edge, s.road_s)
 	k := min(dt / ROAD_ALIGN_S, 1)
