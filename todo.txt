@@ -111,6 +111,14 @@ DARIO: SHIP + CONTROLS
 [x] drive mode: Controls go to ship_step, camera follows ship, key to switch back to map mode
 [x] record Controls per step for replay (flat array, a few bytes per step)
 [x] bench: ship_step cost per step
+extra:
+[ ] real no-fly zones: bake airports (CTR), nuclear plants, military areas from one pinned source
+    (skeyes eAIP ENR 5.1, dated AIRAC cycle) into belgium.bin, lat / lon -> km with the map projection,
+    ceilings ft -> m, circles (polygons approximated). Copy them into w.no_fly at startup, raise MAX_NO_FLY
+    or keep baked zones in their own array. Source, date and license in notes.txt.
+[ ] test case with the real baked no-fly zones (after the item above), e.g. a route past Brussels Airport
+    at x 149.0, y 73.4 km. The zones in test/data/no_fly.txt are made-up (#52). Expected files change only
+    with the owner's approval.
 design (airship.odin = model + drawing, camera.odin = camera, pilot_ui.odin = flying controls on screen):
 [ ] airship model: low-poly mesh built once at startup, sizes and colors from the design doc
 [ ] airship draw: heading + crab angle into the wind, bank in turns, props spin with speed, nav lights
