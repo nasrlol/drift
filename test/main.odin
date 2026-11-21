@@ -155,7 +155,12 @@ run_scan_order :: proc() -> bool {
 			for p in path[1:len(path) - 1] {
 				n, _ := game.grid_node_at(p)
 				if !seen[n] {
-					fmt.printfln("test scan_order: route %d -> %d: path node %v not in the scan", from, to, n)
+					fmt.printfln(
+						"test scan_order: route %d -> %d: path node %v not in the scan",
+						from,
+						to,
+						n,
+					)
 					return false
 				}
 			}
