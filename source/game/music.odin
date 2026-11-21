@@ -2,6 +2,7 @@
 package game
 
 import "core:math"
+import "core:mem/virtual"
 import "core:os"
 import "core:strings"
 import rl "vendor:raylib"
@@ -20,6 +21,8 @@ MUSIC_ECHO_MAX :: 32768 // frames per echo channel
 MUSIC_BEAT_FRAMES :: MUSIC_RATE * 60 / MUSIC_BPM
 MUSIC_ECHO_FRAMES :: MUSIC_BEAT_FRAMES * 3 / 4 // a dotted eighth
 #assert(MUSIC_ECHO_FRAMES < MUSIC_ECHO_MAX)
+MUSIC_PAD_FADE_S :: 0.6
+MUSIC_KICK_SWEEP_HZ :: 75.0
 
 // MIDI notes per chord: bass, then the three pad tones (the arpeggio plays them an octave up).
 MUSIC_CHORDS :: [4][4]int {
@@ -46,8 +49,9 @@ Soundtrack :: struct {
 // Opens the audio device and starts the stream (window up, not headless).
 music_start :: proc(w: ^World) {
 	m := &w.music
-	// Off by default (nasr, 2026-11-21), on only when N saved "on".
-	data, err := os.read_entire_file(MUSIC_PATH, context.temp_allocator)
+	// Off by default (nasr, 2026-11-21), on only when N saved "on". game_init runs before game_update points
+	// context.temp_allocator at the frame arena.
+	data, err := os.read_entire_file(MUSIC_PATH, virtual.arena_allocator(&w.frame))
 	m.off = err != nil || strings.trim_space(string(data)) != "on"
 	if !rl.IsAudioDeviceReady() do rl.InitAudioDevice()
 	if !rl.IsAudioDeviceReady() {
@@ -118,6 +122,14 @@ music_tone :: proc(hz, t: f64) -> f64 {
 	return math.sin(p) + 0.25 * math.sin(2 * p) + 0.08 * math.sin(3 * p)
 }
 
+music_pad :: proc(pad: ^[2]f64, chord: [4]int, t, gain: f64) {
+	for k in 1 ..< 4 {
+		hz := music_hz(chord[k])
+		pad[0] += music_tone(hz * 0.997, t) * gain
+		pad[1] += music_tone(hz * 1.003, t) * gain
+	}
+}
+
 music_fill :: proc(m: ^Soundtrack) {
 	chords := MUSIC_CHORDS
 	arp := MUSIC_ARP
@@ -131,17 +143,15 @@ music_fill :: proc(m: ^Soundtrack) {
 		chord := chords[chord_i]
 		tc := math.mod(t, chord_s)
 
-		// Pad: two detuned voices per tone, faded in and out round each chord change, slowly breathing.
+		// Pad: two detuned voices per tone, cross-faded from the last chord over MUSIC_PAD_FADE_S, slowly
+		// breathing.
 		pad: [2]f64
-		fade := min(tc / 0.6, 1) * min((chord_s - tc) / 0.4, 1)
+		fade := min(tc / MUSIC_PAD_FADE_S, 1)
 		breath := 0.8 + 0.2 * math.sin(math.TAU * t / (chord_s / 2))
-		for k in 1 ..< 4 {
-			hz := music_hz(chord[k])
-			pad[0] += music_tone(hz * 0.997, t)
-			pad[1] += music_tone(hz * 1.003, t)
-		}
+		music_pad(&pad, chord, t, fade)
+		if fade < 1 && t >= chord_s do music_pad(&pad, chords[(chord_i + 3) % 4], t, 1 - fade)
 		for c in 0 ..< 2 {
-			m.pad_lp[c] += (f32(pad[c] * fade * breath) - m.pad_lp[c]) * 0.06
+			m.pad_lp[c] += (f32(pad[c] * breath) - m.pad_lp[c]) * 0.06
 		}
 
 		// Bass on beats 1 and 3.
@@ -163,9 +173,11 @@ music_fill :: proc(m: ^Soundtrack) {
 		white := f64(m.noise) / f64(max(u32)) * 2 - 1
 		hat := eighth % 2 == 1 ? white * math.exp(-te * 70) : 0
 
-		// Soft kick on the first beat of every bar: a falling sine.
+		// Soft kick on the first beat of every bar: a sine falling from 45 + MUSIC_KICK_SWEEP_HZ to 45 Hz. The phase
+		// is the integral of that pitch.
 		tk := math.mod(t, beat_s * 4)
-		kick := math.sin(math.TAU * (45 * tk + 40 * (1 - math.exp(-tk * 30)))) * math.exp(-tk * 9)
+		sweep := MUSIC_KICK_SWEEP_HZ / 30 * (1 - math.exp(-tk * 30))
+		kick := math.sin(math.TAU * (45 * tk + sweep)) * math.exp(-tk * 9)
 
 		at := m.echo_at
 		from := (at - MUSIC_ECHO_FRAMES + MUSIC_ECHO_MAX) % MUSIC_ECHO_MAX
