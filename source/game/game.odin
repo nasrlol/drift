@@ -13,6 +13,8 @@ import rl "vendor:raylib"
 SIM_HZ :: 60
 SIM_DT :: 1.0 / SIM_HZ
 MAX_FRAME_DT :: 0.25
+// Keys 1..4. More simulated time per frame means more fixed steps, dt stays SIM_DT.
+SIM_SPEEDS :: [4]f64{1, 5, 15, 40}
 
 // Camera: zoom is log2 relative to the fitted view, so zero is the whole map.
 ZOOM_MIN :: -1
@@ -48,6 +50,7 @@ World :: struct {
 	no_fly:       [MAX_NO_FLY]No_Fly_Zone,
 	tick:         u64,
 	accum:        f64,
+	sim_speed:    int, // index into SIM_SPEEDS, 0 = 1x
 	prof:         Profiler,
 	view:         View,
 }
@@ -118,7 +121,11 @@ game_update :: proc(memory: rawptr) -> bool {
 	weather_poll(w)
 	w.controls = read_controls()
 
-	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT)
+	for key, i in ([?]rl.KeyboardKey{.ONE, .TWO, .THREE, .FOUR}) {
+		if rl.IsKeyPressed(key) do w.sim_speed = i
+	}
+	speeds := SIM_SPEEDS
+	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT) * speeds[w.sim_speed]
 	for w.accum >= SIM_DT {
 		ship_step(w, w.controls, SIM_DT)
 		w.tick += 1
