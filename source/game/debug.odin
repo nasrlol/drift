@@ -54,6 +54,7 @@ ROUTE_MODE_NAMES :: [Route_Mode]string {
 // out only holds deterministic text (no timings), so it can be compared byte for byte.
 // Inputs, one command per line, # starts a comment:
 //   route <from hub> <to hub> <fastest|greenest|calmest> <hour 0..8>
+//   no_fly <x km> <y km> <radius km> <ceiling m>   adds a zone to the first free slot of w.no_fly
 headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strings.Builder) -> bool {
 	t := prof_begin()
 	weather_ok := weather_load_snapshot(w, snapshot_path)
@@ -138,6 +139,46 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 			for i in 1 ..< len(path) do km += linalg.length(path[i].xy - path[i - 1].xy)
 			fmt.sbprintfln(out, "%d points, %.3f km", len(path), km)
 			for p in path do fmt.sbprintfln(out, "  %.3f %.3f %.1f", p.x, p.y, p.z)
+		case "no_fly":
+			x, x_ok := strconv.parse_f32(f[1])
+			y, y_ok := strconv.parse_f32(f[2])
+			radius, radius_ok := strconv.parse_f32(f[3])
+			ceiling, ceiling_ok := strconv.parse_f32(f[4])
+			parsed := n == 5 && x_ok && y_ok && radius_ok && ceiling_ok
+			// NaN fails every comparison, Inf fails the upper limits.
+			sane := abs(x) < 1e6 && abs(y) < 1e6 && radius > 0 && radius < 1e6
+			sane = sane && ceiling > 0 && ceiling < 1e6
+			if !parsed || !sane {
+				logf(
+					w,
+					"headless",
+					"inputs line %d: %q, want: no_fly <x km> <y km> <radius km > 0> <ceiling m > 0>",
+					line_no,
+					raw,
+				)
+				return false
+			}
+			slot := -1
+			for z, i in w.no_fly {
+				if z.radius == 0 {
+					slot = i
+					break
+				}
+			}
+			if slot < 0 {
+				logf(w, "headless", "inputs line %d: already %d no-fly zones", line_no, MAX_NO_FLY)
+				return false
+			}
+			w.no_fly[slot] = {{x, y}, radius, ceiling}
+			fmt.sbprintfln(
+				out,
+				"no_fly %d: %.3f %.3f radius %.3f km below %.0f m",
+				slot,
+				x,
+				y,
+				radius,
+				ceiling,
+			)
 		case:
 			logf(w, "headless", "inputs line %d: unknown command %q", line_no, f[0])
 			return false
@@ -262,6 +303,33 @@ dump_world :: proc(w: ^World, out: ^strings.Builder) {
 			max_gust,
 			cloud / WEATHER_CELLS,
 		)
+	}
+
+	for z, i in w.no_fly {
+		if z.radius == 0 do continue
+		fmt.sbprintfln(
+			out,
+			"no_fly %d: %.3f %.3f radius %.3f km below %.0f m",
+			i,
+			z.center.x,
+			z.center.y,
+			z.radius,
+			z.ceiling,
+		)
+	}
+	if w.grid.terrain_built && w.grid.blocked_built {
+		count: [GRID_LAYERS]int
+		for n in 0 ..< GRID_NODES do count[n / GRID_LAYER_CELLS] += grid_blocked(&w.grid, Node(n)) ? 1 : 0
+		changed := w.grid.blocked_zones != w.no_fly
+		fmt.sbprintfln(
+			out,
+			"blocked nodes per layer %v of %d%s",
+			count,
+			GRID_LAYER_CELLS,
+			changed ? ", no-fly zones changed since, rebuilt by the next route" : "",
+		)
+	} else {
+		fmt.sbprintln(out, "blocked set not built yet, the next route builds it")
 	}
 
 	fmt.sbprintfln(
