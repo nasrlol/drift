@@ -19,6 +19,7 @@ World :: struct {
 	// sha256 of weather, identifies the snapshot (carpool offers will carry it)
 	weather_hash: [32]u8,
 	fetch:        Fetch,
+	grid:         Grid,
 	tick:         u64,
 	accum:        f64,
 }
