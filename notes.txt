@@ -106,6 +106,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   (max wind per layer, max gust, mean cloud) and arena used / reserved. No timings, so two dumps
                   of the same run are identical. F5 in the app prints it to stdout, --dump in headless mode.
                   Windows release is -subsystem:windows and has no console: use the debug or profile exe there.
+  ship.odin       Controls struct: throttle, turn, climb, each -1..1, zero = neutral. Filled by input, read by ship_step.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   Path lives in w.route_mem until the next call: from, the centres of the grid nodes
