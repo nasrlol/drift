@@ -9,15 +9,10 @@ WIND_LIFE_S :: 3.0
 WIND_PX_PER_MS :: 4.0
 WIND_TRAIL_S :: 0.8 // trail length = the distance covered in this time
 WIND_WIDTH_PX :: 2.0
-// Ground layers and wind fade out over this distance to the map edge, so the edge of the data is no hard square.
-EDGE_FADE_KM :: 15.0
-
-// 1 inside the map, falling to 0 at its edge over EDGE_FADE_KM.
-map_edge_fade :: proc(x, y: f32) -> f32 {
-	d := min(min(x, MAP_W_KM - x), min(y, MAP_H_KM - y))
-	return clamp(d / EDGE_FADE_KM, 0, 1)
-}
 WIND_CALM_MS :: 0.5 // slower particles are not drawn
+// Random spawn points tried per particle until one lies in Belgium. In a view that is half abroad, 1 in 256
+// particles misses and waits a frame.
+WIND_SPAWN_TRIES :: 8
 
 // Drawing only, never read by the simulation, so frame time is fine here. Positions in km, spread over the
 // visible part of the map; a particle respawns there when it leaves the view or gets older than WIND_LIFE_S.
@@ -314,8 +309,8 @@ void main() {
 	int k = gl_VertexID % 6;
 	int ci = int(vertexColor.r * 255.0 + 0.5);
 	float width = widths[ci];
-	vec4 a = mvp * vec4(vertexPosition.xy, 0.0, 1.0);
-	vec4 b = mvp * vec4(vertexNormal.xy, 0.0, 1.0);
+	vec4 a = mvp * vec4(vertexPosition, 1.0);
+	vec4 b = mvp * vec4(vertexNormal, 1.0);
 	if (a.w < 0.001 || b.w < 0.001 || width <= 0.0) {
 		gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 		fragColor = vec4(0.0);

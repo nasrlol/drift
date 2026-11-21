@@ -121,7 +121,8 @@ collide_car :: proc(w: ^World, pos: [2]f32, hag, radius_m: f32) -> (push: [2]f32
 		for cx in x0 ..= x1 {
 			c := cy * COLLIDE_TRI_W + cx
 			for item in co.tri_items[co.tri_cells[c]:co.tri_cells[c + 1]] {
-				p0, p1, p2 := w.m.area_points[item[1]], w.m.area_points[item[1] + 1], w.m.area_points[item[1] + 2]
+				p0, p1, p2 :=
+					w.m.area_points[item[1]], w.m.area_points[item[1] + 1], w.m.area_points[item[1] + 2]
 				seed, ax, ay := town_lattice(int(item[0]))
 				u := i32(math.floor(linalg.dot(pos, ax) / lot))
 				v := i32(math.floor(linalg.dot(pos, ay) / lot))
@@ -222,7 +223,13 @@ collide_build :: proc(w: ^World) {
 		total_v += int(c.vertex_count)
 	}
 	if len(data) != off + total_b * 2 + total_v * 4 {
-		logf(w, "collide", "buildings.bin: %d bytes, the header says %d", len(data), off + total_b * 2 + total_v * 4)
+		logf(
+			w,
+			"collide",
+			"buildings.bin: %d bytes, the header says %d",
+			len(data),
+			off + total_b * 2 + total_v * 4,
+		)
 		return
 	}
 	counts_b := data[off:][:total_b]

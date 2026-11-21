@@ -5,10 +5,9 @@ import "core:math"
 import "core:math/linalg"
 import rl "vendor:raylib"
 
-// Camera: zoom is log2 relative to the fitted view, so zero is the whole map. The lowest zoom is not a constant:
-// cam_min_zoom fits Belgium into the free part of the screen, never further out (Lars, 2026-11-21: no looking
-// past the country). ZOOM_MIN only bounds glides before that is known.
-ZOOM_MIN :: -1
+// Camera: zoom is log2 relative to the fitted Belgium view, so zero is all of Belgium and negative zooms
+// pull back to the 3D Earth globe (ZOOM_MIN fits the whole globe).
+ZOOM_MIN :: -6.2
 ZOOM_MAX :: 7
 WHEEL_ZOOM_STEP :: 0.25
 ZOOM_PER_S :: 2
@@ -27,14 +26,15 @@ CAM_CHASE_AHEAD :: 0.18
 // Following the ship: the camera closes this share of the gap per second (a small lag, turns with the ship).
 CAM_FOLLOW_RATE :: 4.0
 
-// Where the camera looks: pan = km from the map centre to the point under the screen centre, zoom, yaw (radians
-// clockwise, the map direction shown at the top of the screen) and tilt (0 = straight down). Zero is the whole
-// map, north up, from above.
+// Where the camera looks: pan = km from the map centre to the point under the screen centre (in Belgium),
+// globe_rot = (lon, lat) radians away from Belgium when orbiting the globe, zoom, yaw (radians clockwise)
+// and tilt (0 = straight down). Zero is the whole Belgium map, north up, from above.
 Cam_Pose :: struct {
-	pan:  [2]f32,
-	zoom: f32,
-	yaw:  f32,
-	tilt: f32,
+	pan:       [2]f32,
+	globe_rot: [2]f32,
+	zoom:      f32,
+	yaw:       f32,
+	tilt:      f32,
 }
 
 Cam_Mode :: enum u8 {
@@ -86,17 +86,42 @@ cam_fit_scale :: proc(screen: [2]f32) -> f32 {
 }
 
 // The raylib camera for a pose. World space is (x km, y km, -altitude km): x east, y south, z down, so the
-// raylib right-handed look-at keeps east on the right.
+// raylib right-handed look-at keeps east on the right. At globe_rot = 0 and zoom >= 0 it sits over Belgium's
+// flat z = 0 plane; negative zooms or non-zero globe_rot orbit the Earth sphere tangent to Belgium's centre.
 cam_build :: proc(p: Cam_Pose, screen: [2]f32) -> (view: rl.Camera3D, px_per_km: f32) {
 	px_per_km = cam_fit_scale(screen) * math.pow(f32(2), p.zoom)
 	dist := screen.y / (2 * math.tan(f32(CAM_FOV_DEG) * math.RAD_PER_DEG / 2) * px_per_km)
-	target := [2]f32{MAP_W_KM, MAP_H_KM} / 2 + p.pan
-	fwd := [2]f32{math.sin(p.yaw), -math.cos(p.yaw)}
 	st, ct := math.sin(p.tilt), math.cos(p.tilt)
+	if p.globe_rot == {} && p.zoom >= 0 {
+		target := [2]f32{MAP_W_KM, MAP_H_KM} / 2 + p.pan
+		fwd := [2]f32{math.sin(p.yaw), -math.cos(p.yaw)}
+		view = {
+			position   = {target.x - fwd.x * dist * st, target.y - fwd.y * dist * st, -dist * ct},
+			target     = {target.x, target.y, 0},
+			up         = {fwd.x * ct, fwd.y * ct, -st},
+			fovy       = CAM_FOV_DEG,
+			projection = .PERSPECTIVE,
+		}
+		return
+	}
+
+	lon := BELGIUM_LON0 + p.globe_rot.x * math.DEG_PER_RAD
+	lat := clamp(BELGIUM_LAT0 + p.globe_rot.y * math.DEG_PER_RAD, -85, 85)
+	n := globe_normal(lon, lat)
+	phi0 := f32(BELGIUM_LAT0 * math.RAD_PER_DEG)
+	north_axis := [3]f32{0, -math.cos(phi0), -math.sin(phi0)}
+	east := linalg.normalize(linalg.cross(n, north_axis))
+	south := linalg.normalize(linalg.cross(east, n))
+
+	// Blend Belgium's flat pan out as zoom drops below 0 so zooming out to space stays smooth.
+	pan_w := clamp(p.zoom + 1, 0, 1)
+	ec := earth_centre()
+	target := ec + n * EARTH_RADIUS_KM + (east * p.pan.x + south * p.pan.y) * pan_w
+	fwd := east * math.sin(p.yaw) - south * math.cos(p.yaw)
 	view = {
-		position   = {target.x - fwd.x * dist * st, target.y - fwd.y * dist * st, -dist * ct},
-		target     = {target.x, target.y, 0},
-		up         = {fwd.x * ct, fwd.y * ct, -st},
+		position   = target + n * (dist * ct) - fwd * (dist * st),
+		target     = target,
+		up         = fwd * ct + n * st,
 		fovy       = CAM_FOV_DEG,
 		projection = .PERSPECTIVE,
 	}
@@ -219,6 +244,7 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 	dt := min(rl.GetFrameTime(), MAX_FRAME_DT)
 	c.screen = {f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 	c.view, c.px_per_km = cam_build(c.pose, c.screen)
+	pan0 := c.pose.pan // where the screen centre was last frame, over Belgium (see the end)
 
 	// Input. The keyboard / stick pan only on the plan screen (in navigation they steer the ship).
 	{
@@ -242,7 +268,29 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 			// Screen pixels to km on the ground, turned by the yaw.
 			s, co := math.sin(c.pose.yaw), math.cos(c.pose.yaw)
 			v := pan_px / c.px_per_km
-			c.pose.pan += {v.x * co - v.y * s, v.x * s + v.y * co}
+			move := [2]f32{v.x * co - v.y * s, v.x * s + v.y * co}
+			if c.pose.zoom < 0 || c.pose.globe_rot != {} {
+				lat_rad := clamp(
+					BELGIUM_LAT0 * math.RAD_PER_DEG + c.pose.globe_rot.y,
+					-85 * math.RAD_PER_DEG,
+					85 * math.RAD_PER_DEG,
+				)
+				c.pose.globe_rot.x =
+					math.mod(
+						c.pose.globe_rot.x +
+						move.x / (EARTH_RADIUS_KM * max(math.cos(lat_rad), 0.15)) +
+						3 * math.PI,
+						math.TAU,
+					) -
+					math.PI
+				lo_lat := f32(-85 * math.RAD_PER_DEG - BELGIUM_LAT0 * math.RAD_PER_DEG)
+				hi_lat := f32(85 * math.RAD_PER_DEG - BELGIUM_LAT0 * math.RAD_PER_DEG)
+				c.pose.globe_rot.y = clamp(c.pose.globe_rot.y - move.y / EARTH_RADIUS_KM, lo_lat, hi_lat)
+				// Snap cleanly back onto Belgium when panning near it at zoom >= -0.25.
+				if c.pose.zoom >= -0.25 && linalg.length(c.pose.globe_rot) < 0.015 do c.pose.globe_rot = {}
+			} else {
+				c.pose.pan += move
+			}
 			c.glide_dur = 0
 		}
 		if wheel := rl.GetMouseWheelMove(); mouse_free && wheel != 0 {
@@ -251,6 +299,7 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 	}
 
 	if c.zooming {
+		use_anchor := c.mode == .Free && c.pose.globe_rot == {} && c.pose.zoom >= 0 && c.zoom_goal >= 0
 		before, before_ok := cam_ground_at(w, c.zoom_anchor)
 		k := 1 - math.exp(-dt * 5 / CAM_ZOOM_GLIDE_S)
 		c.pose.zoom += (c.zoom_goal - c.pose.zoom) * k
@@ -258,9 +307,15 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 			c.pose.zoom = c.zoom_goal
 			c.zooming = false
 		}
+		if c.pose.zoom < 0 {
+			c.pose.pan *= 1 - k
+		} else if c.pose.globe_rot != {} && linalg.length(c.pose.globe_rot) < 0.03 {
+			c.pose.globe_rot *= 1 - k
+			if linalg.length(c.pose.globe_rot) < 1e-4 do c.pose.globe_rot = {}
+		}
 		c.view, c.px_per_km = cam_build(c.pose, c.screen)
 		after, after_ok := cam_ground_at(w, c.zoom_anchor)
-		if before_ok && after_ok && c.mode == .Free do c.pose.pan += before - after
+		if use_anchor && before_ok && after_ok do c.pose.pan += before - after
 	}
 
 	switch c.mode {
@@ -300,10 +355,11 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 		t := ease_out(c.glide_t / c.glide_dur)
 		a, b := c.glide_from, c.glide_to
 		c.pose = {
-			pan  = linalg.lerp(a.pan, b.pan, t),
-			zoom = a.zoom + (b.zoom - a.zoom) * t,
-			yaw  = angle_lerp(a.yaw, b.yaw, t),
-			tilt = a.tilt + (b.tilt - a.tilt) * t,
+			pan       = linalg.lerp(a.pan, b.pan, t),
+			globe_rot = linalg.lerp(a.globe_rot, b.globe_rot, t),
+			zoom      = a.zoom + (b.zoom - a.zoom) * t,
+			yaw       = angle_lerp(a.yaw, b.yaw, t),
+			tilt      = a.tilt + (b.tilt - a.tilt) * t,
 		}
 		if c.glide_t >= c.glide_dur do c.glide_dur = 0
 	}
@@ -311,17 +367,39 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 	c.pose.zoom = clamp(c.pose.zoom, cam_min_zoom(w), ZOOM_MAX)
 	c.zoom_goal = max(c.zoom_goal, cam_min_zoom(w))
 	c.view, c.px_per_km = cam_build(c.pose, c.screen)
-	c.pose.pan = cam_clamp_pan(w, c.pose)
-	c.view, c.px_per_km = cam_build(c.pose, c.screen)
+	if c.pose.globe_rot == {} && c.pose.zoom >= 0 {
+		c.pose.pan = cam_clamp_pan(w, c.pose)
+		// The user can not look past Belgium (nasr, 2026-11-21): in free mode the point under the screen centre stays
+		// over it. Keep the axis that stays inside, else pull toward the map centre, which lies in Belgium and keeps
+		// the pan inside the clamp box. Chase and preview follow the ship and the route, those stay in Belgium.
+		if c.mode == .Free {
+			mid := [2]f32{MAP_W_KM, MAP_H_KM} / 2
+			p := c.pose.pan
+			if !belgium_inside(w, mid.x + p.x, mid.y + p.y) {
+				STEPS :: 16
+				for k in 0 ..= STEPS + 2 {
+					q :=
+						k == 0 ? [2]f32{p.x, pan0.y} : k == 1 ? [2]f32{pan0.x, p.y} : p * f32(STEPS + 2 - k) / STEPS
+					pose := c.pose
+					pose.pan = q
+					q = cam_clamp_pan(w, pose)
+					if belgium_inside(w, mid.x + q.x, mid.y + q.y) {
+						c.pose.pan = q
+						break
+					}
+				}
+			}
+		}
+		c.view, c.px_per_km = cam_build(c.pose, c.screen)
+	}
 }
 
-// The zoom that fits the whole map into the part of the screen the map uses (right of the plan panel on the
-// plan screen), from above. Nothing further out is allowed.
+// The zoom that fits the whole globe on the plan screen, or Belgium in navigation.
 cam_min_zoom :: proc(w: ^World) -> f32 {
+	if w.screen == .Plan do return ZOOM_MIN
 	screen := w.cam.screen
 	if screen.x <= 0 || screen.y <= 0 do return ZOOM_MIN
-	r := w.screen == .Plan ? plan_map_rect(w) : rl.Rectangle{0, 0, screen.x, screen.y}
-	ppk := min(r.width / MAP_W_KM, r.height / MAP_H_KM)
+	ppk := min(screen.x / MAP_W_KM, screen.y / MAP_H_KM)
 	return clamp(math.log2(ppk / cam_fit_scale(screen)), ZOOM_MIN, 0)
 }
 
