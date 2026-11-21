@@ -160,9 +160,9 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
                   calm.snap: zero wind / gust / cloud, start 1795176000. nan_wind.snap: same with
                   wind[3][1][20].x = NaN, must be rejected by weather_valid. routes.txt: one route per mode, hours 0 / 4 / 8,
                   a route to the same hub. calm_routes.expected: A* grid paths (unsmoothed, wind not used yet).
-                  no_fly.txt: Brussels inside an 8 km zone (no route from or to it), a 12 km zone on the
-                  Oostende - Liege path (goes around), Liege under a 400 m zone (leaves from layer 1),
-                  Antwerpen in a 3 km zone (free node outside it).
+                  no_fly.txt: Brussels inside an 8 km zone (no route from or to it), a 3 km zone on the
+                  Mechelen - Leuven line (goes around), Antwerpen under a 400 m zone (leaves from layer 1),
+                  Mechelen in a 2 km zone (ends at the closest free node outside it).
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
                   (copy a cache/weather.snap), the calm one does not exercise the wind.
 bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.
