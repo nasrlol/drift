@@ -93,6 +93,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     msg_sign(w, m) fills magic, version, author, sig (start from a zeroed Message).
                     msg_read(w, bytes) for anything from outside: size, header, field ranges, then signature.
                     Measured (macOS arm64, -o:speed): sign ~33 us, read + verify ~44 us.
+                  Relay client: relay_post(endpoint, m) -> index, relay_fetch(endpoint, after, out) -> count.
+                    Blocking, 5 s timeout per direction, call from a thread. Fetched messages are not verified:
+                    every one goes through msg_read. Subscribing = polling with after = last index + 1.
                   The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
   debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
                   Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =
@@ -129,6 +132,15 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   w.grid holds the search state as fixed arrays in World (no arena, allocated with World):
                   visit stamp, cost, parent per node, 12 B x 203k = 2.4 MB. A node's cost and parent only
                   count when visit[n] == grid.search, so a route starts with search += 1, not a 2.4 MB clear.
+relay/main.odin   carpool relay, its own program (no game import, no raylib): odin build relay -out:build/relay,
+                  ./build/relay [port] [store file], defaults 7419 and cache/relay.log. Plain TCP, one request per
+                  connection, one connection at a time, 5 s timeouts. 'P' + 184 byte message -> status u8 + index
+                  u64le. 'G' + after u64le + max u32le -> count u32le + messages (max 256). Checks size, magic,
+                  version and kind, not signatures (clients do). Store = messages back to back, index = offset /
+                  184, also kept in memory; a store whose size is not a multiple of 184 refuses to start.
+                  Message constants are copied from net.odin, keep them in sync. Not built by CI yet.
+                  Tested on macOS: post, reject bad header, forged signature stored but dropped by msg_read,
+                  paging with max 2, restart keeps the store, unknown op and cut-off post are logged.
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
                   Each case = snapshot + inputs through game.headless_run, output compared line by line to the

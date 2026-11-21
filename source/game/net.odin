@@ -11,6 +11,7 @@ import "core:fmt"
 import "core:math"
 import "core:mem"
 import "core:mem/virtual"
+import "core:net"
 import "core:os"
 import "core:strings"
 import "core:sync"
@@ -543,4 +544,84 @@ msg_id :: proc(m: ^Message) -> (id: [32]u8) {
 key_short :: proc(k: [32]u8) -> (v: u64) {
 	for i in 0 ..< 8 do v = v << 8 | u64(k[i])
 	return
+}
+
+// Client side of relay/ (protocol described there). Blocking with a timeout per direction, call it from a
+// thread. No World on that thread, so errors print "[relay] ..." directly.
+RELAY_TIMEOUT :: 5 * time.Second
+RELAY_MAX_GET :: 256
+
+relay_post :: proc(relay: net.Endpoint, m: ^Message) -> (index: u64, ok: bool) {
+	s := relay_dial(relay) or_return
+	defer net.close(s)
+	req: [1 + size_of(Message)]u8
+	req[0] = 'P'
+	mem.copy(&req[1], m, size_of(Message))
+	reply: [9]u8
+	if !relay_send(s, req[:]) || !relay_recv(s, reply[:]) {
+		fmt.eprintln("[relay] post: connection lost")
+		return
+	}
+	if reply[0] != 0 {
+		fmt.eprintln("[relay] post: rejected")
+		return
+	}
+	return u64((^u64le)(&reply[1])^), true
+}
+
+// Messages from index `after` on, at most len(out) and RELAY_MAX_GET. They are not verified yet:
+// run every one through msg_read before using it. The next call passes after + count.
+relay_fetch :: proc(relay: net.Endpoint, after: u64, out: []Message) -> (count: int, ok: bool) {
+	s := relay_dial(relay) or_return
+	defer net.close(s)
+	req: [13]u8
+	req[0] = 'G'
+	(^u64le)(&req[1])^ = u64le(after)
+	(^u32le)(&req[9])^ = u32le(min(len(out), RELAY_MAX_GET))
+	head: [4]u8
+	if !relay_send(s, req[:]) || !relay_recv(s, head[:]) {
+		fmt.eprintln("[relay] fetch: connection lost")
+		return
+	}
+	count = int((^u32le)(&head[0])^)
+	if count > min(len(out), RELAY_MAX_GET) {
+		fmt.eprintfln("[relay] fetch: got %d messages, asked for %d", count, len(out))
+		return 0, false
+	}
+	if !relay_recv(s, mem.slice_to_bytes(out[:count])) {
+		fmt.eprintfln("[relay] fetch: cut off in %d messages", count)
+		return 0, false
+	}
+	return count, true
+}
+
+relay_dial :: proc(relay: net.Endpoint) -> (s: net.TCP_Socket, ok: bool) {
+	err: net.Network_Error
+	if s, err = net.dial_tcp_from_endpoint(relay); err != nil {
+		buf: [64]u8
+		b := strings.builder_from_bytes(buf[:])
+		fmt.eprintfln("[relay] cannot connect to %s: %v", net.to_string(relay, &b), err)
+		return
+	}
+	net.set_option(s, .Receive_Timeout, RELAY_TIMEOUT)
+	net.set_option(s, .Send_Timeout, RELAY_TIMEOUT)
+	return s, true
+}
+
+relay_send :: proc(s: net.TCP_Socket, buf: []u8) -> bool {
+	for sent := 0; sent < len(buf); {
+		n, err := net.send_tcp(s, buf[sent:])
+		if err != nil do return false
+		sent += n
+	}
+	return true
+}
+
+relay_recv :: proc(s: net.TCP_Socket, buf: []u8) -> bool {
+	for got := 0; got < len(buf); {
+		n, err := net.recv_tcp(s, buf[got:])
+		if err != nil || n == 0 do return false
+		got += n
+	}
+	return true
 }

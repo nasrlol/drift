@@ -95,7 +95,7 @@ network + carpooling (after routing works):
 [x] ed25519 key pair per user (core:crypto)
 [x] signed message format: offer, request, accept, review (fixed-size binary, not JSON)
 [ ] offers include hub ids, times, seats, weather snapshot hash
-[ ] simple relay: store messages, forward to subscribers
+[x] simple relay: store messages, forward to subscribers
 [ ] publish weather snapshot to relay, fetch by hash
 [ ] matching: filter offers by grid cell + hour, then detour check with the router
 [ ] verify offer route/energy by recomputing it locally
