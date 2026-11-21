@@ -51,7 +51,7 @@ later:
 [ ] 3D terrain view
 
 LARS: ROUTING + NAVIGATION
-[ ] 3D grid: 1 km cells x 3 layers (~190k nodes), all buffers allocated once, reused per route
+[~] lars: 3D grid: 1 km cells x 3 layers (~190k nodes), all buffers allocated once, reused per route
 [ ] blocked bitset built once per weather hour: terrain + margin, no-fly zones (fixed array, max 8)
 [ ] A*: 8 dirs + up/down, binary heap in a fixed array, no allocation during search
 [ ] cost per mode: fastest (time), greenest (energy), calmest (time x gusts)
