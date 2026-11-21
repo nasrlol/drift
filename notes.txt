@@ -338,7 +338,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   height_at is only called for a hub that is within 30 m horizontally, not for all 15, because the real
                   height_at will cost more than the stub.
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
-                  R/F climb up / down, gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
+                  R/F climb up / down (arrows = W/A/S/D, PgUp / PgDn = R / F), gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
