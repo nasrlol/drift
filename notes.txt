@@ -519,6 +519,19 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   the arrival. "drive <x> <y> <s> <turn>" lands on the nearest road and drives (road.odin).
                   Output per route: "route 6 -> 11 fastest hour 0: 2 points, 104.812 km", then x y alt per point.
                   --dump appends the state dump after the result.
+                  Scripted run: ./build/drift --script <file> (debug host and release exe, exported game_script)
+                  opens the real window and runs the game frame by frame from a text file, for visual checks with
+                  screenshots. Every frame is exactly SIM_DT and steps the simulation once (frame_time(w)), keys
+                  and the street view's mouse look come only from the script (key_down / key_pressed /
+                  mouse_delta / mouse_wheel in input.odin, real input is ignored), no weather fetch, no network
+                  node, weather from "snapshot <file>" or the embedded fallback, the cursor is not locked,
+                  SetTargetFPS(0): as fast as the machine draws. Commands: ship <frame> <x km> <y km> <height m>
+                  <heading deg>, down / up / press <frame> <raylib key name>, mouse <frame> <dx> <dy>,
+                  wheel <frame> <notches>, shot <frame> <png> (LoadImageFromScreen + ExportImage after the frame
+                  is drawn: TakeScreenshot drops the directory), quit <frame>. The loading screen covers frames
+                  0..~80. The window stays 1440 x 900: SetWindowSize on a macOS Retina screen leaves raylib
+                  drawing into a quarter of the framebuffer. Shots go to build/shots/ (not in git), the
+                  standard scripts are test/data/street_*.txt.
                   Log: logf(w, system, format, args) prints "[route t=1234] message" to stderr, t = w.tick.
                   No allocation (1 KB stack buffer, longer messages are cut). Code without a World
                   (fetch thread, argument parsing) prints "[system] message" with fmt.eprint.

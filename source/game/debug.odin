@@ -1,12 +1,16 @@
 package game
 
 import "core:fmt"
+import "core:math"
 import "core:math/linalg"
 import "core:mem/virtual"
 import "core:os"
+import "core:reflect"
+import "core:slice"
 import "core:strconv"
 import "core:strings"
 import "core:time"
+import rl "vendor:raylib"
 
 // Timing is compiled in for debug and profile builds only. Wall-clock time is fine here,
 // it is only displayed and never fed back into the simulation.
@@ -633,4 +637,220 @@ dump_world :: proc(w: ^World, out: ^strings.Builder) {
 		w.frame.total_used,
 		w.frame.total_reserved,
 	)
+}
+
+// Scripted run (--script <file>): the real window and drawing, driven by a text file with one command per line,
+// so a change to the picture is checked with screenshots instead of by hand. Every frame stands for exactly
+// SIM_DT and steps the simulation once, keys and mouse come only from the script (input.odin), and the weather
+// comes from a file, not the network, so the same script gives the same screenshots. # starts a comment.
+//   snapshot <file>                  weather snapshot (net.odin format), default the embedded fallback
+//   ship <frame> <x km> <y km> <height above ground m> <heading deg>   the car there, at rest
+//   down <frame> <KEY>   up <frame> <KEY>   press <frame> <KEY>    raylib key names: W, SPACE, LEFT_SHIFT, V
+//   mouse <frame> <dx px> <dy px>    wheel <frame> <notches>
+//   shot <frame> <png file>          after everything of that frame is drawn
+//   quit <frame>
+// Frame 0 is the first frame; the loading screen covers the first ~80. The window keeps its size (1440 x 900):
+// SetWindowSize on a macOS Retina screen leaves raylib drawing into a quarter of the framebuffer.
+Script_Kind :: enum u8 {
+	Down,
+	Up,
+	Mouse,
+	Wheel,
+	Ship,
+	Shot,
+	Quit,
+}
+
+Script_Event :: struct {
+	frame: int,
+	kind:  Script_Kind,
+	key:   rl.KeyboardKey,
+	v:     [4]f32,
+	path:  string, // into the script text, perm arena
+}
+
+Script :: struct {
+	on:       bool,
+	frame:    int,
+	events:   []Script_Event, // perm arena, in frame order
+	next:     int, // first event after this frame
+	first:    int, // first event of this frame
+	down:     #sparse[rl.KeyboardKey]bool,
+	was:      #sparse[rl.KeyboardKey]bool,
+	mouse:    [2]f32, // this frame's mouse move, px
+	wheel:    f32,
+	failures: int, // shots that could not be written
+}
+
+// Reads and checks the whole script before the first frame: a bad line stops the run with its line number.
+@(export)
+game_script :: proc(memory: rawptr, path: string) -> bool {
+	w := (^World)(memory)
+	context.allocator = virtual.arena_allocator(&w.perm)
+	context.temp_allocator = virtual.arena_allocator(&w.frame)
+	defer virtual.arena_free_all(&w.frame)
+	data, err := os.read_entire_file(path, context.allocator)
+	if err != nil {
+		logf(w, "script", "cannot read %s: %v", path, err)
+		return false
+	}
+	events := make([dynamic]Script_Event, 0, 64)
+	snapshot := ""
+	text := string(data)
+	line_no := 0
+	for raw in strings.split_lines_iterator(&text) {
+		line_no += 1
+		line := strings.trim_space(raw)
+		if line == "" || line[0] == '#' do continue
+		f: [6]string
+		n := 0
+		for field in strings.fields_iterator(&line) {
+			if n == len(f) {
+				n += 1
+				break
+			}
+			f[n] = field
+			n += 1
+		}
+		num :: proc(s: string) -> (f32, bool) {
+			v, ok := strconv.parse_f32(s)
+			return v, ok && abs(v) < 1e7
+		}
+		frame, frame_ok := strconv.parse_int(f[1], 10)
+		frame_ok &&= frame >= 0
+		e := Script_Event {
+			frame = frame,
+		}
+		ok := false
+		switch f[0] {
+		case "snapshot":
+			snapshot, ok = f[1], n == 2
+		case "down", "up", "press":
+			key, key_ok := reflect.enum_from_name(rl.KeyboardKey, f[2])
+			ok = n == 3 && frame_ok && key_ok && key != .KEY_NULL
+			e.key = key
+			e.kind = f[0] == "up" ? .Up : .Down
+			if ok && f[0] == "press" {
+				append(&events, e)
+				e.frame += 1
+				e.kind = .Up
+			}
+		case "mouse":
+			x, x_ok := num(f[2])
+			y, y_ok := num(f[3])
+			e.kind, e.v.xy = .Mouse, {x, y}
+			ok = n == 4 && frame_ok && x_ok && y_ok
+		case "wheel":
+			x, x_ok := num(f[2])
+			e.kind, e.v.x = .Wheel, x
+			ok = n == 3 && frame_ok && x_ok
+		case "ship":
+			x, x_ok := num(f[2])
+			y, y_ok := num(f[3])
+			h, h_ok := num(f[4])
+			deg, deg_ok := num(f[5])
+			e.kind, e.v = .Ship, {x, y, h, deg}
+			on_map := x >= 0 && y >= 0 && x <= MAP_W_KM && y <= MAP_H_KM && h >= 0 && h <= SHIP_CEILING
+			ok = n == 6 && frame_ok && x_ok && y_ok && h_ok && deg_ok && on_map
+		case "shot":
+			e.kind, e.path = .Shot, f[2]
+			ok = n == 3 && frame_ok && strings.has_suffix(f[2], ".png")
+		case "quit":
+			e.kind = .Quit
+			ok = n == 2 && frame_ok
+		}
+		if !ok {
+			logf(w, "script", "%s line %d: %q is not a valid command (see debug.odin)", path, line_no, line)
+			return false
+		}
+		if f[0] != "snapshot" do append(&events, e)
+	}
+	slice.stable_sort_by(events[:], proc(a, b: Script_Event) -> bool {return a.frame < b.frame})
+	quits := false
+	for e in events do quits ||= e.kind == .Quit
+	if !quits {
+		logf(w, "script", "%s has no quit command", path)
+		return false
+	}
+	weather_ok := snapshot != "" ? weather_load_snapshot(w, snapshot) : weather_load_fallback(w)
+	if !weather_ok {
+		logf(w, "script", "weather snapshot %q does not load", snapshot)
+		return false
+	}
+	w.script = {
+		on     = true,
+		events = events[:],
+	}
+	// As fast as the machine draws: a frame is SIM_DT whatever it took.
+	rl.SetTargetFPS(0)
+	logf(w, "script", "%s: %d events, last frame %d", path, len(events), events[len(events) - 1].frame)
+	return true
+}
+
+// Start of a scripted frame: key, mouse and ship commands of this frame.
+script_frame :: proc(w: ^World) {
+	sc := &w.script
+	sc.was = sc.down
+	sc.mouse, sc.wheel = {}, 0
+	sc.first = sc.next
+	for sc.next < len(sc.events) && sc.events[sc.next].frame <= sc.frame {
+		e := sc.events[sc.next]
+		sc.next += 1
+		switch e.kind {
+		case .Down:
+			sc.down[e.key] = true
+		case .Up:
+			sc.down[e.key] = false
+		case .Mouse:
+			sc.mouse += e.v.xy
+		case .Wheel:
+			sc.wheel += e.v.x
+		case .Ship:
+			s := &w.ship
+			s^ = {
+				pos       = e.v.xy,
+				alt       = height_at(w, e.v.x, e.v.y) + e.v.z,
+				heading   = e.v.w * math.PI / 180,
+				used_kwh  = s.used_kwh,
+				solar_kwh = s.solar_kwh,
+			}
+			w.car_anim.seeded = false
+			w.street.seeded = false
+		case .Shot, .Quit:
+		}
+	}
+}
+
+// End of a scripted frame, after all drawing and before EndDrawing: screenshots, then true on the quit frame.
+script_end :: proc(w: ^World) -> (quit: bool) {
+	sc := &w.script
+	for e in sc.events[sc.first:sc.next] {
+		switch e.kind {
+		case .Shot:
+			// raylib batches 2D drawing: flush it, so the shot holds everything drawn this frame.
+			rl.EndScissorMode()
+			dir := os.dir(e.path)
+			if dir != "" && dir != "." do _ = os.make_directory_all(dir)
+			img := rl.LoadImageFromScreen()
+			ok := rl.ExportImage(img, strings.clone_to_cstring(e.path, context.temp_allocator))
+			if !ok do sc.failures += 1
+			logf(
+				w,
+				"script",
+				"frame %d: shot %s %dx%d %s",
+				sc.frame,
+				e.path,
+				img.width,
+				img.height,
+				ok ? "" : "FAILED",
+			)
+			rl.UnloadImage(img)
+		case .Quit:
+			quit = true
+			logf(w, "script", "frame %d: quit, %d shots failed", sc.frame, sc.failures)
+		case .Down, .Up, .Mouse, .Wheel, .Ship:
+		}
+	}
+	sc.frame += 1
+	return quit
 }

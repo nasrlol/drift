@@ -93,6 +93,7 @@ World :: struct {
 	presence_copy_s: f32,
 	street:          Street, // the third-person street view, street.odin
 	collide:         Collide, // building footprints for free flight, collide.odin
+	script:          Script, // --script: keys, mouse and screenshots per frame, debug.odin
 }
 
 @(export)
@@ -185,10 +186,14 @@ game_update :: proc(memory: rawptr) -> bool {
 	defer virtual.arena_free_all(&w.frame)
 
 	t := prof_begin()
-	weather_poll(w)
-	node_poll(w)
+	if w.script.on {
+		script_frame(w)
+	} else {
+		weather_poll(w)
+		node_poll(w)
+	}
 	ui_begin(w)
-	keys := read_controls(w.street.on)
+	keys := read_controls(w)
 	pad := pilot_pad_controls(w)
 	w.controls = {
 		clamp(keys.throttle + pad.throttle, -1, 1),
@@ -198,11 +203,11 @@ game_update :: proc(memory: rawptr) -> bool {
 	typing := w.plan.editing != .None
 
 	if !typing {
-		if rl.IsKeyPressed(.T) do w.theme = w.theme == .Night ? .Day : .Night
+		if key_pressed(w, .T) do w.theme = w.theme == .Night ? .Day : .Night
 		// V: the third-person street view (street.odin), V again or Esc back to the map.
-		if rl.IsKeyPressed(.V) do street_toggle(w)
+		if key_pressed(w, .V) do street_toggle(w)
 		// M: free flight without a route (the old drive mode), or back to the plan screen.
-		if rl.IsKeyPressed(.M) && !w.street.on {
+		if key_pressed(w, .M) && !w.street.on {
 			if w.screen == .Plan {
 				nav_stop(w)
 				w.screen = .Navigate
@@ -212,17 +217,18 @@ game_update :: proc(memory: rawptr) -> bool {
 			}
 		}
 	}
-	if w.street.on && (w.screen != .Navigate || rl.IsKeyPressed(.ESCAPE)) {
+	if w.street.on && (w.screen != .Navigate || key_pressed(w, .ESCAPE)) {
 		street_toggle(w)
 	} else if w.screen == .Navigate {
-		if rl.IsKeyPressed(.ESCAPE) do pilot_exit(w)
+		if key_pressed(w, .ESCAPE) do pilot_exit(w)
 		// Design: whoever presses a steering key in navigation takes over at once.
 		if w.nav.active && !w.nav.manual && w.controls != {} do nav_set_manual(w, true)
 	} else {
 		plan_refresh(w)
 	}
 
-	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT)
+	// A scripted run steps exactly once per frame.
+	w.accum += w.script.on ? SIM_DT : f64(frame_time(w))
 	for w.accum >= SIM_DT {
 		if w.screen == .Navigate {
 			c := w.controls
@@ -250,11 +256,13 @@ game_update :: proc(memory: rawptr) -> bool {
 		w.tick += 1
 		w.accum -= SIM_DT
 	}
-	carpool_frame(w, f32(min(f64(rl.GetFrameTime()), MAX_FRAME_DT)))
-	presence_frame(w, f32(min(f64(rl.GetFrameTime()), MAX_FRAME_DT)))
+	if !w.script.on {
+		carpool_frame(w, frame_time(w))
+		presence_frame(w, frame_time(w))
+	}
 	prof_end(w, .Update, t)
 
-	if rl.IsKeyPressed(.F5) {
+	if key_pressed(w, .F5) {
 		b := strings.builder_make(context.temp_allocator)
 		dump_world(w, &b)
 		fmt.print(strings.to_string(b))
@@ -267,7 +275,7 @@ game_update :: proc(memory: rawptr) -> bool {
 	palettes := PALETTES
 	w.palette = palettes[w.theme]
 	pal := palette(w)
-	frame_dt := min(rl.GetFrameTime(), MAX_FRAME_DT)
+	frame_dt := frame_time(w)
 
 	rl.BeginDrawing()
 	t = prof_begin()
@@ -605,7 +613,7 @@ game_update :: proc(memory: rawptr) -> bool {
 	// Profiler overlay, F3 or the Profiler toggle in the layers panel shows it. It shows the previous frame and is not counted in draw ms.
 	when PROFILING {
 		p := &w.prof
-		if rl.IsKeyPressed(.F3) do p.shown = !p.shown
+		if key_pressed(w, .F3) do p.shown = !p.shown
 		if p.shown {
 			worst: f32
 			for ms in p.frame_ms do worst = max(worst, ms)
@@ -655,6 +663,7 @@ game_update :: proc(memory: rawptr) -> bool {
 			}
 		}
 	}
+	quit := w.script.on && script_end(w)
 	rl.EndDrawing()
 
 	when PROFILING {
@@ -663,7 +672,14 @@ game_update :: proc(memory: rawptr) -> bool {
 		w.prof.frame_used = w.frame.total_used
 	}
 
-	return !rl.WindowShouldClose()
+	return !rl.WindowShouldClose() && !quit
+}
+
+// Seconds this frame stands for, for drawing and animation: the real frame time, or exactly one step in a
+// scripted run so its screenshots do not depend on the machine.
+frame_time :: proc(w: ^World) -> f32 {
+	if w.script.on do return SIM_DT
+	return min(rl.GetFrameTime(), MAX_FRAME_DT)
 }
 
 // The host calls this on the old library right before it unloads it.

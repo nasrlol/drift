@@ -338,7 +338,7 @@ ui_begin :: proc(w: ^World) {
 	}
 	u.activate = u.focus > 0 && (rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.SPACE))
 	if rl.IsMouseButtonPressed(.LEFT) do u.focus = 0
-	u.toast_t += rl.GetFrameTime()
+	u.toast_t += frame_time(w)
 }
 
 // True when the mouse is over UI drawn last frame: the map then ignores drags, the wheel and clicks.
@@ -521,7 +521,7 @@ ui_toggle :: proc(w: ^World, r: rl.Rectangle, on: ^bool) -> bool {
 	if fired do on^ = !on^
 	a := &w.ui.anims[(id - 1) % MAX_UI_ANIMS]
 	target: f32 = on^ ? 1 : 0
-	step := rl.GetFrameTime() / 0.15
+	step := frame_time(w) / 0.15
 	a^ = target > a^ ? min(a^ + step, target) : max(a^ - step, target)
 	round_rect(r, r.height / 2, on^ ? pal.accent_strong : pal.surface_3)
 	knob := r.height - 4

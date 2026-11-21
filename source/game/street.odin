@@ -196,7 +196,7 @@ street_toggle :: proc(w: ^World) {
 	st := &w.street
 	if st.on {
 		st.on = false
-		rl.EnableCursor()
+		if !w.script.on do rl.EnableCursor()
 		return
 	}
 	if w.screen == .Plan {
@@ -208,7 +208,7 @@ street_toggle :: proc(w: ^World) {
 	st.on_s = 0
 	st.yaw, st.pitch, st.idle_s = 0, 0, 0
 	st.seeded = false
-	rl.DisableCursor()
+	if !w.script.on do rl.DisableCursor()
 }
 
 // Builds the line index, the ground plane and the shader. Needs the window.
@@ -371,7 +371,7 @@ street_road_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 // fine.
 street_camera :: proc(w: ^World) {
 	st := &w.street
-	dt := min(rl.GetFrameTime(), MAX_FRAME_DT)
+	dt := frame_time(w)
 	st.on_s += dt
 	s := &w.ship
 
@@ -383,8 +383,8 @@ street_camera :: proc(w: ^World) {
 		st.origin = origin
 	}
 
-	look := rl.GetMouseDelta() * STREET_MOUSE_RAD_PER_PX
-	if rl.IsGamepadAvailable(0) {
+	look := mouse_delta(w) * STREET_MOUSE_RAD_PER_PX
+	if !w.script.on && rl.IsGamepadAvailable(0) {
 		look.x += stick_axis(rl.GetGamepadAxisMovement(0, .RIGHT_X)) * STREET_STICK_RAD_PER_S * dt
 	}
 	if look != {} {
@@ -399,7 +399,7 @@ street_camera :: proc(w: ^World) {
 		st.yaw = angle_lerp(st.yaw, 0, k)
 		st.pitch += (0 - st.pitch) * k
 	}
-	if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+	if wheel := mouse_wheel(w); wheel != 0 {
 		if st.dist == 0 do st.dist = STREET_CAM_DIST_M
 		st.dist = clamp(st.dist * (1 - wheel * 0.12), STREET_CAM_MIN_M, STREET_CAM_MAX_M)
 	}
@@ -563,7 +563,7 @@ street_draw :: proc(w: ^World) {
 	nature_draw(w, centre, STREET_REACH_KM, transform)
 
 	// 5: the cars, each with a soft contact shadow.
-	car_anim_update(w, min(rl.GetFrameTime(), MAX_FRAME_DT))
+	car_anim_update(w, frame_time(w))
 	{
 		car := street_ship_pos(w)
 		street_shadow(car, w.car_anim.heading)

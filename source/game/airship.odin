@@ -398,7 +398,7 @@ car_draw_street :: proc(w: ^World, pos: [3]f32, an: Car_Anim, tint: rl.Color, lo
 
 // The player's car (navigation screen).
 airship_draw :: proc(w: ^World) {
-	car_anim_update(w, min(rl.GetFrameTime(), MAX_FRAME_DT))
+	car_anim_update(w, frame_time(w))
 	an := w.car_anim
 	car_draw(w, w.ship.pos, w.ship.alt, an.heading, an, CAR_PX, rl.WHITE)
 }

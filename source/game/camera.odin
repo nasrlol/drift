@@ -216,7 +216,7 @@ cam_zoom_by :: proc(w: ^World, steps: f32, anchor: [2]f32) {
 // or the preview, then the raylib camera for this frame. Drawing only, frame time is fine.
 cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 	c := &w.cam
-	dt := min(rl.GetFrameTime(), MAX_FRAME_DT)
+	dt := frame_time(w)
 	c.screen = {f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 	c.view, c.px_per_km = cam_build(c.pose, c.screen)
 
