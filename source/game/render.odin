@@ -25,55 +25,102 @@ wind_rand :: proc(p: ^Wind_Particles) -> f32 {
 	return f32(p.rand >> 8) / (1 << 24)
 }
 
-// Every color that is drawn comes from the palette of the current theme. World keeps the theme, not a pointer
-// to the palette: a pointer into this library's constants would dangle after a hot reload.
+// Every color that is drawn comes from the palette of the current theme: the design's token table
+// (docs/drift-design.pdf, "Kleuren"), code never uses a hex value directly. Night is the design default, so it is
+// zero. World keeps the theme and a copy of its palette, refreshed every frame: a pointer into this library's
+// constants would dangle after a hot reload.
 Theme :: enum u8 {
-	Day,
 	Night,
+	Day,
 }
 
 Palette :: struct {
-	background: rl.Color,
-	lines:      [Map_Kind]rl.Color,
-	city:       rl.Color,
-	ship:       rl.Color,
-	wind:       rl.Color,
-	panel:      rl.Color,
-	button:     rl.Color,
-	button_hot: rl.Color,
-	button_on:  rl.Color,
-	text:       rl.Color,
+	surface:       rl.Color, // panels, cards, buttons
+	surface_2:     rl.Color, // input fields, hover
+	surface_3:     rl.Color, // toggle off
+	text:          rl.Color, // main text
+	text_2:        rl.Color, // secondary text, icons
+	line:          rl.Color, // borders, dividers
+	accent:        rl.Color, // chosen chip, Start, links
+	accent_strong: rl.Color, // chosen route bubble, chosen row
+	green:         rl.Color, // Greenest time, leaf, energy
+	banner:        rl.Color, // instruction banner
+	banner_2:      rl.Color, // "Then" tab
+	red:           rl.Color, // Exit, destination pin
+	warning:       rl.Color, // warning pill, gust icon
+	reroute:       rl.Color, // banner while rerouting
+	arrived:       rl.Color, // banner on arrival
+	sheet:         rl.Color, // navigation bottom sheet
+	chip:          rl.Color, // stat chips in the sheet
+	bubble:        rl.Color, // road sign on the map
+	bubble_text:   rl.Color, // road sign text
+	pill:          rl.Color, // road pill under the ship
+	// map, until the map colors item
+	background:    rl.Color,
+	lines:         [Map_Kind]rl.Color,
+	wind:          rl.Color,
 }
 
 PALETTES :: [Theme]Palette {
-	.Day = {
-		background = {245, 245, 245, 255},
-		lines = {.Border = {80, 80, 80, 255}, .River = {0, 121, 241, 255}, .Motorway = {255, 161, 0, 255}},
-		city = {20, 20, 20, 255},
-		ship = {230, 41, 55, 255},
-		wind = {60, 90, 150, 255},
-		panel = {255, 255, 255, 220},
-		button = {225, 225, 225, 255},
-		button_hot = {200, 200, 200, 255},
-		button_on = {150, 190, 240, 255},
-		text = {20, 20, 20, 255},
-	},
 	.Night = {
+		surface = {32, 33, 36, 255},
+		surface_2 = {43, 45, 49, 255},
+		surface_3 = {53, 55, 60, 255},
+		text = {232, 234, 237, 255},
+		text_2 = {154, 160, 166, 255},
+		line = {60, 64, 67, 255},
+		accent = {138, 180, 248, 255},
+		accent_strong = {26, 115, 232, 255},
+		green = {52, 208, 122, 255},
+		banner = {12, 90, 83, 255},
+		banner_2 = {10, 74, 68, 255},
+		red = {229, 65, 59, 255},
+		warning = {249, 171, 0, 255},
+		reroute = {60, 64, 67, 255},
+		arrived = {19, 115, 51, 255},
+		sheet = {22, 23, 25, 255},
+		chip = {35, 36, 39, 255},
+		bubble = {143, 227, 255, 255},
+		bubble_text = {11, 42, 58, 255},
+		pill = {26, 143, 216, 255},
 		background = {18, 22, 30, 255},
 		lines = {
 			.Border = {150, 150, 165, 255},
 			.River = {70, 140, 230, 255},
 			.Motorway = {230, 150, 40, 255},
 		},
-		city = {235, 235, 235, 255},
-		ship = {255, 90, 90, 255},
 		wind = {170, 200, 255, 255},
-		panel = {30, 34, 44, 220},
-		button = {50, 56, 70, 255},
-		button_hot = {70, 78, 96, 255},
-		button_on = {60, 100, 160, 255},
-		text = {235, 235, 235, 255},
 	},
+	.Day = {
+		surface = {255, 255, 255, 255},
+		surface_2 = {241, 243, 244, 255},
+		surface_3 = {232, 234, 237, 255},
+		text = {32, 33, 36, 255},
+		text_2 = {95, 99, 104, 255},
+		line = {218, 220, 224, 255},
+		accent = {26, 115, 232, 255},
+		accent_strong = {26, 115, 232, 255},
+		green = {24, 128, 56, 255},
+		banner = {15, 107, 95, 255},
+		banner_2 = {11, 90, 80, 255},
+		red = {229, 65, 59, 255},
+		warning = {249, 171, 0, 255},
+		reroute = {60, 64, 67, 255},
+		arrived = {19, 115, 51, 255},
+		sheet = {255, 255, 255, 255},
+		chip = {241, 243, 244, 255},
+		bubble = {255, 255, 255, 255},
+		bubble_text = {32, 33, 36, 255},
+		pill = {26, 115, 232, 255},
+		background = {245, 245, 245, 255},
+		lines = {.Border = {80, 80, 80, 255}, .River = {0, 121, 241, 255}, .Motorway = {255, 161, 0, 255}},
+		wind = {60, 90, 150, 255},
+	},
+}
+
+// The palette of the current theme. Refreshed at the start of every frame (game_update).
+palette :: proc(w: ^World) -> ^Palette {
+	return &w.palette
 }
 
 LABEL_PX :: 10

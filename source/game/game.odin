@@ -68,7 +68,8 @@ World :: struct {
 	// GPU texture and glyph tables owned by raylib, zero until the first frame with a window.
 	font:         rl.Font,
 	line_meshes:  Line_Meshes,
-	theme:        Theme, // zero = day, T toggles
+	theme:        Theme, // zero = night (the design default), T toggles
+	palette:      Palette, // PALETTES[theme], copied every frame, read through palette(w)
 	wind:         Wind_Particles,
 }
 
@@ -173,7 +174,7 @@ game_update :: proc(memory: rawptr) -> bool {
 	w.controls = read_controls()
 
 	if rl.IsKeyPressed(.M) do w.drive_mode = !w.drive_mode
-	if rl.IsKeyPressed(.T) do w.theme = w.theme == .Day ? .Night : .Day
+	if rl.IsKeyPressed(.T) do w.theme = w.theme == .Night ? .Day : .Night
 	for key, i in ([?]rl.KeyboardKey{.ONE, .TWO, .THREE, .FOUR}) {
 		if rl.IsKeyPressed(key) do w.sim_speed = i
 	}
@@ -241,7 +242,8 @@ game_update :: proc(memory: rawptr) -> bool {
 	}
 
 	palettes := PALETTES
-	pal := &palettes[w.theme]
+	w.palette = palettes[w.theme]
+	pal := palette(w)
 
 	rl.BeginDrawing()
 	t = prof_begin()
@@ -339,7 +341,7 @@ game_update :: proc(memory: rawptr) -> bool {
 			rl.DrawMesh(lm.wind, lm.material, rl.Matrix(1))
 		}
 		// 8 px marker pointing along the heading, DrawPoly puts the first corner at the rotation angle.
-		rl.DrawPoly(w.ship.pos, 3, 8 / cam.zoom, math.to_degrees(w.ship.heading) - 90, pal.ship)
+		rl.DrawPoly(w.ship.pos, 3, 8 / cam.zoom, math.to_degrees(w.ship.heading) - 90, pal.accent)
 		rl.EndMode2D()
 
 		// Labels in screen space, so dots and text keep their pixel size at every zoom.
@@ -369,13 +371,13 @@ game_update :: proc(memory: rawptr) -> bool {
 			append(&labels, l)
 		}
 		for &l in labels {
-			rl.DrawCircleV(l.dot, 3, pal.city)
-			if l.shown do rl.DrawText(l.text, i32(l.rect.x + LABEL_GAP_PX), i32(l.rect.y + LABEL_GAP_PX), LABEL_PX, pal.city)
+			rl.DrawCircleV(l.dot, 3, pal.text)
+			if l.shown do rl.DrawText(l.text, i32(l.rect.x + LABEL_GAP_PX), i32(l.rect.y + LABEL_GAP_PX), LABEL_PX, pal.text)
 		}
 
 		// Toolbar: map / drive mode, sim speed, theme. The same keys still work (M, 1-4, T).
 		// A click changes the state after this frame's update, so it shows from the next frame on.
-		rl.DrawRectangleRec(toolbar, pal.panel)
+		rl.DrawRectangleRec(toolbar, pal.surface)
 		r := rl.Rectangle{toolbar.x + UI_PAD, toolbar.y + UI_PAD, UI_BUTTON_W, UI_BUTTON_H}
 		if ui_button(r, "Map", !w.drive_mode, pal) do w.drive_mode = false
 		r.x += UI_BUTTON_W + UI_GAP
@@ -403,8 +405,8 @@ game_update :: proc(memory: rawptr) -> bool {
 		text := rl.MeasureTextEx(w.font, CREDIT, FONT_PX, 0)
 		screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 		box := linalg.floor(screen - text - 2 * PAD)
-		rl.DrawRectangleV(box, text + 2 * PAD, {255, 255, 255, 200})
-		rl.DrawTextEx(w.font, CREDIT, box + PAD, FONT_PX, 0, rl.DARKGRAY)
+		rl.DrawRectangleV(box, text + 2 * PAD, rl.ColorAlpha(pal.surface, 0.8))
+		rl.DrawTextEx(w.font, CREDIT, box + PAD, FONT_PX, 0, pal.text_2)
 	}
 	prof_end(w, .Draw, t)
 
