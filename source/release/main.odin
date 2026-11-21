@@ -1,7 +1,7 @@
 package main
 
-import "core:os"
 import game "../game"
+import "core:os"
 
 main :: proc() {
 	game.game_init_window()

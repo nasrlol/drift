@@ -5,9 +5,9 @@ import "core:fmt"
 import "core:mem/virtual"
 import rl "vendor:raylib"
 
-SIM_HZ        :: 60
-SIM_DT        :: 1.0 / SIM_HZ
-MAX_FRAME_DT  :: 0.25
+SIM_HZ :: 60
+SIM_DT :: 1.0 / SIM_HZ
+MAX_FRAME_DT :: 0.25
 
 World :: struct {
 	perm:      virtual.Arena,

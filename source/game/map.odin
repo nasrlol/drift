@@ -1,6 +1,6 @@
 package game
 
-MAP_MAGIC   :: 0x54465244
+MAP_MAGIC :: 0x54465244
 MAP_VERSION :: 1
 
 Map_Header :: struct {
@@ -14,7 +14,11 @@ Map_City :: struct {
 	pos:  [2]f32,
 	name: [32]u8,
 }
-Map_Kind :: enum u32 { Border, River, Motorway }
+Map_Kind :: enum u32 {
+	Border,
+	River,
+	Motorway,
+}
 
 Map :: struct {
 	lines:  []Map_Line,
@@ -30,10 +34,10 @@ load_map :: proc() -> (m: Map, ok: bool) {
 	if h.magic != MAP_MAGIC || h.version != MAP_VERSION do return {}, false
 
 	off := size_of(Map_Header)
-	m.lines  = ([^]Map_Line)(raw_data(data[off:]))[:h.line_count]
-	off     += int(h.line_count) * size_of(Map_Line)
+	m.lines = ([^]Map_Line)(raw_data(data[off:]))[:h.line_count]
+	off += int(h.line_count) * size_of(Map_Line)
 	m.points = ([^][2]f32)(raw_data(data[off:]))[:h.point_count]
-	off     += int(h.point_count) * size_of([2]f32)
+	off += int(h.point_count) * size_of([2]f32)
 	m.cities = ([^]Map_City)(raw_data(data[off:]))[:h.city_count]
 	return m, true
 }
