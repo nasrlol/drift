@@ -7,17 +7,36 @@ Source: OpenStreetMap extract of Belgium from Geofabrik (ODbL, credit "(c) OpenS
 
 Tool: GDAL (ogr2ogr), installed with micromamba, no sudo:
   micromamba create -n gis -c conda-forge gdal
+  The scripts use micromamba when it is on the PATH, else the system GDAL (apt install gdal-bin).
 
 tools/extract_map.sh
-  pulls 4 layers out of the .pbf into assets/geojson/
+  pulls 6 layers out of the .pbf into assets/geojson/
     border.geojson     Belgium outline (1 polygon)
-    rivers.geojson     waterway=river
+    rivers.geojson     waterway=river, keeps name
     roads.geojson.gz   highway = motorway, trunk, primary, secondary, tertiary and their _link ramps. Keeps
-                       name + highway, the others keep only name. 32 MB plain, so git keeps it gzipped
-                       (3.9 MB, gzip -9 -n, #71); the bake inflates it with core:compress/deflate.
+                       name, highway and ref (OSM road number, "E40;A10"; not an OSM driver column, so it is
+                       read from the other_tags hstore with -dialect SQLite and hstore_get_value). 40 MB plain,
+                       so git keeps it gzipped (4.1 MB, gzip -9 -n, #71); the bake inflates it with
+                       core:compress/deflate.
     cities.geojson     place=city (15 points)
-  simplifies lines (0.0005 deg), 5 decimal coordinates
+    areas.geojson.gz   land use polygons (multipolygons layer), keeps landuse, natural, leisure:
+                       city = landuse residential / commercial / industrial / retail, park = landuse forest,
+                       natural wood, leisure park, farmland = landuse farmland / farmyard / orchard / vineyard,
+                       marsh = natural wetland, beach = natural beach / sand, water = natural water. The
+                       Geofabrik extract has no sea polygon (the coast is only a line), so the sea is not an
+                       area: draw it as the background west of the coast or leave it. Simplified 0.001 deg,
+                       only polygons over 0.00005 square degrees (~0.4 km2) before simplifying:
+                       6.6 MB plain, 1.5 MB gzipped (all 707k polygons at 0.0005 deg would be 180 MB).
+    road_graph.geojson.gz  motorway, trunk, primary, secondary and their ramps, NOT simplified, 6 decimals
+                       (~10 cm), keeps highway, oneway, junction (both from other_tags). Unsimplified so
+                       ways that share an OSM node share the exact coordinate (the junctions). 35 MB plain,
+                       5.0 MB gzipped. With tertiary it would be 61 MB / 9.2 MB.
+  simplifies border, rivers and roads (0.0005 deg), 5 decimal coordinates
   2026-11-21: GDAL 3.13.3 (conda-forge), run on a laptop because the cloud sessions can not reach geofabrik.
+  2026-11-21: roads, areas and road_graph again with GDAL 3.8.4 (Ubuntu apt) in a cloud session that could read
+    the same belgium-261119.osm.pbf (sha256 7fb02759...5d7). GDAL 3.8 writes a way that simplifies below the
+    tolerance as a Point (5 roads) and a too small polygon as a line or a collection (24 areas); the bake
+    skips both. Each ogr2ogr pass over the pbf takes 2-3 minutes (4 cores).
   Road ways in the extract (simplified points / full points), #67:
     motorway 7768 (16322 / 37007)    motorway_link 7405 (15813 / 50319)
     trunk 8612 (17766 / 43913)       trunk_link 2781 (5684 / 16534)
@@ -27,24 +46,70 @@ tools/extract_map.sh
   takes a few minutes (most of it on the border)
 
 tools/bake_map/  (odin run tools/bake_map, from repo root)
-  reads the geojson files, writes assets/belgium.bin (MAP_VERSION 3, 2.9 MB)
+  reads the geojson files and heights.i16.gz, writes assets/belgium.bin (MAP_VERSION 4, 13.9 MB), ~9 s
   projection: equirectangular, km, origin top-left (lon 2.38, lat 51.56), y down
-  road kind from the highway tag, a _link counts as its road; tertiary stays in (#72). Lines are clipped to
-  0..MAP_W_KM x 0..MAP_H_KM (#73, one tertiary point at the German border was at x = 286.27). Empty
-  geometries (ways with missing nodes) are skipped. Lines of one kind that meet end to end where no third line of that kind touches are joined into
-  one (OSM starts a new way at every tag change): 195894 -> 56385 lines, 421773 -> 282270 points,
-  5.7 -> 2.9 MB, the same 225885 segments. Then sorted by kind, so bigger roads are drawn on top.
-  56385 lines, 282270 points, 15 cities, 15 hubs. Bytes per kind (line entries + points):
-    border 31 KB, river 117 KB, tertiary 1096 KB, secondary 659 KB, primary 544 KB, trunk 169 KB,
-    motorway 250 KB
+  Deterministic: CI bakes again and diffs. Maps are only looked up, never iterated; everything that is sorted
+  has a full key or a stable sort over the input order.
+  Lines: road kind from the highway tag, a _link counts as its road; tertiary stays in (#72). Lines are
+  clipped to 0..MAP_W_KM x 0..MAP_H_KM (#73, one tertiary point at the German border was at x = 286.27).
+  Empty geometries (ways with missing nodes) are skipped. Lines of one kind, name and ref that meet end to
+  end where no third such line touches are joined into one (OSM starts a new way at every tag change).
+  Before names: 195894 -> 56385 lines; with name and ref in the key 61780 lines, 287665 points. Then sorted
+  by kind, so bigger roads are drawn on top. 15 cities, 15 hubs.
+  Names: road and river name + road ref as offsets into one blob of 0-terminated strings (each string once,
+    in order of first use): 322 KB. The border and the cities have no line name.
+  Name index (for map_nearest_name): 10 km cells (29 x 24), per cell the runs of consecutive segments of a
+    labelled line (name, or a motorway with a ref) whose bounding box touches the cell. 196039 segment hits
+    -> 54114 runs, 650 KB. Baked so the game does not rebuild it after every hot reload.
+  Areas: outer ring only, holes are dropped (a clearing in a forest is drawn as forest; lakes are their own
+    Water polygons and drawn last, so they still show). Polygons under AREA_MIN_KM2 = 0.5 km2 (after
+    simplifying) are dropped. Ear clipping in map space (O(n^2), forced cut when a self-crossing ring has no
+    ear), then every triangle is clipped to the map rectangle (Sutherland-Hodgman, fan). Ring area and
+    triangle area are printed and agree (10262.6 km2), so no forced cut went wrong.
+    Measured (polygons kept / triangle bytes) by minimum area: all 45.7k / 7.6 MB, 0.1 km2 33.0k / 6.7 MB,
+    0.2 km2 15.7k / 4.9 MB, 0.5 km2 5.3k / 3.0 MB, 1 km2 2.3k / 2.0 MB, 2 km2 1.0k / 1.3 MB.
+    Kept: 5328 polygons, 125384 triangles, 3.07 MB. Area by kind at 0.5 km2: park 6374 km2, city 1818,
+    farmland 1768, water 192, marsh 114, beach 1. OSM Belgium maps only part of its farmland.
+  Buildings: not baked. 7644305 building polygons in the extract (ogrinfo count, 95 s). Even at 4 corners
+    = 2 triangles = 48 bytes each that is ~367 MB, so they do not fit the ~4 MB budget in any form we draw.
+  Heights + hillshade: see ELEVATION DATA.
+  Road graph (bake_roads): a coordinate used by two ways, twice by one way, or a way end is a node; a way
+    that leaves the map is cut at its last point inside (a dead end). Then stretches of the same kind and
+    one-way rule that meet at a node with exactly two stretch ends are joined (OSM splits ways at every tag
+    change): 115079 ways -> 43107 stretches between 29228 nodes. One-way: oneway=yes/true/1 forward,
+    -1/reverse backward, no/alternating/reversible both ways, untagged motorway, motorway_link and
+    roundabouts (junction roundabout / circular / turbo_roundabout) forward. Geometry between two nodes is
+    simplified with Douglas-Peucker at ROAD_SIMPLIFY_KM = 20 m, length_km is measured before simplifying.
+    50691 edges (35523 one-way), 151305 points (606338 before simplifying), 31423 km of directed edges.
+    Bytes: nodes 468 KB, edges 1419 KB, points 1210 KB = 3.1 MB. From the node nearest Brussels 28393 of
+    29228 nodes can be reached; the rest are cut ends at the border and one-way stubs. 649 nodes have no
+    edge out (the end of a one-way road at the border or a dead end).
+    Tertiary left out: with it 51141 nodes, 100618 edges, 319410 points = 6.2 MB.
+  Block sizes in belgium.bin: lines 1236 KB, points 2301 KB, names 323 KB, name index 652 KB, areas 3073 KB,
+    heights 2169 KB, hillshade 1085 KB, road graph 3097 KB, cities + hubs 1 KB.
 
-belgium.bin format (version 2, all little endian, 4-byte aligned)
-  header  magic "DRFT", version, line_count, point_count, city_count, hub_count (6 x u32)
-  lines   start, count, kind (3 x u32)   kind: 0 border, 1 river, 2 motorway
-  points  x, y (2 x f32, km)
-  cities  pos (2 x f32), name (32 bytes, 0-terminated)
-  hubs    pos (2 x f32), name (32 bytes, 0-terminated). For now one hub per city, same position.
-          max MAX_HUBS = 32 (bake fails above that). Tower top = ground + HUB_TOWER_M (58 m, spec).
+belgium.bin format (version 4, all little endian, 4-byte aligned). Blocks follow each other in this order.
+  header      magic "DRFT", version, line_count, point_count, city_count, hub_count, names_size,
+              name_cell_count, name_run_count, area_count, area_point_count, height_w, height_h,
+              road_node_count, road_edge_count, road_point_count (16 x u32)
+  lines       start, count, kind, name, ref (5 x u32). kind = Map_Kind (0 border, 1 river, 2 tertiary ..
+              6 motorway), name / ref = offset into names, 0 = none
+  points      x, y (2 x f32, km)
+  cities      pos (2 x f32), name (32 bytes, 0-terminated)
+  hubs        pos (2 x f32), name (32 bytes, 0-terminated). For now one hub per city, same position.
+              max MAX_HUBS = 32 (bake fails above that). Tower top = ground + HUB_TOWER_M (58 m, spec).
+  names       names_size bytes of 0-terminated UTF-8, offset 0 = "", zero padded to 4 bytes
+  name_cells  NAME_GRID_W x NAME_GRID_H + 1 u32: runs of cell c are name_runs[cells[c]:cells[c + 1]]
+  name_runs   line, start, count (3 x u32): segments start ..< start + count of that line
+  areas       start, count, kind (3 x u32): triangles area_points[start:][:count], kind = Area_Kind
+              (0 city, 1 park, 2 farmland, 3 marsh, 4 beach, 5 water), sorted by kind
+  area_points x, y (2 x f32, km), 3 per triangle
+  heights     height_w x height_h i16, m (1144 x 948), row-major, y down, cell centres
+  hillshade   height_w x height_h u8, same grid
+  road_nodes  pos (2 x f32), first, count (2 x u32): road_edges[first:][:count] leave this node
+  road_edges  from, to, start, count (4 x u32), length_km (f32), kind, oneway (2 x u32): road_points
+              [start:][:count] from -> to; two-way roads have one edge per direction, oneway = 1 otherwise
+  road_points x, y (2 x f32, km)
 
 WEATHER DATA
 
@@ -79,6 +144,26 @@ tools/download_dem.sh (from anywhere): 15 tiles N49..N51 x E002..E006 (named aft
 Tiles: float32 GeoTIFF (COG), heights in m above EGM2008, AREA_OR_POINT=Point. 1200 x 1200 below 50 N,
   800 x 1200 from 50 N (longitude spacing doubles to 4.5 arc seconds). A surface model: buildings and
   forest are in the heights. Checked: coast tile N51 E002 -5.7..41 m, Ardennes N50 E005 max 668 m.
+tools/warp_dem.sh (from anywhere, after download_dem.sh): gdalbuildvrt over the 15 tiles, gdalwarp to
+  +proj=eqc +lat_ts=50.5 +lat_0=51.56 +lon_0=2.38 +R=6378166.175, -te 0 -237000 286000 0 -tr 250 250,
+  -r average, Int16, EHdr (raw little endian), then gzip -9 -n into assets/geojson/heights.i16.gz.
+  R = 111320 m x 180 / pi, so 1 degree is exactly the 111.32 km of the bake projection (R = 6378137 would
+  put the far map corner 1.3 m off); lat_0 = 51.56 makes the map top northing 0, y down = -northing.
+  Pixels are areas: cell (i, j) covers i * 0.25 .. (i + 1) * 0.25 km, its value sits at the centre.
+  average, not max: the height of the whole cell. A peak inside a cell is lower than in the tiles (the
+  route keeps 75 m above the cell's highest sample, see route.odin).
+  2026-11-21, GDAL 3.8.4: 1.5 s. Result 1144 x 948 = 2169024 bytes (sha256 c3b1c1a3...a5e8bf8f4), gzipped
+  986871 bytes (sha256 d8c68107...49dbf2d4). -97..704 m, mean 138 m. The sea is 0 m in the tiles; no
+  no-data pixels (every tile exists). Below 0: polders (a few m) and open pit quarries (-97 m at
+  Gaurain-Ramecroix near Tournai, -86 m at Lessines). Highest cell (704 m) is in the Eifel at the map's east
+  edge, outside Belgium. Spot checks at the hubs (city centres, surface model): Oostende 6, Antwerpen 11,
+  Gent 15, Brussels 30, Liege 71, Namur 90, Charleroi 134 m.
+  Bake (bake_heights): checks the size and -500..3000 m, writes the heights block and a hillshade block:
+  Horn's 3 x 3 gradient (like gdaldem hillshade), edge cells repeat their neighbour, light from azimuth 315
+  (north-west), 45 degrees up, vertical exaggeration HILLSHADE_Z = 4 (the 250 m cells smooth the Ardennes
+  valleys; 1 is almost flat grey, 4 shows the valleys and leaves Flanders near 128). Value = 128 x lit /
+  sin(45) up to flat, 128 + 127 x (lit - flat) / (1 - flat) above: 128 flat, 255 facing the light, 0 at 90
+  degrees or more away.
 
 FONT
 
@@ -176,6 +261,25 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
                   load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
                   Hubs are copied into a fixed array w.m.hubs[:w.m.hub_count], hub id = index.
+                  load_map validates: every block fits the file and the file ends after the last, every
+                  start / count / index points inside its block, kinds in range, names start and end with 0,
+                  road adjacency lists only edges of their node, every coordinate finite (x - x == 0).
+                  Bad data gives ok = false and an empty Map. Cost: ~2.4 ms per call (bench load_map,
+                  profile; was ~0.2 us without checks), at startup and after every hot reload.
+                  Map: lines, points, cities, hubs, names, name_cells / name_runs (name index), areas /
+                  area_points, heights, hillshade, road_nodes / road_edges / road_points. Constants:
+                  MAP_W_KM / MAP_H_KM, NAME_CELL_KM (10), HEIGHT_W / HEIGHT_H (1144 x 948), HEIGHT_CELL_KM.
+                  Every string and slice points into the #load data: valid until the next reload, so World
+                  keeps offsets and indices, never the strings.
+                  map_name(m, offset) -> string: a names offset (Map_Line.name / .ref), "" for 0 or bad.
+                  map_nearest_name(w, pos, radius_km) -> (name, kind, ok): the closest labelled line within
+                  the radius, ranked by distance x NAME_KIND_WEIGHT (motorway 0.6, trunk 0.7, primary and
+                  river 0.8, secondary 0.9, tertiary 1): a motorway at 1.6 km beats a tertiary road at 1 km.
+                  The name, or for a motorway without one the first part of its ref ("E40"). Visits the index
+                  cells nearest first and stops when no line in the next cell can win. NaN pos or radius <= 0
+                  gives ok = false. Measured (-o:speed, cloud box, 4096 random points, min of 5 runs per
+                  point): avg ~4 us at 2..20 km, worst point 30-47 us (city centre cells hold up to 3961
+                  segments).
   terrain.odin    height_at(w, x, y) -> ground height in m. Stub: 0
   weather.odin    wind_at(w, x, y, layer, hour) -> [2]f32 m/s, direction the wind blows toward, x east, y south
                   gust_at(w, x, y, layer, hour) -> 0..1, cloud_at(w, x, y, hour) -> 0..1. Bilinear on the 40 km grid
