@@ -2,6 +2,7 @@ package game
 
 import "core:math"
 import "core:math/linalg"
+import "core:time"
 import rl "vendor:raylib"
 
 // Houses of the street view (Lars, 2026-11-21: "zoveel mogelijk detail in alles: gebouwen, ..."): the real OSM
@@ -444,6 +445,8 @@ in_ring :: proc(ring: [][2]f32, p: [2]f32) -> bool {
 houses_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	co := &w.collide
 	if !co.built do collide_build(w)
+	start := time.tick_now()
+	count := 0
 	m: House_Mesh
 	CAP :: 1 << 16
 	m.pos = make([dynamic][3]f32, 0, CAP, context.temp_allocator)
@@ -478,6 +481,7 @@ houses_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 					clear(&ring)
 					for p in pts do append(&ring, p - lo)
 					house_add(&m, ring[:], co.b_height[b], hash_u32(b * 2654435761 + 7), true, idx)
+					count += 1
 				}
 			}
 		}
@@ -491,6 +495,18 @@ houses_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 		for p in th.ring do append(&ring, p - lo)
 		house_add(&m, ring[:], th.height, th.seed, false, idx)
 	}
+	count += len(town)
+	logf(
+		w,
+		"houses",
+		"tile %.0f %.0f: %d buildings, %d vertices (%.1f MB), %.1f ms",
+		lo.x,
+		lo.y,
+		count,
+		len(m.pos),
+		f32(len(m.pos) * 44) / (1 << 20),
+		time.duration_milliseconds(time.tick_since(start)),
+	)
 
 	if len(m.pos) == 0 do return {}
 	mesh := rl.Mesh {

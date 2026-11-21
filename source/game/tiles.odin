@@ -1,13 +1,16 @@
 package game
 
 import "core:math/linalg"
+import "core:time"
 import rl "vendor:raylib"
 
 // A cache of square tiles around the camera, each with its own mesh, for what is generated near the camera
-// (towns.odin, nature.odin). A tile is built once when it comes within reach, at most TILE_BUILDS_PER_FRAME a
-// frame and nearest first, so moving never stalls a frame, and dropped when it is well out of reach.
+// (towns.odin, nature.odin, houses.odin, the street view's roads). A tile is built once when it comes within
+// reach, nearest first: one a frame, more only while the frame's builds stay under TILE_BUILD_MS (the densest
+// house tile of Brussels takes 3.3 ms in the profile build), and dropped when it is well out of reach.
 TILE_SLOTS :: 96
-TILE_BUILDS_PER_FRAME :: 2
+TILE_BUILDS_PER_FRAME :: 4
+TILE_BUILD_MS :: 1.0
 
 Tile :: struct {
 	key:  [2]i32,
@@ -64,7 +67,9 @@ tiles_update_draw :: proc(
 			t = {}
 		}
 	}
-	for _ in 0 ..< TILE_BUILDS_PER_FRAME {
+	start := time.tick_now()
+	for b in 0 ..< TILE_BUILDS_PER_FRAME {
+		if b > 0 && time.duration_milliseconds(time.tick_since(start)) > TILE_BUILD_MS do break
 		// The nearest tile within reach that is not built yet.
 		best: [2]i32
 		best_d := max(f32)
