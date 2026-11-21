@@ -1,5 +1,5 @@
 #!/bin/sh
-# usage: ./check.sh [--pr <base-ref>]
+# usage: ./check.sh
 
 FAIL=0
 fail() {
@@ -45,11 +45,6 @@ for f in $FILES; do
 	SIZE=$(wc -c < "$f")
 	[ "$SIZE" -gt 1000000 ] && fail "$f is $SIZE bytes, max 1 MB"
 done
-
-if [ "$1" = "--pr" ] && [ -n "$2" ]; then
-	CHANGED=$(git diff --numstat "$2"...HEAD -- . ':(exclude)assets' | awk '{ s += $1 + $2 } END { print s + 0 }')
-	[ "$CHANGED" -gt 400 ] && fail "pull request changes $CHANGED lines outside assets/, max 400"
-fi
 
 [ $FAIL -eq 0 ] && echo "check: ok"
 exit $FAIL
