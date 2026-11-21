@@ -79,7 +79,8 @@ World :: struct {
 	airship:         Airship,
 	buildings:       Buildings,
 	cloud_sprites:   Cloud_Sprites,
-	nature:          Nature,
+	nature:          Tile_Cache,
+	towns:           Tile_Cache,
 	// Cruise control while steering yourself: the throttle the ship holds, -1 = take the current speed first.
 	cruise:          f32,
 	car_anim:        Car_Anim,
@@ -488,6 +489,7 @@ game_update :: proc(memory: rawptr) -> bool {
 
 			// Draw order 4: the 3D buildings around the cities and the trees, over the roads.
 			buildings_draw(w, fog)
+			towns_draw(w)
 			nature_draw(w)
 		}
 		rl.EndMode3D()
@@ -649,7 +651,8 @@ game_shutdown :: proc(memory: rawptr) {
 	line_meshes_unload(&w.line_meshes)
 	buildings_unload(&w.buildings)
 	clouds_unload(&w.cloud_sprites)
-	nature_unload(&w.nature)
+	tiles_unload(&w.nature)
+	tiles_unload(&w.towns)
 	virtual.arena_destroy(&w.fetch.mem)
 	virtual.arena_destroy(&w.node.mem)
 	virtual.arena_destroy(&w.frame)
