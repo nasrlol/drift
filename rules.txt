@@ -4,8 +4,9 @@ Build
 - Code must build with: -vet -strict-style -warnings-as-errors
 - Plain ASCII in every file.
 - Everything is written in Odin: app, tools, bake steps, tests, benchmarks. No other languages.
-  Only exception: build glue (build.sh, compile.sh, format.sh, .githooks, CI config).
+  Only exception: build glue (build.sh, compile.sh / .bat, format.sh / .bat, check.sh / .bat, .githooks, CI config).
 - Build modes: ./build.sh debug (default), profile (optimized + debug info, benchmarks run here), release.
+  On Windows: compile.bat with the same modes. Both must keep working, CI builds both.
 - Release is one executable per platform with all data embedded. No dll, no data files next to it.
 - Fast builds. A full debug build takes under 2 seconds. A slow build is a bug, fix it like one.
 - compile.sh prints the build time. If it goes up, find out which change did it.

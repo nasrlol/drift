@@ -7,7 +7,11 @@ else
 	echo "pre-commit: odinfmt not installed, skipping format check (CI still checks it)"
 fi
 ./check.sh
-./compile.sh debug
+
+case "$(uname -s)" in
+	MINGW* | MSYS* | CYGWIN*) cmd //c compile.bat debug ;;
+	*) ./compile.sh debug ;;
+esac
 
 if ls test/*.odin >/dev/null 2>&1; then
 	odin run test -out:build/test

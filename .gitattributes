@@ -3,3 +3,4 @@
 *.pbf binary
 *.pdf binary
 *.geojson linguist-generated -diff
+*.bat text eol=crlf
