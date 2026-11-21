@@ -26,7 +26,7 @@ FIRST, TOGETHER (so everyone can work in parallel)
 [x] test/ program: fixed snapshot + fixed inputs -> compare routes and maneuvers to stored results
 
 NASR: MAP + RENDERING + UI
-[ ] load belgium.bin and draw lines (km -> px: scale + offset)
+[x] load belgium.bin and draw lines (km -> px: scale + offset)
 [ ] camera: pan + zoom to cursor (mouse wheel / controller)
 [ ] draw cities + names
 [ ] "(c) OpenStreetMap contributors" on screen
@@ -72,7 +72,7 @@ DARIO: SHIP + CONTROLS
 [x] Windows smoke test: compile.bat debug, run build\drift.exe from the repo root, rebuild once while it runs
     and check the game reloads ("[host] reloaded game"). Also try compile.bat release. Report what breaks.
     Result in notes.txt (SMOKE TEST): rebuild while running fails, needs a compile.bat fix from the owner.
-[ ] Controls struct: throttle, turn, climb (-1..1)
+[x] Controls struct: throttle, turn, climb (-1..1)
 [ ] keyboard WASD + R/F, controller sticks (deadzone)
 [ ] ship_step(dt, controls), fixed timestep 60 Hz (accumulator), pure function of state + controls + world
 [ ] limits: accel +1.2 / -1.6 m/s^2, smoothed turn rate, ceiling 900 m, min 28 m above terrain
