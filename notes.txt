@@ -439,6 +439,17 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     Windows; on macOS the second one logs "lan discovery off" and only dials). Broadcasts
                     stop at the router and some Wi-Fi blocks them between clients: there seeds.txt or a
                     public node is still needed. Firewalls must allow UDP and TCP 7419.
+                    Seen on office Wi-Fi (2026-11-21, Linux + Windows on one /16): unicast UDP and TCP
+                    went through, both 255.255.255.255 and the subnet broadcast were dropped. One side
+                    with the other in seeds.txt is enough: sync, presence and live packets go both ways
+                    over the dialer's connection. Windows on a "Public" network blocks inbound for the
+                    game by default, so there the Windows side has to be the one with the seed.
+                    Own devices on any network: Tailscale. Put the other device's full MagicDNS name in
+                    seeds.txt (nijeveen.tail142ce3.ts.net, not the short name: our resolver skips the
+                    search domain). Tailscale counts as Private on Windows, so its firewall lets it in.
+                    Clocks: other cars are dropped when their time is more than PRESENCE_TTL_S old or
+                    PRESENCE_FUTURE_S ahead. A Windows PC with w32time stopped was 104.6 s ahead: the
+                    nodes synced, but neither side showed the other car until its clock was synced.
                     Tested (Linux): two headless nodes on 7421 / 7422 without seeds plus a game on 7419
                     all knew each other within 10 s.
                     Measured (localhost): two nodes with 120 + 80 messages both end with 200 in one sync.
