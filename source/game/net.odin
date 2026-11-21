@@ -713,10 +713,11 @@ store_rewrite :: proc(s: ^Store, path: string) {
 // connection at a time, sync dials peers. Neither runs in the frame loop.
 //
 // One TCP connection, the dialer asks, the other side answers, until the dialer closes it:
-//   both send hello: magic "DRNP" u32le, version u8, listen port u16le (0 = not listening)
+//   both send hello: magic "DRNP" u32le, version u8, listen port u16le (0 = not listening), node id [8]u8
 //   'I' since i64le          -> count u32le, count ids (32 bytes): messages with time >= since
 //   'G' count u32le, ids     -> count u32le, the messages it has of those (count <= SYNC_BATCH)
 //   'P' count u32le, msgs    -> added u32le (count <= SYNC_BATCH)
+//   'N'                      -> count u8, count peers: family u8 (4 / 6), address [16]u8, port u16le
 // Sync is by message id, never by position: positions only mean something inside one store.
 // Every message from a peer goes through msg_read before store_add, the id of a 'G' answer must be one
 // that was asked for.
@@ -729,10 +730,23 @@ SYNC_S :: 30
 SYNC_FULL_S :: 3600 // ask for all ids this often, the rest of the time only the recent ones
 SYNC_MARGIN_S :: 600 // messages can arrive a while after their time
 SYNC_BATCH :: 64
+
+// Peers: seeds from SEED_NODES and SEEDS_PATH (one "host:port" or "host" per line, # comments), written
+// by people. Learned peers come from the peers' 'N' answers and from nodes that dial us (address + the
+// listen port in their hello), and are saved to PEERS_PATH so a restart does not start from the seeds.
+// A learned peer that fails PEER_FORGET_FAILS syncs in a row (hours, with the back off) is forgotten,
+// seeds are kept. A peer whose hello has our own node id is us, behind another address: dropped.
+SEED_NODES :: [?]string{} // public nodes that anyone can start from, none yet
+SEEDS_PATH :: "cache/seeds.txt"
+PEERS_PATH :: "cache/peers.txt"
 MAX_PEERS :: 32
+PEER_FORGET_FAILS :: 8
+PEER_SHARE_S :: 24 * 3600 // 'N' only lists peers that synced this recently
+PEER_ENTRY :: 19
 
 Peer :: struct {
 	ep:      net.Endpoint,
+	seed:    bool,
 	next:    i64, // unix s of the next sync
 	full_at: i64, // last sync that asked for every id, 0 = never
 	last_ok: i64,
@@ -741,23 +755,27 @@ Peer :: struct {
 
 // Zero is valid: not started, NODE_PORT, no peers. Lives in World, so the threads stop before a reload.
 Net_Node :: struct {
-	port:       int, // 0 = NODE_PORT; set another one to run two nodes on one machine
-	started:    bool,
-	loaded:     bool, // store loaded from STORE_PATH, once per run
-	stop:       bool, // atomic
-	listening:  bool,
-	listener:   net.TCP_Socket,
-	server:     ^thread.Thread,
-	syncer:     ^thread.Thread,
-	mem:        virtual.Arena, // sync thread scratch
-	peers_lock: sync.Mutex,
-	peers:      [MAX_PEERS]Peer,
-	peer_count: int,
+	port:        int, // 0 = NODE_PORT; set another one to run two nodes on one machine
+	started:     bool,
+	loaded:      bool, // store and peer files read, once per run
+	id:          [8]u8, // random per run, tells a node it dialed itself
+	peers_dirty: bool, // learned peers changed, write PEERS_PATH
+	own:         [4]net.Endpoint, // addresses that turned out to be this node, never added again
+	own_count:   int,
+	stop:        bool, // atomic
+	listening:   bool,
+	listener:    net.TCP_Socket,
+	server:      ^thread.Thread,
+	syncer:      ^thread.Thread,
+	mem:         virtual.Arena, // sync thread scratch
+	peers_lock:  sync.Mutex,
+	peers:       [MAX_PEERS]Peer,
+	peer_count:  int,
 	// Per thread, too big for a thread stack.
-	sync_ids:   [STORE_MAX][32]u8,
-	sync_msgs:  [SYNC_BATCH]Message,
-	serve_ids:  [STORE_MAX][32]u8,
-	serve_msgs: [SYNC_BATCH]Message,
+	sync_ids:    [STORE_MAX][32]u8,
+	sync_msgs:   [SYNC_BATCH]Message,
+	serve_ids:   [STORE_MAX][32]u8,
+	serve_msgs:  [SYNC_BATCH]Message,
 }
 
 // Called every frame, like weather_poll: starts the node after game start and after every reload.
@@ -766,6 +784,7 @@ node_poll :: proc(w: ^World) {
 	if n.started do return
 	n.started = true
 	sync.atomic_store(&n.stop, false)
+	if n.id == {} do crypto.rand_bytes(n.id[:])
 	port := n.port == 0 ? NODE_PORT : n.port
 	sock, err := net.listen_tcp({net.IP4_Any, port})
 	if err != nil {
@@ -813,18 +832,35 @@ node_stop :: proc(w: ^World) {
 	virtual.arena_free_all(&n.mem)
 }
 
-// Adds ep unless it is known or the list is full. Safe from any thread.
-node_add_peer :: proc(n: ^Net_Node, ep: net.Endpoint) -> bool {
+// Adds ep unless it is known. A full list makes room by dropping the learned peer that failed most,
+// if any failed at all, so good peers are never pushed out by new names. Safe from any thread.
+node_add_peer :: proc(n: ^Net_Node, ep: net.Endpoint, seed: bool) -> bool {
+	if ep.port <= 0 || ep.port > 65535 || ep.address == nil do return false
 	sync.mutex_lock(&n.peers_lock)
 	defer sync.mutex_unlock(&n.peers_lock)
-	for i in 0 ..< n.peer_count {
-		if n.peers[i].ep == ep do return false
+	for own in n.own {
+		if own == ep do return false
 	}
-	if n.peer_count == MAX_PEERS do return false
+	for &p in n.peers[:n.peer_count] {
+		if p.ep != ep do continue
+		p.seed ||= seed
+		return false
+	}
+	if n.peer_count == MAX_PEERS {
+		worst := -1
+		for p, i in n.peers[:n.peer_count] {
+			if !p.seed && p.fails > 0 && (worst < 0 || p.fails > n.peers[worst].fails) do worst = i
+		}
+		if worst < 0 do return false
+		n.peer_count -= 1
+		n.peers[worst] = n.peers[n.peer_count]
+	}
 	n.peers[n.peer_count] = {
-		ep = ep,
+		ep   = ep,
+		seed = seed,
 	}
 	n.peer_count += 1
+	if !seed do n.peers_dirty = true
 	return true
 }
 
@@ -854,7 +890,9 @@ node_serve_thread :: proc(t: ^thread.Thread) {
 node_serve :: proc(w: ^World, s: net.TCP_Socket, from: net.Endpoint) {
 	n := &w.node
 	buf: [64]u8
-	if _, ok := node_hello(n, s); !ok do return
+	port, id, ok := node_hello(n, s)
+	if !ok || id == n.id do return
+	if port != 0 do node_add_peer(n, {from.address, port}, false)
 	start := time.tick_now()
 	got, gave := 0, 0
 	for time.duration_milliseconds(time.tick_since(start)) < SERVE_MAX_MS {
@@ -910,6 +948,30 @@ node_serve :: proc(w: ^World, s: net.TCP_Socket, from: net.Endpoint) {
 			head := u32le(added)
 			if !net_send(s, mem.ptr_to_bytes(&head)) do return
 			got += added
+		case 'N':
+			list: [1 + MAX_PEERS * PEER_ENTRY]u8
+			count := 0
+			{
+				now := time.time_to_unix(time.now())
+				sync.mutex_lock(&n.peers_lock)
+				defer sync.mutex_unlock(&n.peers_lock)
+				for &p in n.peers[:n.peer_count] {
+					if now - p.last_ok > PEER_SHARE_S do continue
+					e := list[1 + count * PEER_ENTRY:][:PEER_ENTRY]
+					switch &a in p.ep.address {
+					case net.IP4_Address:
+						e[0] = 4
+						copy(e[1:], a[:])
+					case net.IP6_Address:
+						e[0] = 6
+						copy(e[1:], mem.ptr_to_bytes(&a))
+					}
+					(^u16le)(&e[17])^ = u16le(p.ep.port)
+					count += 1
+				}
+			}
+			list[0] = u8(count)
+			if !net_send(s, list[:1 + count * PEER_ENTRY]) do return
 		case:
 			fmt.eprintfln("[net] %s: unknown op %d, closing", ep_text(from, buf[:]), op[0])
 			return
@@ -953,6 +1015,7 @@ node_sync_thread :: proc(t: ^thread.Thread) {
 	buf: [64]u8
 	if !n.loaded {
 		store_load(&w.store, STORE_PATH, time.time_to_unix(time.now()), virtual.arena_allocator(&n.mem))
+		node_load_peers(n)
 		virtual.arena_free_all(&n.mem)
 		n.loaded = true
 	}
@@ -973,33 +1036,164 @@ node_sync_thread :: proc(t: ^thread.Thread) {
 			continue
 		}
 		full := now - p.full_at >= SYNC_FULL_S
-		ok := node_sync(w, p.ep, full ? 0 : max(p.last_ok - SYNC_MARGIN_S, 0))
-		if ok {
+		result := node_sync(w, p.ep, full ? 0 : max(p.last_ok - SYNC_MARGIN_S, 0))
+		switch result {
+		case .Ok:
 			if full do p.full_at = now
 			p.last_ok = now
 			p.fails = 0
 			p.next = now + SYNC_S
-		} else {
+		case .Failed:
 			if p.fails == 0 do fmt.eprintfln("[net] sync with %s failed, backing off", ep_text(p.ep, buf[:]))
 			p.fails += 1
 			p.next = now + SYNC_S << uint(min(p.fails, 6))
+		case .Self:
+			fmt.eprintfln("[net] %s is this node, dropped", ep_text(p.ep, buf[:]))
 		}
+		forget := result == .Self || (!p.seed && p.fails >= PEER_FORGET_FAILS)
+		if forget && result != .Self {
+			fmt.eprintfln("[net] %s failed %d times, forgotten", ep_text(p.ep, buf[:]), p.fails)
+		}
+
 		// The list may have changed while the lock was free, find the peer again.
-		sync.mutex_lock(&n.peers_lock)
-		for i in 0 ..< n.peer_count {
-			if n.peers[i].ep == p.ep do n.peers[i] = p
+		save := false
+		{
+			sync.mutex_lock(&n.peers_lock)
+			defer sync.mutex_unlock(&n.peers_lock)
+			for i := 0; i < n.peer_count; i += 1 {
+				if n.peers[i].ep != p.ep do continue
+				if result == .Self {
+					n.own[n.own_count % len(n.own)] = p.ep
+					n.own_count += 1
+				}
+				if forget {
+					n.peer_count -= 1
+					n.peers[i] = n.peers[n.peer_count]
+					n.peers_dirty = true
+				} else {
+					n.peers[i] = p
+				}
+				break
+			}
+			save = n.peers_dirty
+			n.peers_dirty = false
 		}
-		sync.mutex_unlock(&n.peers_lock)
+		if save do node_save_peers(n)
 	}
 }
 
-// One sync with one peer: fetch what we miss of their ids since `since`, then push ours they miss.
-node_sync :: proc(w: ^World, ep: net.Endpoint, since: i64) -> bool {
+// Learned peers to PEERS_PATH as text, one per line. Seeds stay in their own file.
+node_save_peers :: proc(n: ^Net_Node) {
+	text: [MAX_PEERS * 64]u8
+	b := strings.builder_from_bytes(text[:])
+	{
+		sync.mutex_lock(&n.peers_lock)
+		defer sync.mutex_unlock(&n.peers_lock)
+		for p in n.peers[:n.peer_count] {
+			if p.seed do continue
+			net.endpoint_to_string(p.ep, &b)
+			strings.write_byte(&b, '\n')
+		}
+	}
+	if err := os.make_directory("cache"); err != nil && err != .Exist {
+		fmt.eprintln("[net] cannot create cache/:", err)
+	}
+	tmp := PEERS_PATH + ".tmp"
+	if err := os.write_entire_file(tmp, strings.to_string(b)); err != nil {
+		fmt.eprintfln("[net] cannot write %s: %v", tmp, err)
+	} else if err = os.rename(tmp, PEERS_PATH); err != nil {
+		fmt.eprintfln("[net] cannot rename %s to %s: %v", tmp, PEERS_PATH, err)
+	}
+}
+
+// Seeds (SEED_NODES, SEEDS_PATH) and the learned peers of the last run (PEERS_PATH). Host names are resolved
+// here, on the sync thread, DNS can take seconds. Allocates in n.mem, the caller frees it.
+node_load_peers :: proc(n: ^Net_Node) {
+	context.allocator = virtual.arena_allocator(&n.mem)
+	seeds := SEED_NODES
+	for line in seeds do node_add_peer_text(n, line, true, "SEED_NODES")
+	for path, i in ([2]string{SEEDS_PATH, PEERS_PATH}) {
+		if !os.exists(path) {
+			if i == 0 do fmt.eprintfln("[net] no %s: add \"host:port\" lines to it to find other nodes", path)
+			continue
+		}
+		data, err := os.read_entire_file(path, context.allocator)
+		if err != nil {
+			fmt.eprintfln("[net] cannot read %s: %v", path, err)
+			continue
+		}
+		text := string(data)
+		for line in strings.split_lines_iterator(&text) {
+			l := strings.trim_space(line)
+			if l == "" || l[0] == '#' do continue
+			node_add_peer_text(n, l, i == 0, path)
+		}
+	}
+	n.peers_dirty = false
+}
+
+// "1.2.3.4:7419", "[::1]:7419", "host.name:7419" or without the port (NODE_PORT).
+node_add_peer_text :: proc(n: ^Net_Node, text: string, seed: bool, source: string) {
+	ep4, ep6, err := net.resolve(text)
+	if err != nil {
+		fmt.eprintfln("[net] %s: cannot use peer %q: %v", source, text, err)
+		return
+	}
+	ep := ep4.address != nil ? ep4 : ep6
+	if ep.port == 0 do ep.port = NODE_PORT
+	node_add_peer(n, ep, seed)
+}
+
+
+Sync_Result :: enum u8 {
+	Failed,
+	Ok,
+	Self, // the peer is this node
+}
+
+// One sync with one peer: fetch what we miss of their ids since `since`, push ours they miss, then ask
+// for their peers.
+node_sync :: proc(w: ^World, ep: net.Endpoint, since: i64) -> Sync_Result {
 	n := &w.node
 	buf: [64]u8
-	s := net_dial(ep, &n.stop) or_return
+	s, dialed := net_dial(ep, &n.stop)
+	if !dialed do return .Failed
 	defer net.close(s)
-	node_hello(n, s) or_return
+	_, id, ok := node_hello(n, s)
+	if !ok do return .Failed
+	if id == n.id do return .Self
+	if !node_swap(w, s, ep, since) do return .Failed
+
+	list: [1 + MAX_PEERS * PEER_ENTRY]u8
+	if !net_send(s, []u8{'N'}) || !net_recv(s, list[:1]) || list[0] > MAX_PEERS do return .Failed
+	entries := list[1:][:int(list[0]) * PEER_ENTRY]
+	if !net_recv(s, entries) do return .Failed
+	learned := 0
+	for at := 0; at < len(entries); at += PEER_ENTRY {
+		e := entries[at:][:PEER_ENTRY]
+		peer := net.Endpoint {
+			port = int((^u16le)(&e[17])^),
+		}
+		switch e[0] {
+		case 4:
+			peer.address = net.IP4_Address{e[1], e[2], e[3], e[4]}
+		case 6:
+			a: net.IP6_Address
+			mem.copy(&a, &e[1], 16)
+			peer.address = a
+		case:
+			continue
+		}
+		if node_add_peer(n, peer, false) do learned += 1
+	}
+	if learned > 0 do fmt.eprintfln("[net] %s told us %d new peers", ep_text(ep, buf[:]), learned)
+	return .Ok
+}
+
+// The store part of node_sync.
+node_swap :: proc(w: ^World, s: net.TCP_Socket, ep: net.Endpoint, since: i64) -> bool {
+	n := &w.node
+	buf: [64]u8
 
 	// 1. Their ids.
 	theirs: []([32]u8)
@@ -1089,17 +1283,19 @@ store_has :: proc(s: ^Store, id: [32]u8) -> bool {
 	return false
 }
 
-// Both sides send a hello and check the other one. Returns the port the peer listens on.
-node_hello :: proc(n: ^Net_Node, s: net.TCP_Socket) -> (port: int, ok: bool) {
-	hello: [7]u8
+// Both sides send a hello and check the other one. Returns the port the peer listens on and its node id.
+node_hello :: proc(n: ^Net_Node, s: net.TCP_Socket) -> (port: int, id: [8]u8, ok: bool) {
+	hello: [15]u8
 	(^u32le)(&hello[0])^ = NODE_MAGIC
 	hello[4] = NODE_VERSION
 	if n.listening do (^u16le)(&hello[5])^ = u16le(n.port == 0 ? NODE_PORT : n.port)
-	theirs: [7]u8
+	copy(hello[7:], n.id[:])
+	theirs: [15]u8
 	net_send(s, hello[:]) or_return
 	net_recv(s, theirs[:]) or_return
 	if (^u32le)(&theirs[0])^ != NODE_MAGIC || theirs[4] != NODE_VERSION do return
-	return int((^u16le)(&theirs[5])^), true
+	copy(id[:], theirs[7:])
+	return int((^u16le)(&theirs[5])^), id, true
 }
 
 // "1.2.3.4:7419" for logs, without allocating.

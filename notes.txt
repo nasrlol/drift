@@ -145,15 +145,26 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                         T = 0 (all) once an hour per peer, otherwise the last good sync - 10 min.
                         A failed sync backs off: 30 s x 2^fails, max 32 min.
                     Protocol, one TCP connection, the dialer asks until it closes:
-                      both: hello = magic "DRNP" u32le, version u8, listen port u16le (0 = not listening)
+                      both: hello = magic "DRNP" u32le, version u8, listen port u16le (0 = not listening),
+                        node id [8]u8 (random per run)
                       'I' since i64le -> count u32le + ids;  'G' count + ids -> count + messages;
-                      'P' count + messages -> added u32le. Counts above STORE_MAX / SYNC_BATCH close it.
+                      'P' count + messages -> added u32le;  'N' -> count u8 + peers (family u8, address
+                      [16]u8, port u16le). Counts above STORE_MAX / SYNC_BATCH / MAX_PEERS close it.
                     net_dial (dial_posix.odin / dial_windows.odin): net.dial_tcp has no connect timeout (a
                     dead address blocks ~75 s), so non-blocking connect + poll, 5 s max, checks the stop flag
                     every 100 ms. Stop while dialing a dead peer: ~10 ms.
                     Store writes from both threads: s.file_lock around appends and rewrites.
-                    node_add_peer(n, ep) for now; seeds and learning peers come with the peer list item.
+                    Peer list (max 32): seeds from SEED_NODES (in code, empty until there is a public node)
+                    and cache/seeds.txt (one "host:port" or "host" per line, # comments, resolved on the
+                    sync thread). Learned: every 'N' answer (peers that synced in the last 24 h) and every
+                    node that dials us (its address + the listen port from its hello). Learned peers are
+                    saved to cache/peers.txt (text) and read back at start. A learned peer that fails 8
+                    syncs in a row (~5 h with the back off) is forgotten, seeds stay. A full list drops the
+                    learned peer that failed most, never one that works. A hello with our own node id
+                    means we dialed ourselves (our address came back through others): dropped, and that
+                    address is never added again this run.
                     Measured (localhost): two nodes with 120 + 80 messages both end with 200 in one sync.
+                    Three nodes where B and C only know A: after one round each knows the other two.
                   The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
   debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
                   Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =

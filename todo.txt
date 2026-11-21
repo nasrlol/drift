@@ -100,7 +100,7 @@ The central relay (#18, #22, #25) was dropped; reuse its code from those branche
 [ ] offers include hub ids, times, seats, weather snapshot hash
 [x] message store: by id (sha256), dedupe, expiry, cap per author and total, append-only file (#41)
 [x] peer sync: swap ids since time T, send what the other side is missing (TCP, timeouts, thread) (#41)
-[ ] peer list: seed nodes in config, learn peers from peers, forget dead ones (#41)
+[x] peer list: seed nodes in config, learn peers from peers, forget dead ones (#41)
 [ ] headless node: same store + sync without the window, anyone can run one (#41)
 [ ] weather snapshot to peers, fetch by sha256, reuse snapshot_check from #22 (#42)
 [ ] matching: filter offers by grid cell + hour, then detour check with the router
