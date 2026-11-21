@@ -342,29 +342,37 @@ route_store :: proc(
 	r.sum = evaluate(w, r.path, airspeeds[mode], hour, r.times, r.dist)
 	r.ok = true
 
-	// Why: the layers it flies, in order, and the hub it passes closest to halfway.
+	// Why: the layers it cruises in (at least WHY_LAYER_SHARE of the distance, the climb out and the approach
+	// do not count), in the order it reaches them, and the hub it passes closest to halfway.
 	{
-		layers: [8]int
-		count := 0
-		for p in r.path {
-			l := layer_at(p.z)
-			if count == 0 || layers[count - 1] != l {
-				if count == len(layers) do break
-				layers[count] = l
-				count += 1
-			}
+		km: [WIND_LAYERS]f32
+		first: [WIND_LAYERS]int
+		for &f in first do f = len(r.path)
+		for i in 1 ..< len(r.path) {
+			l := layer_at(r.path[i].z)
+			km[l] += r.dist[i] - r.dist[i - 1]
+			// Order by where it cruises: a layer only passed through on a climb comes later.
+			if abs(r.path[i].z - r.path[i - 1].z) <= LEVEL_M do first[l] = min(first[l], i)
 		}
-		// Short dips back to a layer already named are not repeated.
-		names: [WIND_LAYERS]bool
+		total := max(r.dist[len(r.dist) - 1], 1e-3)
+		top := 0
+		for l in 1 ..< WIND_LAYERS do if km[l] > km[top] do top = l
 		b := strings.builder_from_bytes(r.sum.why[:len(r.sum.why) - 1])
 		strings.write_string(&b, "Via ")
 		written := 0
-		for l in layers[:count] {
-			if names[l] do continue
-			names[l] = true
+		for _ in 0 ..< WIND_LAYERS {
+			// The next layer by first point among the ones not written yet.
+			next := -1
+			for l in 0 ..< WIND_LAYERS {
+				if km[l] < WHY_LAYER_SHARE * total && l != top do continue
+				if next < 0 || first[l] < first[next] do next = l
+			}
+			if next < 0 do break
 			if written > 0 do strings.write_string(&b, " and ")
 			buf: [16]u8
-			strings.write_string(&b, layer_name(buf[:], l))
+			strings.write_string(&b, layer_name(buf[:], next))
+			km[next], first[next] = -1, len(r.path)
+			if next == top do top = -1
 			written += 1
 		}
 		mid := r.path[len(r.path) / 2].xy
@@ -378,6 +386,9 @@ route_store :: proc(
 
 	r.maneuvers = build_maneuvers(w, r, from, to, hour, depart, alloc)
 }
+
+LEVEL_M :: 0.5 // a path step that changes the altitude less than this is level flight
+WHY_LAYER_SHARE :: 0.2 // a layer is named in the route's why from this share of its distance
 
 // Spec "buildManeuvers", adapted to RESAMPLE_KM points: depart, turns, altitude changes, long legs, arrive,
 // sorted along the path, events closer than MERGE_KM keep the most important one.
@@ -493,7 +504,16 @@ build_maneuvers :: proc(
 		m := ev(&events, up ? .Climb : .Descend, i, dist)
 		buf: [16]u8
 		name := layer_name(buf[:], layer_at(path[k].z))
-		fmt.bprintf(m.text[:len(m.text) - 1], "%s to %s", up ? "Climb" : "Descend", name)
+		verb := up ? "Climb" : "Descend"
+		switch {
+		case k >= n - 1:
+			// The approach: the tower is the goal, not the layer its platform happens to be in.
+			fmt.bprintf(m.text[:len(m.text) - 1], "%s to the %s tower", verb, hub_name(w, to))
+		case layer_at(path[k].z) != layer_at(path[i].z):
+			fmt.bprintf(m.text[:len(m.text) - 1], "%s to %s", verb, name)
+		case:
+			fmt.bprintf(m.text[:len(m.text) - 1], "%s to %.0f m", verb, path[k].z)
+		}
 		dir := linalg.normalize0(path[k].xy - path[i].xy)
 		gain := linalg.dot(wind_at(w, path[k].x, path[k].y, layer_at(path[k].z), hour), dir)
 		gain -= linalg.dot(wind_at(w, path[i].x, path[i].y, layer_at(path[i].z), hour), dir)
@@ -547,6 +567,8 @@ build_maneuvers :: proc(
 		if len(merged) > 0 && e.s_km - merged[len(merged) - 1].s_km > STRAIGHT_KM {
 			prev := merged[len(merged) - 1]
 			i := ahead(dist, prev.path_index, MERGE_KM + 0.25)
+			// Where the climb or descent of the event before levels out: the layer the leg cruises in.
+			for i < e.path_index - 1 && abs(path[i + 1].z - path[i].z) > LEVEL_M do i += 1
 			s := Maneuver {
 				kind       = .Straight,
 				path_index = i,

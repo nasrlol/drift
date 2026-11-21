@@ -210,6 +210,139 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 			}
 			w.gust_zones[slot] = {{x, y}, radius}
 			fmt.sbprintfln(out, "gust %d: %.3f %.3f radius %.3f km", slot, x, y, radius)
+		case "plan":
+			// plan <from hub> <to hub> <hour>: the three routes of the plan screen with their summaries and
+			// maneuvers, as nav.odin plans them.
+			from, from_ok := strconv.parse_int(f[1], 10)
+			to, to_ok := strconv.parse_int(f[2], 10)
+			hour, hour_ok := strconv.parse_int(f[3], 10)
+			if n != 4 ||
+			   !from_ok ||
+			   !to_ok ||
+			   !hour_ok ||
+			   from < 0 ||
+			   from >= w.m.hub_count ||
+			   to < 0 ||
+			   to >= w.m.hub_count ||
+			   hour < 0 ||
+			   hour >= FORECAST_HOURS {
+				logf(
+					w,
+					"headless",
+					"inputs line %d: %q, want: plan <from hub> <to hub> <hour>",
+					line_no,
+					line,
+				)
+				return false
+			}
+			w.plan.from, w.plan.to, w.plan.hour = from, to, hour
+			w.plan.has_from, w.plan.has_to = true, true
+			plan_routes(w, from, to, hour)
+			fmt.sbprintfln(out, "plan %s -> %s hour %d", hub_name(w, from), hub_name(w, to), hour)
+			mode_names := ROUTE_MODE_NAMES
+			for mode in Route_Mode {
+				r := &w.routes[mode]
+				if !r.ok {
+					fmt.sbprintfln(out, "  %s: no safe route", mode_names[mode])
+					continue
+				}
+				sm := &r.sum
+				fmt.sbprintfln(
+					out,
+					"  %s: %.1f min, %.3f km, %.1f km/h, %.3f kWh net, %v, %s",
+					mode_names[mode],
+					sm.minutes,
+					sm.km,
+					sm.kmh,
+					sm.net_kwh,
+					sm.tag,
+					cstr(sm.why[:]),
+				)
+				for &m in r.maneuvers {
+					fmt.sbprintfln(
+						out,
+						"    %.3f km %v: %s / %s / %s",
+						m.s_km,
+						m.kind,
+						cstr(m.text[:]),
+						cstr(m.sub[:]),
+						cstr(m.road[:]),
+					)
+				}
+			}
+		case "fly":
+			// fly <mode> <max seconds> [report gust after <seconds>]: navigation with the autopilot at 1x, fixed
+			// steps, until docked or the time is up. Prints every new maneuver, reroute and the arrival.
+			mode, mode_ok := Route_Mode(0), false
+			for name, m in ROUTE_MODE_NAMES {
+				if f[1] == name do mode, mode_ok = m, true
+			}
+			limit, limit_ok := strconv.parse_f32(f[2])
+			gust_s, gust_ok := f32(-1), true
+			if n == 4 do gust_s, gust_ok = strconv.parse_f32(f[3])
+			if (n != 3 && n != 4) || !mode_ok || !limit_ok || !gust_ok || !(limit > 0 && limit < 1e5) {
+				logf(
+					w,
+					"headless",
+					"inputs line %d: %q, want: fly <fastest|greenest|calmest> <max s> [gust after s]",
+					line_no,
+					line,
+				)
+				return false
+			}
+			w.sim_speed = 0
+			if !nav_start(w, mode) {
+				fmt.sbprintfln(out, "fly %s: no route to fly", f[1])
+				continue
+			}
+			nv := &w.nav
+			fmt.sbprintfln(out, "fly %s from %s to %s", f[1], hub_name(w, nv.from), hub_name(w, nv.to))
+			last_next, last_reroutes := -1, 0
+			steps := int(limit / SIM_DT)
+			for step in 0 ..< steps {
+				secs := f32(step) * SIM_DT
+				if gust_s >= 0 && secs >= gust_s {
+					gust_s = -1
+					ok := gust_report(w)
+					fmt.sbprintfln(out, "  %.1f s: gust reported (%v)", secs, ok)
+				}
+				ship_step(w, nav_autopilot(w), SIM_DT)
+				nav_update(w, SIM_DT)
+				w.tick += 1
+				r := nav_route(w)
+				if nv.reroutes != last_reroutes {
+					last_reroutes = nv.reroutes
+					last_next = -1
+					fmt.sbprintfln(
+						out,
+						"  %.1f s: reroute %d, %.3f km left, no route %v",
+						secs,
+						nv.reroutes,
+						r.sum.km,
+						nv.no_route,
+					)
+				}
+				if nv.next != last_next && nv.next < len(r.maneuvers) {
+					last_next = nv.next
+					m := &r.maneuvers[nv.next]
+					fmt.sbprintfln(out, "  %.1f s: next %s in %.0f m", secs, cstr(m.text[:]), nv.next_m)
+				}
+				if nv.banner == .Arrived {
+					fmt.sbprintfln(
+						out,
+						"  %.1f s: arrived, docked %v, %.3f kWh net, %.3f kWh solar",
+						secs,
+						w.ship.docked,
+						nv.used_kwh,
+						nv.solar_kwh,
+					)
+					break
+				}
+			}
+			if nv.banner != .Arrived {
+				fmt.sbprintfln(out, "  not arrived after %.0f s, %.3f km left", limit, nv.remaining_km)
+			}
+			nav_stop(w)
 		case:
 			logf(w, "headless", "inputs line %d: unknown command %q", line_no, f[0])
 			return false
