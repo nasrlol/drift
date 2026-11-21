@@ -132,6 +132,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Windows release is -subsystem:windows and has no console: use the debug or profile exe there.
   ship.odin       Controls struct: throttle, turn, climb, each -1..1, zero = neutral. Filled by input, read by the
                   camera in map mode (game.odin), by ship_step in drive mode.
+                  Ship: pos (km, map space), alt (m), heading (rad clockwise from north), speed (m/s). ship_step(s, c, dt)
+                  runs once per fixed 60 Hz step in game_update, a pure function of ship + controls. Plain version:
+                  speed = max(throttle, 0) * 35 m/s, turn 0.6 rad/s, climb 5 m/s. Limits, wind and battery come later.
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
                   R/F climb up / down, gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
