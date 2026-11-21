@@ -178,7 +178,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   w.grid holds the search state as fixed arrays in World (no arena, allocated with World):
                   visit stamp, cost, parent, heap slot and heap item per node. A node's cost and parent only
                   count when visit[n] == grid.search, so a route starts with search += 1, not a 4.9 MB clear.
-                  Cost per mode (spec), edge_cost(g, a, b, mode) for neighbour nodes:
+                  Cost per mode (spec), per edge inside the A* loop:
                     fastest  18 m/s  seconds          dt                                vertical 0.2 x climb m / 3
                     calmest  13 m/s  seconds          dt x (1 + 7 g^2)                  vertical 0.2 x climb m / 3
                     greenest 11 m/s  kWh              P(v, g) dt / 3600 + 0.25 g^2 km   vertical 0.02
@@ -190,12 +190,22 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   (12 B x 203k = 2.4 MB in World), rebuilt when the hour or that hour's forecast changes
                   (compared to a 2.3 KB copy, so a new snapshot is picked up without a flag). The three modes
                   and every route in the same hour share it. Build ~2.6 ms -o:speed (406k bilinear samples).
-                  Estimate (grid_estimate) = octile km x lowest cost per km + layer changes x cheapest climb.
-                  Lowest cost per km = the mode's cost at airspeed + the strongest wind of the hour (as a pure
-                  tailwind) and its calmest gust; bilinear sampling never leaves the range of the grid points,
-                  so it never overestimates with any snapshot. Consistent, so an expanded node is never reopened.
+                  Estimate (grid_estimate, Estimate built per route): per grid direction k, rate[k] = the mode's
+                  cost per km with the strongest tailwind along k anywhere in the hour (max over the 189 weather
+                  grid points of wind . k) and the calmest gust; bilinear sampling never leaves the range of the
+                  grid points, so no edge in direction k is cheaper. The cheapest way to cover a displacement with
+                  such moves is a small LP; any y with y . k <= rate[k] for all k gives the lower bound
+                  y . displacement (duality). Estimate.y holds the best such y per 45 degree sector (the edge of
+                  the cost polygon there, found by trying all 28 direction pairs) and the estimate is the max of
+                  the 8 dot products + layer changes x cheapest climb. Consistent (each y alone never overestimates
+                  an edge), so an expanded node is never reopened. With a wind field that has one main direction
+                  it follows the wind (windy.snap: 4x fewer expanded nodes than one strongest-wind rate for all
+                  directions); with random wind per cell every direction has a strong tailwind somewhere, there
+                  it gains ~8 %.
+                  The loop precomputes the node index step, unit vector and length per direction, so it does no
+                  division per neighbour (the outer ring is always blocked, so no bounds check for x / y).
                   Weighted x 1.001 to break the many near-ties of an open grid (at most 0.1 % above the cheapest).
-                  Checked: cost equals a plain Dijkstra (estimate 0) within 1e-6 on 126 routes x 3 modes, windy
+                  Checked: cost equals a plain Dijkstra (estimate 0) within 5e-6 on 126 routes x 3 modes, windy
                   and random wind snapshots.
                   Open set: binary min-heap on f in grid.heap (fixed array, 8 B x 203k) with grid.slot
                   (index in the heap, HEAP_CLOSED once expanded) for decrease-key. No allocation during
@@ -219,10 +229,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   and 135 routes with random zones against a Dijkstra on the blocked grid (same cost within 0.1 %).
                   Measured before the wind costs (cloud box, -o:speed): 2025 routes between all city pairs
                   x 3 x 3 layers, avg 14 us, worst 0.19 ms; corner to corner expands 286 nodes.
-                  With wind costs (bench, random wind up to 21 m/s, 4-core cloud box, profile): route avg 6.2 ms
-                  incl. the cache build when the hour changes (max 23 ms), three modes avg 14.8 ms (max 89 ms).
-                  The estimate assumes the strongest wind as tailwind everywhere, so strong wind means a weak
-                  estimate: ~19k expanded nodes per route, ~320 ns each. Without the cache: three modes 33 ms.
+                  With wind costs (bench, random wind up to 21 m/s, 4-core cloud box, profile): route avg 5.3 ms
+                  incl. the cache build when the hour changes (~2.5 ms, max 17-20 ms), three modes avg 11 ms
+                  (max 70-80 ms, noisy). Before the per-direction estimate and the loop precompute: route 6.2,
+                  three modes 14.8 ms. The bench's wind is independent per weather cell, so the estimate stays
+                  weak there: the worst routes expand up to 70k of 203k nodes (~2000 instructions each, mostly
+                  heap). A 4-ary heap measured no faster. Open: #66 (may the bench use a smooth wind field).
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
                   Each case = snapshot + inputs through game.headless_run, output compared line by line to the
