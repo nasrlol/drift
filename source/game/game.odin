@@ -79,6 +79,19 @@ game_init :: proc() -> rawptr {
 		fmt.eprintln("[weather] curl global_init failed:", curl.easy_strerror(res))
 	}
 	game_hot_reloaded(w)
+
+	// The ship starts on top of the Brussels tower. Looked up by name: hub ids follow the bake order.
+	START_HUB :: "Bruxelles - Brussel"
+	start_found := false
+	for &h in w.m.hubs[:w.m.hub_count] {
+		if strings.truncate_to_byte(string(h.name[:]), 0) != START_HUB do continue
+		w.ship.pos = h.pos
+		w.ship.alt = height_at(w, h.pos.x, h.pos.y) + HUB_TOWER_M
+		start_found = true
+		break
+	}
+	if !start_found do logf(w, "ship", "no hub named %q in belgium.bin, the ship starts at the map corner", START_HUB)
+
 	weather_load_snapshot(w, SNAPSHOT_PATH)
 	identity_load_or_create(w)
 	w.replay.steps = make([]Control_Step, REPLAY_MAX_STEPS, virtual.arena_allocator(&w.perm))
