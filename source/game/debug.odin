@@ -60,6 +60,9 @@ ROUTE_MODE_NAMES :: [Route_Mode]string {
 //   route <from hub> <to hub> <fastest|greenest|calmest> <hour 0..8>
 //   no_fly <x km> <y km> <radius km> <ceiling m>   adds a zone to the first free slot of w.no_fly
 //   gust <x km> <y km> <radius km>                 adds a zone to the first free slot of w.gust_zones
+//   free <x km> <y km> <height m> <heading deg> <throttle> <turn> <climb> <seconds>
+//                                                  free flight (the street view's, ship_free_step) from rest
+//   free_on <throttle> <turn> <climb> <seconds>    free flight on from where the last one ended
 headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strings.Builder) -> bool {
 	t := prof_begin()
 	weather_ok := weather_load_snapshot(w, snapshot_path)
@@ -74,7 +77,7 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 		line := strings.trim_space(raw)
 		if line == "" || line[0] == '#' do continue
 
-		f: [8]string
+		f: [10]string
 		n := 0
 		for field in strings.fields_iterator(&line) {
 			if n == len(f) {
@@ -454,6 +457,70 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 				fmt.sbprintfln(out, "  not arrived after %.0f s, %.3f km left", limit, nv.remaining_km)
 			}
 			nav_stop(w)
+		case "free", "free_on":
+			// The car at rest at height m above the ground (free), or as the last free command left it
+			// (free_on), then fixed controls for the given seconds at SIM_DT. Prints where it ends, its speed,
+			// the wall hits and how many steps its centre was inside a building footprint (must be 0).
+			s := &w.ship
+			k := f[0] == "free" ? 5 : 1
+			v: [8]f32
+			sane := n == k + 4
+			for i in 0 ..< n - 1 {
+				ok: bool
+				v[i], ok = strconv.parse_f32(f[i + 1])
+				sane &&= ok && abs(v[i]) < 1e6
+			}
+			c := Controls{v[k - 1], v[k], v[k + 1]}
+			secs := v[k + 2]
+			sane &&= abs(c.throttle) <= 1 && abs(c.turn) <= 1 && abs(c.climb) <= 1 && secs > 0 && secs < 1e5
+			if f[0] == "free" {
+				sane &&= v[0] >= 0 && v[1] >= 0 && v[0] <= MAP_W_KM && v[1] <= MAP_H_KM && v[2] >= 0
+			}
+			if !sane {
+				logf(
+					w,
+					"headless",
+					"inputs line %d: %q, want: free <x km> <y km> <height m> <heading deg> <throttle> <turn> " +
+					"<climb> <seconds> or free_on <throttle> <turn> <climb> <seconds>",
+					line_no,
+					line,
+				)
+				return false
+			}
+			if f[0] == "free" {
+				s^ = {
+					pos       = {v[0], v[1]},
+					alt       = height_at(w, v[0], v[1]) + v[2],
+					heading   = v[3] * math.PI / 180,
+					used_kwh  = s.used_kwh,
+					solar_kwh = s.solar_kwh,
+				}
+			}
+			hits, inside := 0, 0
+			top: f32
+			for _ in 0 ..< int(secs / SIM_DT + 0.5) {
+				before := s.hit_s
+				ship_free_step(w, c, SIM_DT)
+				w.tick += 1
+				if s.hit_s < before do hits += 1
+				hag := s.alt - height_at(w, s.pos.x, s.pos.y)
+				if push, _ := collide_car(w, s.pos, hag - FREE_HOVER_M * 0.5, 0.01); push != {} do inside += 1
+				top = max(top, s.speed)
+			}
+			fmt.sbprintfln(
+				out,
+				"%s: after %.2f s at %.5f %.5f, height %.2f m, %.1f km/h (top %.1f), heading %.1f deg, %d wall hits, inside %d steps",
+				f[0],
+				secs,
+				s.pos.x,
+				s.pos.y,
+				s.alt - height_at(w, s.pos.x, s.pos.y),
+				s.speed * 3.6,
+				top * 3.6,
+				s.heading * 180 / math.PI,
+				hits,
+				inside,
+			)
 		case:
 			logf(w, "headless", "inputs line %d: unknown command %q", line_no, f[0])
 			return false

@@ -517,6 +517,16 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   "plan <from> <to> <hour>" prints the three summaries and their maneuvers (nav.odin).
                   "fly <mode> <max s> [gust after s]" flies the autopilot at 1x, prints new maneuvers, reroutes and
                   the arrival. "drive <x> <y> <s> <turn>" lands on the nearest road and drives (road.odin).
+                  "free <x km> <y km> <height m> <heading deg> <throttle> <turn> <climb> <s>" puts the car at rest
+                  there and flies the street view's free flight (ship_free_step) with fixed controls, "free_on
+                  <throttle> <turn> <climb> <s>" flies on; each prints the end position, height above the ground,
+                  speed, wall hits and the steps the car's centre was inside a footprint (must be 0).
+                  test/ run_free_flight uses it on a real Brussels building found in the collision data: full
+                  throttle into a wall stops 2.2 m from it, never inside; down onto the roof it hovers 0.9 m over it
+                  and stays; full throttle in open country reaches 70 m/s (252 km/h); across the wind of
+                  windy.snap at 300 m it drifts 0.8-1.05 x wind x 20 s; the same inputs twice give the same flight to
+                  the bit. Checked that it fails without walls (125 m through) and without roofs (0.9 m above the
+                  ground).
                   Output per route: "route 6 -> 11 fastest hour 0: 2 points, 104.812 km", then x y alt per point.
                   --dump appends the state dump after the result.
                   Scripted run: ./build/drift --script <file> (debug host and release exe, exported game_script)

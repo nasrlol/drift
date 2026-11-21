@@ -237,7 +237,10 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 [x] always day in the street view, natural greens; light only in the whole app (Lars: dark mode gone everywhere)
 [x] scripted run mode with screenshots (--script: keys per frame, shot, quit) for visual checks
     test/data/street_standard.txt: tower, street, main road, park, countryside
-[ ] headless test cases for free flight: wall stop, roof landing, top speed, crosswind drift, same output twice
+[x] headless test cases for free flight: wall stop, roof landing, top speed, crosswind drift, same output twice
+    (headless free / free_on, test/ run_free_flight)
+[x] flicker in the street view: anchored meshes (z-fighting), render interpolation (uneven frames), near plane
+    0.25 m; e2e check test/data/street_flicker.txt
 [ ] sun lighting with normals, sky with sun, haze, ambient occlusion at wall feet, sun shadows (shadow map)
 [ ] facades in the shader: floors, windows, doors, shop fronts, brick / plaster / stone per building
 [ ] roofs: gables for houses, parapets and roof details (solar panels, green roofs) for flat roofs
