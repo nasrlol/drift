@@ -70,8 +70,8 @@ tools/bake_map/  (odin run tools/bake_map, from repo root)
     0.2 km2 15.7k / 4.9 MB, 0.5 km2 5.3k / 3.0 MB, 1 km2 2.3k / 2.0 MB, 2 km2 1.0k / 1.3 MB.
     Kept: 5328 polygons, 125384 triangles, 3.07 MB. Area by kind at 0.5 km2: park 6374 km2, city 1818,
     farmland 1768, water 192, marsh 114, beach 1. OSM Belgium maps only part of its farmland.
-  Buildings: not baked. 7644305 building polygons in the extract (ogrinfo count, 95 s). Even at 4 corners
-    = 2 triangles = 48 bytes each that is ~367 MB, so they do not fit the ~4 MB budget in any form we draw.
+  Buildings: not in belgium.bin. 7644305 building polygons in the extract (ogrinfo count, 95 s). Even at 4
+    corners = 2 triangles = 48 bytes each that is ~367 MB. Only the city centres are baked, see BUILDINGS DATA.
   Heights + hillshade: see ELEVATION DATA.
   Road graph (bake_roads): a coordinate used by two ways, twice by one way, or a way end is a node; a way
     that leaves the map is cut at its last point inside (a dead end). Then stretches of the same kind and
@@ -110,6 +110,21 @@ belgium.bin format (version 4, all little endian, 4-byte aligned). Blocks follow
   road_edges  from, to, start, count (4 x u32), length_km (f32), kind, oneway (2 x u32): road_points
               [start:][:count] from -> to; two-way roads have one edge per direction, oneway = 1 otherwise
   road_points x, y (2 x f32, km)
+
+BUILDINGS DATA
+tools/extract_buildings.sh (from anywhere): ogr2ogr per city (box of 1 km around the cities.geojson point,
+  4 at a time, ~2.5 min each) -> assets/raw/buildings/<city index>.geojson (not in git), columns height and
+  levels from other_tags.
+tools/bake_buildings/ (odin run tools/bake_buildings, from repo root) -> assets/buildings.bin.gz, format in the
+  tool. Outer ring only, centre within 1 km of the city point, Douglas-Peucker 1.5 m, at most 32 corners,
+  at least 60 m2. Height: OSM height, else levels x 3.2 + 1.5 m, else 7..12 m by a hash. Vertices as i16
+  deltas in 0.5 m, byte planes for gzip. 2026-11-21: 70582 buildings in 15 cities (52114 too small or too
+  complex, 26997 outside the circle), 1.69 MB, 896 KB gzipped: under the 1 MB check. A wider radius or all of
+  a city needs another budget (#76).
+
+tools/bake_car/ (odin run tools/bake_car, after tools/download_car.sh) -> assets/car.bin.gz (format in the
+  tool): the outside of Car Concept (no interior, engine, wipers, plate, textures), i16 positions, octahedral
+  normals, material class; wheels as their own parts for the fold animation.
 
 WEATHER DATA
 
@@ -187,9 +202,9 @@ license (SIL OFL 1.1) next to it. Raw downloads in assets/raw/fonts (not in git)
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
   game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing
-                  Sim speed: keys 1..4 set w.sim_speed = 1x / 5x / 15x / 40x (SIM_SPEEDS). The frame time (capped at
-                  0.25 s) is multiplied before it goes into the accumulator, so 40x runs up to 40 steps per 60 fps frame
-                  (600 at most after a hitch) and every step still has dt = 1 / 60.
+                  Time always runs at real speed (Lars, 2026-11-21: the 1x / 5x / 15x / 40x sim speed and keys 1..4
+                  are gone, the speed shows in km/h). The frame time (capped at 0.25 s) goes into the accumulator,
+                  every step has dt = 1 / 60.
                   w.font: Roboto rasterized by raylib on the first frame (needs a window, so never in headless),
                   FONT_PX 14, codepoints 32..255. Falls back to the raylib font with a log line if loading fails.
                   Unloaded in game_shutdown. The profiler overlay still uses the raylib font.
@@ -273,21 +288,26 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   route in 9 s with route_sample), cam_recentre, cam_overview, cam_north, cam_zoom_by (0.6 s glide).
   nav.odin        (Lars, simulation, no raylib) plan_routes -> w.routes, summaries (time, km, net kWh, wind, tag,
                   why), maneuvers (spec "Extractie", road names from map_nearest_name), nav_start / nav_update
-                  (path index window, banner, Then, ETA, warning, reroute after 190 m off for 1.2 s x sim speed),
+                  (path index window, banner, Then, ETA, warning, reroute after 190 m off for 1.2 s),
                   gust_report (260 m zone 700 m ahead + reroute), nav_autopilot -> Controls.
   nav_ui.odin     (Lars) route strips, time bubbles, start ring + destination pin, banner + Then, road sign,
                   pill under the ship (layer, or the road name while driving), warning pill, sheet,
                   carpool_draw_partner.
-  pilot_ui.odin   (Dario) button column, speed circle, Re-centre, self-fly + Exit / Done, sim speed chips,
+  pilot_ui.odin   (Dario) button column, speed circle, Re-centre, self-fly + Exit / Done,
                   3 x 3 control pad + key card. No sound button (speech is NOT DOING).
   plan_ui.odin    (Andrei) plan panel (cards A and B, hub search, departure list, route rows, wind note,
                   Preview / Start), hub menu on the map, map buttons, layers panel + legend, layers_draw_ground.
   labels.odin     (nasr) river names and motorway shields: places picked once along the lines (labels_build),
                   projected and culled against each other and the hub names every frame.
   road.odin       (Lars, simulation, no raylib) the airship as a flying car on the road graph (#67, #68 B):
-                  road_try_land (descending at the lowest flying height within ROAD_LAND_KM = 250 m of a road;
-                  the 250 m is ours, not from the spec), road_step (edge + km along it, one-way respected, turn
-                  input picks the edge at a junction, climb takes off), road_nearest_edge, road_at.
+                  road_try_land (descending at the lowest flying height within ROAD_LAND_KM = 1 km of a road; the
+                  Brussels tower is 660 m from the nearest graph road), road_step (edge + km along it, one-way
+                  respected, turn input picks the edge at a junction, climb takes off), road_nearest_edge, road_at.
+                  Transition (Lars, 2026-11-21): landing slides onto the road and turns to it over ROAD_ALIGN_S 2.5 s
+                  while sinking ROAD_DESCENT_MS 4 m/s (ship.landing, road_landing_step); take-off climbs at least
+                  ROAD_LIFT_MS 10 m/s to the lowest flying height (ship.lifting). On the road ROAD_MAX_SPEED 35 m/s
+                  (126 km/h), accel 1.2 / brake 1.6 m/s^2; in the air SHIP_MAX_SPEED 70 m/s (252 km/h, Lars: "sneller
+                  vliegen"), accel 3 / brake 4, climb 12 m/s. All our values, not from the spec.
   carpool.odin    (Andrei) carpool_offer_make (energy = net kWh with the current snapshot, its hash in the offer),
                   carpool_verify (recompute with the same snapshot, VERIFY_TOLERANCE 1 %), carpool_match (weather
                   cell + forecast hour filter, then four router runs for the detour), carpool_split (passenger:
@@ -508,11 +528,33 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
                   R/F climb up / down (arrows = W/A/S/D, PgUp / PgDn = R / F), gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
-  airship.odin    Airship (in World): low-poly model from docs/drift-design.pdf built once in game_init (airship_build, flat
-                  shaded vertex colors, ~900 triangles, 3 prop meshes spin with speed) and uploaded to the GPU; the GL objects
-                  live in raylib so they survive hot reload. airship_draw(w, cam): soft shadow, then the model through an
-                  orthographic Camera3D (1 unit = 1 px, tilt 0.7 rad from the south) moved so it lands on the ship, 80 px
-                  long at every zoom. Nose follows ship.heading (so the crab against the wind shows), banks with turn_rate.
+  airship.odin    The flying car (Lars, 2026-11-21: "iets realistisch in 3d"): assets/car.bin.gz from tools/bake_car
+                  (Car Concept, Khronos glTF sample, CC BY 4.0 Eric Chadwick, credited bottom right, assets/car-LICENSE.txt),
+                  unpacked once in game_init (airship_build) into body parts + 4 wheels, lit by CAR_VS / CAR_FS (paint,
+                  glass, metal, lights, matte by material class). Drawn through an orthographic Camera3D, CAR_PX 110 px
+                  long at every zoom, with a soft shadow. Car_Anim eases fly (wheels fold flat with a cyan glow disc in the
+                  air, roll on the road), bank with turn_rate, pitch with the climb, a slow bob. others_draw draws the
+                  other cars (presence.odin) 80 px, tinted, orange in a traffic jam.
+  presence.odin   (author andrei) other cars on the map, peer-to-peer (Lars: "geen relay service, gossiping"): every
+                  PRESENCE_S 2 s the game signs its position (Presence, 136 bytes, ed25519 identity) and the node swaps
+                  the fresh positions it knows with up to 8 recently synced peers (op 'Q'), so they spread over several
+                  hops. Checked (magic, on the map, time within 20 s back / 30 s ahead, signature), newest per author,
+                  256 slots, copied into w.others every 0.25 s and moved on along heading x speed when drawn.
+  traffic         (route.odin, ship.odin) traffic jams (Lars: "file ook"): every other flying car counts for the
+                  grid nodes within TRAFFIC_RADIUS_KM 1 km in its own layer (traffic_build, per route). From
+                  TRAFFIC_MIN_CARS 4 a node costs 1 + 0.5 per car over the minimum, at most 4x, in A*, line_cost and
+                  evaluate, so routes go round a jam (test case traffic). The ship slows by the same factor among the
+                  cars on its own way (road, or the same layer) and shows the Jam warning. Our values.
+  buildings.odin  3D buildings (Lars: "ik wil 3d gebouwen"): assets/buildings.bin.gz (tools/bake_buildings, see
+                  BUILDINGS DATA), one mesh per city of walls + flat roof lit from the north-west, roof / wall colors
+                  from the palette. Heights 1.6x real and lowered towards the edge of the 1 km circle; they grow out
+                  of the ground between zoom 3.5 and 5 (height_scale uniform). Cities beyond 6 km + the view are skipped.
+  nature.odin     tree clumps (six-sided crowns, 25-50 m wide, 10-24 m high) placed by a hash in the park / wood
+                  triangles within 14 km of the camera, 70 per km2, rebuilt after 4 km; the buildings' shader.
+  clouds.odin     clouds from the forecast cover (cloud_at): a puff spot per 1.6 km cell, clumped by value noise,
+                  cloudy where the noise is under 0.1 + 0.9 x cover, 650-1100 m up, drifting with the top layer
+                  wind. Soft sprites in screen space (far first) with a ground shadow, fading in from zoom 2 to 3.5
+                  and out when one fills the screen. Our values.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   from.z / to.z are the tower tops (headless: height_at + HUB_TOWER_M).
@@ -722,7 +764,8 @@ DESIGN INTERFACES (built on lars/all-todos; from docs/drift-design.pdf, the todo
 The look and feel is docs/drift-design.pdf (Dutch): screens, sizes, colors, fonts, motion. Only the look:
 names, values and logic come from the code on main. Place, road and river names are the real ones in
 belgium.bin (never the doc's examples), wind layers are LAYER_ALT, zoom is ZOOM_MIN / MAX, and doc features
-on the NOT DOING list in todo.txt (3D buildings, shadows, touch / mobile layout, speech) are not built.
+on the NOT DOING list in todo.txt (shadows, touch / mobile layout, speech) are not built. 3D buildings,
+nature and clouds came off that list on 2026-11-21 (Lars).
 Each person owns their own files, so the parts do not touch the same lines. The owner adds the World
 field (one line) and the call in the game.odin draw list (one line) in the PR that builds it.
 A signature below changes only with the owner's PR that also updates this section.
@@ -733,6 +776,9 @@ Files and owners
   ship.odin, input.odin, airship.odin,            Dario   ship, keys, airship model, camera,
     camera.odin, pilot_ui.odin                            flying buttons, control pad
   weather.odin, net.odin, plan_ui.odin            Andrei  weather, network, plan screen, layers panel, legend
+  presence.odin                                   Andrei  other cars by gossip (network)
+  buildings.odin, nature.odin, clouds.odin        nasr    3D buildings, trees, clouds (map rendering)
+  (owners of the 2026-11-21 files are our guess from the split above, to confirm in the PR)
 
 World fields (zero = the design default: plan screen, night theme, nothing chosen)
   screen: Screen                       nasr    Screen :: enum u8 {Plan, Navigate}

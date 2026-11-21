@@ -119,6 +119,7 @@ DARIO: SHIP + CONTROLS
 [x] warnings as flags in the ship state (terrain, no-fly), UI only reads them
 [x] docking: within 30 m horizontal, 25 m vertical of the hub tower
 [x] sim speed 1x / 5x / 15x / 40x = more fixed steps per frame, never a bigger dt
+    Removed again 2026-11-21 (Lars): time always real, speed in km/h.
 [x] map mode: Controls pan / zoom the camera while there is no ship (WASD, R/F, sticks)
 [x] drive mode: Controls go to ship_step, camera follows ship, key to switch back to map mode
 [x] record Controls per step for replay (flat array, a few bytes per step)
@@ -145,7 +146,7 @@ design (airship.odin = model + drawing, camera.odin = camera, pilot_ui.odin = fl
 [x] pilot_ui: button column (compass, overview, sound, wind, report gust), 64 px, right middle
     No sound button: speech is on the NOT DOING list.
 [x] pilot_ui: speed circle 74 px, Re-centre pill after a map drag, self-fly 66 px + red Exit / Done pill
-[x] pilot_ui: sim speed chips 1x 5x 15x 40x in the sheet (replaces the toolbar buttons of #57)
+[x] pilot_ui: sim speed chips 1x 5x 15x 40x in the sheet (replaces the toolbar buttons of #57), removed 2026-11-21
 [x] pilot_ui: 3 x 3 control pad (52 px) + key card, only in self-fly, pressed = accent
 
 ANDREI: WEATHER + NETWORK
@@ -207,9 +208,27 @@ RELEASE (single executable)
 [ ] Windows: static CRT, single .exe
 [ ] macOS: universal binary (arm64 + x86_64), signed
 
+LARS, 2026-11-21 (second list, on lars/all-todos)
+[x] zooming out stops at Belgium (no square around it, no Netherlands), pan clamped, the ship stays on the map
+[x] profiler on / off (row in the layers panel, off by default)
+[x] DRIFT logo top left gone, theme button with the map buttons
+[x] speed in km/h, no multiplier (sim speed removed)
+[x] clearer wind particles (more, longer, wider, fading at the map edge)
+[x] smoother route line (Catmull-Rom), drawn from the ship on
+[x] natural car motion: bank, pitch, ease between driving and flying
+[x] transition between driving and flying (landing slide + descent, take-off climb)
+[x] realistic 3D car (Car Concept, CC BY 4.0)
+[x] see other cars peer-to-peer: signed positions by gossip, no relay (presence.odin)
+[x] traffic jams: many cars together make routes go round and slow the ship (test case traffic)
+[x] fly faster (252 km/h) and climb faster (12 m/s, take-off 10 m/s)
+[x] 3D buildings in the 15 city centres (buildings.bin.gz)
+[x] nature around the route: tree clumps in parks and woods, clouds from the forecast cover
+    "zoals in het filmpje": no film was shared, so the look is ours.
+
 TOGETHER, AT THE END
 [ ] demo run: plan Brussels -> Gent, pick greenest, Preview, Start, report gust, reroute, dock, Done
 [ ] headless test case for that flow, plus a screenshot of both screens in night and day
 
 NOT DOING
-film, procedural world, web stack, touch / responsive layout, speech, extruded buildings, shadows
+film, procedural world, web stack, touch / responsive layout, speech, shadows
+(extruded buildings, nature and clouds: built after all, Lars 2026-11-21)
