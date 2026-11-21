@@ -7,7 +7,7 @@ fail() {
 	FAIL=1
 }
 
-FILES=$(git ls-files --cached --others --exclude-standard)
+FILES=$(git ls-files --cached)
 ODIN=$(echo "$FILES" | grep '\.odin$')
 
 BAD_IMPORTS=$(for f in $ODIN; do

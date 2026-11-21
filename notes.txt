@@ -70,4 +70,5 @@ ols.json, odinfmt.json   Odin language server + formatter (tabs, 110 columns)
 check.sh                 allowed imports, no raylib in sim files, banned file names, one test file,
                          max 1 MB per file (assets excepted), --pr <base>: max 400 changed lines
 AGENTS.md                entry point for agents and new people, points to rules / notes / todo
-format.sh                formats all tracked .odin files with odinfmt, --check only reports (hook + CI)
+format.sh                formats all tracked .odin files with odinfmt, --check only reports (hook + CI).
+                         new files must be git added first

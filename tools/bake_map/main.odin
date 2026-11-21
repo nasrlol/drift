@@ -7,7 +7,7 @@ import "core:mem"
 import "core:os"
 import "core:slice"
 
-MAP_MAGIC   :: 0x54465244
+MAP_MAGIC :: 0x54465244
 MAP_VERSION :: 1
 
 Map_Header :: struct {
@@ -21,13 +21,17 @@ Map_City :: struct {
 	pos:  [2]f32,
 	name: [32]u8,
 }
-Kind :: enum u32 { Border, River, Motorway }
+Kind :: enum u32 {
+	Border,
+	River,
+	Motorway,
+}
 
-LON0       :: 2.38
-LAT0       :: 51.56
+LON0 :: 2.38
+LAT0 :: 51.56
 KM_PER_DEG :: 111.32
 
-lines:  [dynamic]Map_Line
+lines: [dynamic]Map_Line
 points: [dynamic][2]f32
 cities: [dynamic]Map_City
 
@@ -38,8 +42,10 @@ project :: proc(lon, lat: f64) -> [2]f32 {
 
 num :: proc(v: json.Value) -> f64 {
 	#partial switch n in v {
-	case json.Float:   return f64(n)
-	case json.Integer: return f64(n)
+	case json.Float:
+		return f64(n)
+	case json.Integer:
+		return f64(n)
 	}
 	return 0
 }
@@ -70,12 +76,14 @@ bake_layer :: proc(path: string, kind: Kind) {
 
 	for f in root.(json.Object)["features"].(json.Array) {
 		feature := f.(json.Object)
-		geom    := feature["geometry"].(json.Object)
-		coords  := geom["coordinates"]
+		geom := feature["geometry"].(json.Object)
+		coords := geom["coordinates"]
 
 		switch geom["type"].(json.String) {
 		case "Point":
-			c := Map_City{pos = to_point(coords)}
+			c := Map_City {
+				pos = to_point(coords),
+			}
 			name, _ := feature["properties"].(json.Object)["name"].(json.String)
 			copy(c.name[:len(c.name) - 1], name)
 			append(&cities, c)
@@ -90,10 +98,10 @@ bake_layer :: proc(path: string, kind: Kind) {
 }
 
 main :: proc() {
-	bake_layer("assets/geojson/border.geojson",    .Border)
-	bake_layer("assets/geojson/rivers.geojson",    .River)
+	bake_layer("assets/geojson/border.geojson", .Border)
+	bake_layer("assets/geojson/rivers.geojson", .River)
 	bake_layer("assets/geojson/motorways.geojson", .Motorway)
-	bake_layer("assets/geojson/cities.geojson",    .Border)
+	bake_layer("assets/geojson/cities.geojson", .Border)
 
 	h := Map_Header{MAP_MAGIC, MAP_VERSION, u32(len(lines)), u32(len(points)), u32(len(cities))}
 
@@ -107,6 +115,11 @@ main :: proc() {
 		fmt.eprintln("can't write assets/belgium.bin", err)
 		os.exit(1)
 	}
-	fmt.printfln("assets/belgium.bin: %d lines, %d points, %d cities, %d bytes",
-		h.line_count, h.point_count, h.city_count, len(out))
+	fmt.printfln(
+		"assets/belgium.bin: %d lines, %d points, %d cities, %d bytes",
+		h.line_count,
+		h.point_count,
+		h.city_count,
+		len(out),
+	)
 }

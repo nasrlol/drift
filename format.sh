@@ -6,7 +6,7 @@ if ! command -v odinfmt >/dev/null 2>&1; then
 	exit 1
 fi
 
-FILES=$(git ls-files --cached --others --exclude-standard '*.odin')
+FILES=$(git ls-files --cached '*.odin')
 
 if [ "$1" = "--check" ]; then
 	BAD=0
