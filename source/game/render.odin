@@ -74,6 +74,7 @@ Palette :: struct {
 	water:            rl.Color,
 	roof:             rl.Color,
 	wall:             rl.Color,
+	tree:             rl.Color, // tree clumps in the parks and woods (nature.odin), our color
 	motorway:         rl.Color,
 	motorway_casing:  rl.Color,
 	main_road:        rl.Color,
@@ -137,6 +138,7 @@ PALETTES :: [Theme]Palette {
 		water = {12, 36, 66, 255},
 		roof = {80, 102, 151, 255},
 		wall = {54, 73, 122, 255},
+		tree = {38, 104, 98, 255},
 		motorway = {129, 147, 210, 255},
 		motorway_casing = {51, 70, 140, 255},
 		main_road = {100, 118, 176, 255},
@@ -193,6 +195,7 @@ PALETTES :: [Theme]Palette {
 		water = {159, 212, 246, 255},
 		roof = {244, 241, 236, 255},
 		wall = {216, 211, 203, 255},
+		tree = {118, 178, 106, 255},
 		motorway = {253, 217, 130, 255},
 		motorway_casing = {226, 180, 82, 255},
 		main_road = {255, 255, 255, 255},

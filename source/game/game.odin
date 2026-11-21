@@ -77,6 +77,9 @@ World :: struct {
 	palette:         Palette, // PALETTES[theme], copied every frame, read through palette(w)
 	wind:            Wind_Particles,
 	airship:         Airship,
+	buildings:       Buildings,
+	cloud_sprites:   Cloud_Sprites,
+	nature:          Nature,
 	car_anim:        Car_Anim,
 	// Other cars from the presence gossip (presence.odin), copied from the node table every PRESENCE_COPY_S.
 	others:          [PRESENCE_SLOTS]Other_Car,
@@ -127,7 +130,11 @@ game_init :: proc() -> rawptr {
 
 	if !weather_load_snapshot(w, SNAPSHOT_PATH) do weather_load_fallback(w)
 	identity_load_or_create(w)
-	if rl.IsWindowReady() do airship_build(w)
+	if rl.IsWindowReady() {
+		airship_build(w)
+		buildings_build(w)
+		clouds_build(w)
+	}
 	w.replay.steps = make([]Control_Step, REPLAY_MAX_STEPS, virtual.arena_allocator(&w.perm))
 	logf(w, "game", "build %s", BUILD_MODE)
 	logf(
@@ -471,6 +478,10 @@ game_update :: proc(memory: rawptr) -> bool {
 			rl.SetShaderValueV(sh, lm.loc_colors, &colors, .VEC4, LINE_COLORS)
 			rl.SetShaderValueV(sh, lm.loc_widths, &fill, .FLOAT, LINE_COLORS)
 			if show_wind do rl.DrawMesh(lm.wind, lm.material, rl.Matrix(1))
+
+			// Draw order 4: the 3D buildings around the cities and the trees, over the roads.
+			buildings_draw(w, fog)
+			nature_draw(w)
 		}
 		rl.EndMode3D()
 
@@ -479,6 +490,7 @@ game_update :: proc(memory: rawptr) -> bool {
 		others_draw(w)
 		if w.screen == .Navigate do airship_draw(w)
 		carpool_draw_partner(w)
+		clouds_draw(w)
 
 		// Draw order 7: hub markers with their names (design: green 26 px circle, white 2 px border, tower icon
 		// 15 px, name in Figtree 600 13 px). Names are the real ones from belgium.bin. Screen space, culled: a
@@ -628,6 +640,9 @@ game_shutdown :: proc(memory: rawptr) {
 	node_stop(w)
 	fonts_unload(w)
 	line_meshes_unload(&w.line_meshes)
+	buildings_unload(&w.buildings)
+	clouds_unload(&w.cloud_sprites)
+	nature_unload(&w.nature)
 	virtual.arena_destroy(&w.fetch.mem)
 	virtual.arena_destroy(&w.node.mem)
 	virtual.arena_destroy(&w.frame)
