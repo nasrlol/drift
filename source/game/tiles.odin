@@ -83,7 +83,18 @@ tiles_update_draw :: proc(
 		if best_d == max(f32) do break
 		slot := -1
 		for t, i in cache.tiles do if !t.used {slot = i; break}
-		if slot < 0 do break
+		if slot < 0 {
+			// Full: the farthest tile out of reach makes room.
+			far := reach + size
+			for t, i in cache.tiles {
+				if d := linalg.length(tile_centre(t.key, size) - target); d > far {
+					far = d
+					slot = i
+				}
+			}
+			if slot < 0 do break
+			if cache.tiles[slot].mesh.vertexCount > 0 do rl.UnloadMesh(cache.tiles[slot].mesh)
+		}
 		lo_km := [2]f32{f32(best.x), f32(best.y)} * size
 		cache.tiles[slot] = {
 			key  = best,

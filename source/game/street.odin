@@ -58,13 +58,100 @@ Street :: struct {
 	ground:     rl.Mesh,
 	material:   rl.Material,
 	loc:        struct {
-		fog_c, fog_r, layer, remap, map_colors, real_colors, origin, tone: i32,
+		layer, remap, map_colors, real_colors, origin, cities: i32,
+		light:                                                 Street_Light_Locs,
+	},
+	// The houses (houses.odin) with the lit shader, and the sky.
+	houses:     Tile_Cache,
+	lit:        rl.Material,
+	lit_loc:    Street_Light_Locs,
+	sky:        rl.Shader,
+	sky_loc:    struct {
+		fwd, right, up, tan_half, screen: i32,
+		light:                            Street_Light_Locs,
 	},
 	ready:      bool,
 }
 
-// Ground shader: vertex colors, land use colors swapped from the map design to natural ones (remap), a little
-// noise in world space so large surfaces are not flat paint, haze with distance.
+// Uniform locations of STREET_GLSL in one shader.
+Street_Light_Locs :: struct {
+	sun_dir, sun_col, sky_zen, sky_hor, amb_sky, amb_gnd, cam, haze: i32,
+}
+
+street_light_locs :: proc(sh: rl.Shader) -> Street_Light_Locs {
+	return {
+		sun_dir = rl.GetShaderLocation(sh, "sun_dir"),
+		sun_col = rl.GetShaderLocation(sh, "sun_col"),
+		sky_zen = rl.GetShaderLocation(sh, "sky_zen"),
+		sky_hor = rl.GetShaderLocation(sh, "sky_hor"),
+		amb_sky = rl.GetShaderLocation(sh, "amb_sky"),
+		amb_gnd = rl.GetShaderLocation(sh, "amb_gnd"),
+		cam = rl.GetShaderLocation(sh, "cam"),
+		haze = rl.GetShaderLocation(sh, "haze"),
+	}
+}
+
+street_light_set :: proc(sh: rl.Shader, l: Street_Light_Locs, cam: [3]f32) {
+	look := STREET_LOOK
+	cam := cam
+	rl.SetShaderValue(sh, l.sun_dir, &look.sun_dir, .VEC3)
+	rl.SetShaderValue(sh, l.sun_col, &look.sun_col, .VEC3)
+	rl.SetShaderValue(sh, l.sky_zen, &look.sky_zen, .VEC3)
+	rl.SetShaderValue(sh, l.sky_hor, &look.sky_hor, .VEC3)
+	rl.SetShaderValue(sh, l.amb_sky, &look.amb_up, .VEC3)
+	rl.SetShaderValue(sh, l.amb_gnd, &look.amb_down, .VEC3)
+	rl.SetShaderValue(sh, l.cam, &cam, .VEC3)
+	rl.SetShaderValue(sh, l.haze, &look.haze, .VEC2)
+}
+
+// The light of every street view shader (STREET_GLSL is pasted into each): one sun, a sky gradient that also
+// gives the haze its colour (aerial perspective: far things take the colour of the low sky in their direction),
+// ambient light from the sky above and the ground below. Lighting runs on linear colours (lin = squared sRGB),
+// then an ACES filmic curve and back to sRGB, so bright sunlit walls roll off instead of clipping.
+STREET_GLSL :: `
+uniform vec3 sun_dir;
+uniform vec3 sun_col;
+uniform vec3 sky_zen;
+uniform vec3 sky_hor;
+uniform vec3 amb_sky;
+uniform vec3 amb_gnd;
+uniform vec3 cam;
+uniform vec2 haze;
+float hash12(vec2 p) {
+	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
+}
+float vnoise(vec2 p) {
+	vec2 i = floor(p), f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y);
+}
+vec3 sky_col(vec3 r) {
+	float e = clamp(r.y, 0.0, 1.0);
+	vec3 c = mix(sky_hor, sky_zen, pow(e, 0.5));
+	c += sky_hor * 0.3 * pow(1.0 - e, 12.0);
+	float s = max(dot(r, sun_dir), 0.0);
+	c += sun_col * (0.035 * pow(s, 4.0) + 0.1 * pow(s, 48.0));
+	return c;
+}
+vec3 aerial(vec3 c, vec3 p) {
+	vec3 d = p - cam;
+	float dist = length(d);
+	vec3 r = d / max(dist, 0.001);
+	vec3 h = sky_col(normalize(vec3(r.x, 0.03 + max(r.y, 0.0) * 0.3, r.z)));
+	return mix(c, h, haze.y * (1.0 - exp(-dist * haze.x)));
+}
+vec3 lin(vec3 c) { return c * c; }
+vec3 tonemap(vec3 c) {
+	c = clamp((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14), 0.0, 1.0);
+	return sqrt(c);
+}
+float box(float x, float h, float w) { return clamp((h - abs(x)) / max(w, 1e-4) + 0.5, 0.0, 1.0); }
+`
+
+// Ground shader: vertex colours, land use colours swapped from the map design to natural ones (remap), noise in
+// world space so large surfaces are not flat paint, lit by the sun, the haze of STREET_GLSL.
 // The ground layers (land, land use, rivers, roads, markings) all lie on y = 0, so the depth buffer cannot order
 // them: meshes in km drawn with km x 1000 minus ~150 km in f32 got a depth that is off by 1e-6..3e-6 in NDC
 // against the land quad (measured at 280 m), ten times any usable bias, so they lost the depth test at random.
@@ -79,35 +166,27 @@ uniform mat4 mvp;
 uniform mat4 matModel;
 out vec4 color;
 out vec3 world;
-out float depth;
 void main() {
-	vec4 p = mvp * vec4(vertexPosition, 1.0);
-	gl_Position = p;
+	gl_Position = mvp * vec4(vertexPosition, 1.0);
 	color = vertexColor;
 	world = (matModel * vec4(vertexPosition, 1.0)).xyz;
-	depth = p.w;
 }
 `
 
-STREET_GROUND_FS :: `#version 330
+STREET_GROUND_FS ::
+	`#version 330
 in vec4 color;
 in vec3 world;
-in float depth;
-uniform vec3 fog_color;
-uniform vec2 fog_range;
 uniform float remap;
 uniform vec3 map_colors[6];
 uniform vec3 real_colors[6];
 uniform vec2 origin;
-uniform vec3 tone;
 uniform float layer;
+uniform vec3 cities[16]; // x, z in street metres, radius m (0 = none): the circles of real buildings
 out vec4 finalColor;
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float noise(vec2 p) {
-	vec2 i = floor(p), f = fract(p);
-	vec2 u = f * f * (3.0 - 2.0 * f);
-	return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
-}
+` +
+	STREET_GLSL +
+	`
 void main() {
 	vec3 c = color.rgb;
 	if (remap > 0.5) {
@@ -115,14 +194,257 @@ void main() {
 			if (distance(c, map_colors[i]) < 0.01) c = real_colors[i];
 		}
 	}
+	c = lin(c);
+	// Inside a circle of real OSM buildings the open ground is streets and squares: paving, not grass. Parks are
+	// a later layer and stay green.
+	if (layer < 0.5) {
+		float city = 0.0;
+		for (int i = 0; i < 16; i++) {
+			if (cities[i].z > 0.0) city = max(city, 1.0 - smoothstep(cities[i].z * 0.85, cities[i].z, distance(world.xz, cities[i].xy)));
+		}
+		vec2 pv = world.xz;
+		float stones = 1.0 - smoothstep(0.004, 0.004 + fwidth(pv.x) * 1.5, min(abs(fract(pv.x / 0.3) - 0.5), abs(fract(pv.y / 0.15 + 0.5 * floor(pv.x / 0.3)) - 0.5)) * 0.1);
+		vec3 paving = vec3(0.16, 0.155, 0.145) * (0.9 + 0.2 * vnoise(pv * 0.8)) * (1.0 - 0.15 * stones * (1.0 - smoothstep(0.01, 0.05, fwidth(pv.x))));
+		c = mix(c, paving, city);
+	}
 	vec2 q = world.xz + origin;
-	float n = noise(q / 9.0) * 0.6 + noise(q / 41.0) * 0.4;
-	float near = 1.0 - smoothstep(60.0, 900.0, depth);
-	c *= 1.0 + (n - 0.5) * (0.10 + 0.08 * near);
-	c *= tone;
-	float f = clamp((depth - fog_range.x) / max(fog_range.y - fog_range.x, 1e-3), 0.0, 1.0);
-	finalColor = vec4(mix(c, fog_color, f * (2.0 - f)), 1.0);
+	float n = vnoise(q / 9.0) * 0.6 + vnoise(q / 41.0) * 0.4;
+	float fine = vnoise(world.xz * 1.7);
+	float near = 1.0 - smoothstep(30.0, 400.0, length(world - cam));
+	c *= 1.0 + (n - 0.5) * 0.22 + (fine - 0.5) * 0.12 * near;
+	c *= sun_col * max(sun_dir.y, 0.0) + amb_sky;
+	finalColor = vec4(tonemap(aerial(c, world)), 1.0);
 	gl_FragDepth = 1.0 - (layer + floor((1.0 - color.a) * 4.0 + 0.5)) * 2e-7;
+}
+`
+
+// The lit shader of the houses (and later trees and furniture): per vertex a normal, uv in metres on the surface,
+// lh = (wall length, eave height) m and a colour whose alpha is the Street_Mat (houses.odin) plus flags. Walls get
+// their facade here: floors, bays, windows with frames, mullions, sills and reveals, the front door, shop fronts
+// with a fascia, brick / plaster / stone texture, a bluestone plinth, a cornice and ambient occlusion at the foot
+// and under the eave. Everything is filtered by the pixel's footprint on the surface (fw, m per pixel): thin lines
+// fade into their average instead of flickering, far facades become their average colour.
+STREET_VS :: `#version 330
+in vec3 vertexPosition;
+in vec3 vertexNormal;
+in vec2 vertexTexCoord;
+in vec2 vertexTexCoord2;
+in vec4 vertexColor;
+uniform mat4 mvp;
+uniform mat4 matModel;
+uniform mat4 matNormal;
+out vec3 v_world;
+out vec3 v_normal;
+out vec2 v_uv;
+out vec2 v_lh;
+out vec4 v_color;
+void main() {
+	v_world = (matModel * vec4(vertexPosition, 1.0)).xyz;
+	v_normal = (matNormal * vec4(vertexNormal, 0.0)).xyz;
+	v_uv = vertexTexCoord;
+	v_lh = vertexTexCoord2;
+	v_color = vertexColor;
+	gl_Position = mvp * vec4(vertexPosition, 1.0);
+}
+`
+
+STREET_FS ::
+	`#version 330
+in vec3 v_world;
+in vec3 v_normal;
+in vec2 v_uv;
+in vec2 v_lh;
+in vec4 v_color;
+out vec4 finalColor;
+` +
+	STREET_GLSL +
+	`
+void main() {
+	int code = int(v_color.a * 255.0 + 0.5);
+	int mat = code & 31;
+	bool shop = (code & 32) != 0;
+	bool door = (code & 64) != 0;
+	vec3 n = normalize(v_normal);
+	vec3 V = normalize(cam - v_world);
+	vec3 base = lin(v_color.rgb);
+	vec3 ci = floor(v_color.rgb * 255.0 + 0.5);
+	float seed = hash12(vec2(ci.r + ci.g * 256.0, ci.b + 17.0));
+	float ao = 1.0;
+	float glass = 0.0;
+	vec3 interior = vec3(0.012, 0.013, 0.015);
+	float spec = 0.0;
+	vec2 uv = v_uv;
+	float fw = max(length(fwidth(uv)), 1e-4);
+
+	if (mat >= 1 && mat <= 3) {
+		float u = uv.x, v = uv.y, L = v_lh.x, H = v_lh.y;
+		float detail = 1.0 - smoothstep(0.006, 0.03, fw);
+		if (mat == 1) {
+			// Belgian brick 19 x 5 cm with 1 cm joints, running bond.
+			float cy = v / 0.06; float row = floor(cy); float fy = fract(cy);
+			float cx = u / 0.2 + 0.5 * mod(row, 2.0); float cl = floor(cx); float fx = fract(cx);
+			float j = min(min(fy, 1.0 - fy) * 0.06, min(fx, 1.0 - fx) * 0.2);
+			float joint = 1.0 - smoothstep(0.004, 0.004 + fw, j);
+			vec3 b = base * (0.84 + 0.32 * hash12(vec2(cl, row) + seed * 97.0));
+			vec3 mortar = vec3(0.36, 0.34, 0.31);
+			base = mix(mix(base, mortar, 0.15), mix(b, mortar, joint), detail);
+		} else if (mat == 2) {
+			float g = vnoise(uv * 2.0) * 0.5 + vnoise(uv * 9.0) * 0.5;
+			base *= (0.94 + 0.1 * g) * mix(0.8, 1.0, smoothstep(0.0, 2.5, v));
+		} else {
+			float cy = v / 0.32; float row = floor(cy); float fy = fract(cy);
+			float cx = u / 0.65 + 0.37 * mod(row, 3.0); float cl = floor(cx); float fx = fract(cx);
+			float j = min(min(fy, 1.0 - fy) * 0.32, min(fx, 1.0 - fx) * 0.65);
+			float joint = 1.0 - smoothstep(0.003, 0.003 + fw, j);
+			vec3 b = base * (0.92 + 0.14 * hash12(vec2(cl, row) + seed * 51.0));
+			base = mix(base, mix(b, base * 0.7, joint), detail);
+		}
+
+		float fh = 2.85 + 0.55 * hash12(vec2(seed, 1.0));
+		float gh = fh * 1.18;
+		float bayw = 2.7 + 1.4 * hash12(vec2(seed, 2.0));
+		float nb = floor(L / bayw);
+		float fdet = 1.0 - smoothstep(0.12, 0.45, fw);
+		if (nb >= 1.0 && v < H) {
+			float bw = L / nb;
+			float bi = clamp(floor(u / bw), 0.0, nb - 1.0);
+			float bx = u - (bi + 0.5) * bw;
+			bool gf = v < gh;
+			float fl = gf ? 0.0 : floor((v - gh) / fh) + 1.0;
+			float fy = gf ? v : v - gh - (fl - 1.0) * fh;
+			float ww = min(1.05 + 0.5 * hash12(vec2(seed, 3.0)), bw * 0.64);
+			float y0 = 0.9, y1 = min(fh - 0.5, 2.3);
+			bool is_door = door && gf && bi == floor(hash12(vec2(seed, 5.0)) * nb);
+			bool is_shop = shop && gf && !is_door;
+			if (gf) { y0 = 0.95; y1 = min(gh - 0.55, 2.45); }
+			if (is_shop) { ww = bw - 0.5; y0 = 0.45; y1 = gh - 0.6; }
+			if (is_door) { ww = 1.05; y0 = 0.0; y1 = 2.3; }
+			float wtop = (gf ? 0.0 : gh + (fl - 1.0) * fh) + y1;
+			float has = wtop < H - 0.25 ? 1.0 : 0.0;
+			float hy = (y1 - y0) * 0.5, cy2 = fy - (y0 + y1) * 0.5;
+			float fr = 0.065;
+			float wc = box(bx, ww * 0.5, fw) * box(cy2, hy, fw) * has;
+			float gc = box(bx, ww * 0.5 - fr, fw) * box(cy2, hy - fr, fw) * has;
+			if (!is_door) {
+				if (ww > 1.0) gc *= 1.0 - box(bx, 0.03, fw);
+				gc *= 1.0 - box(fy - (y1 - (y1 - y0) * 0.28), 0.025, fw);
+			}
+			vec3 frame_c = hash12(vec2(seed, 4.0)) < 0.55 ? vec3(0.75) : (hash12(vec2(seed, 6.0)) < 0.6 ? vec3(0.02, 0.022, 0.025) : vec3(0.15, 0.065, 0.03));
+			base = mix(base, frame_c, (wc - gc) * fdet);
+			if (is_door) {
+				vec3 door_c = lin(vec3(0.12 + 0.5 * hash12(vec2(seed, 7.0)), 0.16, 0.1 + 0.25 * hash12(vec2(seed, 8.0))));
+				base = mix(base, door_c, gc * fdet);
+				gc = box(bx, 0.3, fw) * box(fy - 1.85, 0.25, fw);
+			}
+			vec3 stone_c = vec3(0.42, 0.41, 0.38);
+			float sill = box(bx, ww * 0.5 + 0.06, fw) * box(fy - (y0 - 0.04), 0.04, fw) * has * (is_door || is_shop ? 0.0 : 1.0);
+			base = mix(base, stone_c, sill * fdet);
+			if (mat == 1) {
+				float lintel = box(bx, ww * 0.5 + 0.1, fw) * box(fy - (y1 + 0.07), 0.07, fw) * has;
+				base = mix(base, base * 0.75, lintel * fdet);
+			}
+			if (is_shop) {
+				vec3 sign_c = lin(vec3(0.1 + 0.5 * hash12(vec2(seed, 9.0)), 0.12 + 0.4 * hash12(vec2(seed, 10.0)), 0.1 + 0.3 * hash12(vec2(seed, 11.0))));
+				base = mix(base, sign_c, box(fy - (gh - 0.33), 0.2, fw) * fdet);
+			}
+			float reveal = smoothstep(0.0, 0.25, (y1 - fr) - fy);
+			interior *= (0.6 + 0.9 * hash12(vec2(bi, fl) + seed * 13.0)) * mix(0.45, 1.0, reveal);
+			glass = gc * fdet;
+			float avg = (ww * (y1 - y0)) / (bw * fh) * has;
+			base = mix(mix(base, vec3(0.03), avg * 0.8), base, fdet);
+		}
+		float plinth = 1.0 - smoothstep(0.42, 0.42 + fw, v);
+		base = mix(base, vec3(0.05, 0.055, 0.06), plinth * (1.0 - glass));
+		float corn = box(v - (H - 0.18), 0.16, fw) * (v < H + 0.05 ? 1.0 : 0.0);
+		if (mat != 3) base = mix(base, mat == 1 ? vec3(0.48, 0.46, 0.42) : base * 1.08, corn * 0.85);
+		ao *= mix(0.55, 1.0, smoothstep(0.0, 1.4, v));
+		ao *= mix(0.75, 1.0, smoothstep(0.0, 0.6, abs(H - v)));
+		if (v > H + 0.7 && L > 4.0) {
+			float ga = box(u - L * 0.5, 0.42, fw) * box(v - (H + 1.3), 0.5, fw);
+			float gg = box(u - L * 0.5, 0.36, fw) * box(v - (H + 1.3), 0.44, fw);
+			base = mix(base, vec3(0.75), (ga - gg) * fdet);
+			glass = max(glass, gg * fdet);
+		}
+	} else if (mat == 4) {
+		float u = uv.x, v = uv.y;
+		float fy = fract(v / 3.6) * 3.6;
+		float px = fract(u / 1.5) * 1.5;
+		float mull = 1.0 - box(px - 0.75, 0.7, fw);
+		float band = box(fy - 0.45, 0.45, fw);
+		glass = (1.0 - max(mull, band)) * step(0.6, v) * 0.95;
+		interior = vec3(0.01, 0.014, 0.018);
+		base = mix(base, vec3(0.1, 0.11, 0.12), mull);
+		ao *= mix(0.65, 1.0, smoothstep(0.0, 1.0, v));
+	} else if (mat == 5 || mat == 6) {
+		float course = mat == 5 ? 0.33 : 0.21;
+		float tw = mat == 5 ? 0.24 : 0.3;
+		float cy = uv.y / course; float row = floor(cy); float fy = fract(cy);
+		float cx = uv.x / tw + 0.5 * mod(row, 2.0); float cid = floor(cx); float fx = fract(cx);
+		float detail = 1.0 - smoothstep(0.01, 0.06, fw);
+		float shade = mix(0.7, 1.0, smoothstep(0.0, 0.35, fy));
+		float gap = 1.0 - smoothstep(0.004, 0.004 + fw, min(fx, 1.0 - fx) * tw);
+		vec3 t = base * (0.82 + 0.3 * hash12(vec2(cid, row) + seed * 7.0)) * shade * (1.0 - gap * 0.35);
+		float moss = smoothstep(0.55, 0.9, vnoise(uv * 0.7 + seed * 10.0)) * 0.35;
+		t = mix(t, vec3(0.05, 0.07, 0.025), moss * (mat == 5 ? 1.0 : 0.6));
+		base = mix(base * 0.86, t, detail);
+		spec = mat == 6 ? 0.12 : 0.03;
+	} else if (mat == 7) {
+		base *= 0.8 + 0.4 * (vnoise(uv * 3.0) * 0.6 + vnoise(uv * 13.0) * 0.4);
+	} else if (mat == 8) {
+		float a = vnoise(uv * 0.9 + seed * 3.0), b = vnoise(uv * 4.0 + 7.0), c = vnoise(uv * 15.0);
+		vec3 sedum = mix(vec3(0.045, 0.1, 0.018), vec3(0.12, 0.14, 0.03), b);
+		sedum = mix(sedum, vec3(0.15, 0.055, 0.03), smoothstep(0.62, 0.8, a) * 0.8);
+		sedum = mix(sedum, vec3(0.19, 0.17, 0.05), smoothstep(0.7, 0.9, c) * 0.5);
+		base = sedum * 1.5;
+	} else if (mat == 9) {
+		float px = fract(uv.x / 1.05) * 1.05, py = fract(uv.y / 1.75) * 1.75;
+		float frame = 1.0 - box(px - 0.525, 0.5, fw) * box(py - 0.875, 0.83, fw);
+		float cw = fw / 0.175;
+		float cells = max(1.0 - box(fract(px / 0.175) - 0.5, 0.46, cw), 1.0 - box(fract(py / 0.175) - 0.5, 0.46, cw)) * (1.0 - smoothstep(0.01, 0.04, fw));
+		base = mix(vec3(0.006, 0.01, 0.028), vec3(0.45), frame);
+		base = mix(base, vec3(0.04, 0.05, 0.08), cells * 0.6 * (1.0 - frame));
+		glass = (1.0 - frame) * 0.85;
+		interior = base;
+		spec = 0.5;
+	}
+
+	float ndl = max(dot(n, sun_dir), 0.0);
+	vec3 amb = mix(amb_gnd, amb_sky, n.y * 0.5 + 0.5);
+	vec3 c = base * (sun_col * ndl + amb) * ao;
+	c += sun_col * spec * pow(max(dot(n, normalize(sun_dir + V)), 0.0), 60.0) * ndl;
+	if (glass > 0.001) {
+		vec3 r = reflect(-V, n);
+		float fres = 0.05 + 0.95 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
+		vec3 refl = r.y > 0.0 ? sky_col(r) : mix(amb_gnd * 0.7, sky_hor * 0.5, exp(r.y * 6.0));
+		refl += sun_col * 3.0 * pow(max(dot(r, sun_dir), 0.0), 400.0);
+		vec3 g = interior * (amb + sun_col * 0.15) + refl * clamp(fres + 0.18, 0.0, 1.0);
+		c = mix(c, g * ao, glass);
+	}
+	finalColor = vec4(tonemap(aerial(c, v_world)), 1.0);
+}
+`
+
+// The sky: drawn over the whole screen before the 3D pass, the ray of each pixel from the camera's axes.
+STREET_SKY_FS ::
+	`#version 330
+in vec2 fragTexCoord;
+in vec4 fragColor;
+uniform vec3 cam_fwd;
+uniform vec3 cam_right;
+uniform vec3 cam_up;
+uniform vec2 tan_half;
+uniform vec2 screen;
+out vec4 finalColor;
+` +
+	STREET_GLSL +
+	`
+void main() {
+	vec2 ndc = gl_FragCoord.xy / screen * 2.0 - 1.0;
+	vec3 r = normalize(cam_fwd + cam_right * ndc.x * tan_half.x + cam_up * ndc.y * tan_half.y);
+	vec3 c = sky_col(r);
+	c += sun_col * 6.0 * smoothstep(0.99985, 0.99993, dot(r, sun_dir));
+	if (r.y < 0.0) c = mix(c, sky_hor * 0.9, smoothstep(0.0, -0.05, r.y));
+	finalColor = vec4(tonemap(c), 1.0);
 }
 `
 
@@ -138,6 +460,11 @@ Street_Look :: struct {
 	asphalt, motorway: rl.Color,
 	marking, river:    rl.Color,
 	buildings:         Buildings_Look,
+	// Linear light of the street shaders (STREET_GLSL).
+	sun_col:           [3]f32,
+	sky_zen, sky_hor:  [3]f32,
+	amb_up, amb_down:  [3]f32,
+	haze:              [2]f32, // per metre, the most it covers
 }
 
 STREET_LOOK :: Street_Look {
@@ -148,14 +475,14 @@ STREET_LOOK :: Street_Look {
 	sky_amb = {0.66, 0.76, 0.9},
 	gnd_amb = {0.3, 0.29, 0.25},
 	tone = {1, 1, 1},
-	land = {106, 122, 78, 255},
+	land = {80, 106, 50, 255},
 	areas = {
-		.City = {132, 130, 124, 255},
-		.Park = {78, 110, 60, 255},
-		.Farmland = {136, 138, 92, 255},
-		.Marsh = {96, 112, 86, 255},
+		.City = {118, 116, 108, 255},
+		.Park = {66, 100, 44, 255},
+		.Farmland = {128, 130, 78, 255},
+		.Marsh = {84, 104, 70, 255},
 		.Beach = {206, 192, 156, 255},
-		.Water = {58, 86, 106, 255},
+		.Water = {46, 72, 90, 255},
 	},
 	asphalt = {66, 68, 72, 255},
 	motorway = {76, 77, 80, 255},
@@ -167,6 +494,12 @@ STREET_LOOK :: Street_Look {
 		tree = {0.3, 0.4, 0.24},
 		fog = {196.0 / 255, 210.0 / 255, 222.0 / 255},
 	},
+	sun_col = {2.15, 2.05, 1.85},
+	sky_zen = {0.12, 0.27, 0.66},
+	sky_hor = {0.62, 0.7, 0.8},
+	amb_up = {0.25, 0.31, 0.42},
+	amb_down = {0.1, 0.095, 0.075},
+	haze = {0.00038, 0.9},
 }
 
 // Map space (x km, y km south, z km down) to street space (m, y up) around origin.
@@ -256,23 +589,40 @@ street_build :: proc(w: ^World) {
 	st.material = rl.LoadMaterialDefault()
 	st.material.shader = sh
 	st.loc = {
-		fog_c       = rl.GetShaderLocation(sh, "fog_color"),
-		fog_r       = rl.GetShaderLocation(sh, "fog_range"),
 		layer       = rl.GetShaderLocation(sh, "layer"),
 		remap       = rl.GetShaderLocation(sh, "remap"),
 		map_colors  = rl.GetShaderLocation(sh, "map_colors"),
 		real_colors = rl.GetShaderLocation(sh, "real_colors"),
 		origin      = rl.GetShaderLocation(sh, "origin"),
-		tone        = rl.GetShaderLocation(sh, "tone"),
+		cities      = rl.GetShaderLocation(sh, "cities"),
+		light       = street_light_locs(sh),
+	}
+	lit := rl.LoadShaderFromMemory(STREET_VS, STREET_FS)
+	if !rl.IsShaderValid(lit) do logf(w, "street", "lit shader did not compile")
+	st.lit = rl.LoadMaterialDefault()
+	st.lit.shader = lit
+	st.lit_loc = street_light_locs(lit)
+	st.sky = rl.LoadShaderFromMemory(nil, STREET_SKY_FS)
+	if !rl.IsShaderValid(st.sky) do logf(w, "street", "sky shader did not compile")
+	st.sky_loc = {
+		fwd      = rl.GetShaderLocation(st.sky, "cam_fwd"),
+		right    = rl.GetShaderLocation(st.sky, "cam_right"),
+		up       = rl.GetShaderLocation(st.sky, "cam_up"),
+		tan_half = rl.GetShaderLocation(st.sky, "tan_half"),
+		screen   = rl.GetShaderLocation(st.sky, "screen"),
+		light    = street_light_locs(st.sky),
 	}
 	st.ready = true
 }
 
 street_unload :: proc(st: ^Street) {
 	tiles_unload(&st.roads)
+	tiles_unload(&st.houses)
 	if !st.ready do return
 	rl.UnloadMesh(st.ground)
 	rl.UnloadShader(st.material.shader)
+	rl.UnloadShader(st.lit.shader)
+	rl.UnloadShader(st.sky)
 	st.ready = false
 }
 
@@ -459,17 +809,25 @@ street_draw :: proc(w: ^World) {
 	place := street_place(st.origin)
 	centre := [2]f32{f32(w.pose.pos.x), f32(w.pose.pos.y)}
 
-	// Sky: zenith to the horizon line of this camera, then haze below it (the ground covers that part).
+	// Sky: every pixel's ray from the camera's axes (STREET_SKY_FS).
 	{
-		fwd := st.view.target - st.view.position
-		fwd.y = 0
-		fwd = linalg.normalize(fwd) * 3000
-		h := rl.GetWorldToScreen(st.view.position + fwd, st.view)
-		horizon := clamp(h.y, -screen.y, 2 * screen.y)
 		rl.ClearBackground(look.horizon)
-		if horizon > 0 {
-			rl.DrawRectangleGradientV(0, 0, i32(screen.x), i32(horizon) + 1, look.zenith, look.horizon)
-		}
+		sh := st.sky
+		fwd := linalg.normalize(st.view.target - st.view.position)
+		right := linalg.normalize(linalg.cross(fwd, [3]f32{0, 1, 0}))
+		up := linalg.cross(right, fwd)
+		th := math.tan(st.view.fovy * math.PI / 360)
+		render := [2]f32{f32(rl.GetRenderWidth()), f32(rl.GetRenderHeight())}
+		tan_half := [2]f32{th * render.x / render.y, th}
+		rl.SetShaderValue(sh, st.sky_loc.fwd, &fwd, .VEC3)
+		rl.SetShaderValue(sh, st.sky_loc.right, &right, .VEC3)
+		rl.SetShaderValue(sh, st.sky_loc.up, &up, .VEC3)
+		rl.SetShaderValue(sh, st.sky_loc.tan_half, &tan_half, .VEC2)
+		rl.SetShaderValue(sh, st.sky_loc.screen, &render, .VEC2)
+		street_light_set(sh, st.sky_loc.light, st.view.position)
+		rl.BeginShaderMode(sh)
+		rl.DrawRectangle(0, 0, i32(screen.x), i32(screen.y), rl.WHITE)
+		rl.EndShaderMode()
 	}
 
 	near, far := rlgl.GetCullDistanceNear(), rlgl.GetCullDistanceFar()
@@ -478,13 +836,15 @@ street_draw :: proc(w: ^World) {
 	rl.BeginMode3D(st.view)
 	{
 		sh := st.material.shader
-		horizon := rl.ColorNormalize(look.horizon).rgb
-		fog := STREET_FOG_M
 		origin := st.origin * 1000
-		rl.SetShaderValue(sh, st.loc.fog_c, &horizon, .VEC3)
-		rl.SetShaderValue(sh, st.loc.fog_r, &fog, .VEC2)
 		rl.SetShaderValue(sh, st.loc.origin, &origin, .VEC2)
-		rl.SetShaderValue(sh, st.loc.tone, &look.tone, .VEC3)
+		street_light_set(sh, st.loc.light, st.view.position)
+		cities: [16][3]f32
+		for i in 0 ..< min(w.buildings.count, 16) {
+			d := (w.buildings.origins[i] - st.origin) * 1000
+			cities[i] = {d.x, d.y, BUILDINGS_RADIUS_KM * 1000}
+		}
+		rl.SetShaderValueV(sh, st.loc.cities, &cities, .VEC3, 16)
 
 		// 1: land, a quad kept under the car.
 		layer, remap: f32 = 0, 0
@@ -538,18 +898,11 @@ street_draw :: proc(w: ^World) {
 		)
 	}
 
-	// 4: buildings at real height, the generated towns, the trees.
-	fog := STREET_FOG_M
-	buildings_draw(
-		w,
-		fog,
-		1 / BUILDINGS_HEIGHT_X,
-		centre,
-		STREET_REACH_KM + BUILDINGS_RADIUS_KM,
-		place,
-		look.buildings,
-	)
-	towns_draw(w, centre, STREET_REACH_KM, place)
+	// 4: the houses (real and generated, lit, with facades and roofs), then the trees (the map's clumps for now:
+	// buildings_draw with no reach only sets their shader's uniforms).
+	street_light_set(st.lit.shader, st.lit_loc, st.view.position)
+	tiles_update_draw(w, &st.houses, HOUSE_TILE_KM, HOUSE_REACH_KM, houses_build_tile, st.lit, centre, place)
+	buildings_draw(w, STREET_FOG_M, 1 / BUILDINGS_HEIGHT_X, centre, -1, place, look.buildings)
 	nature_draw(w, centre, STREET_REACH_KM, place)
 
 	// 5: the cars, each with a soft contact shadow.

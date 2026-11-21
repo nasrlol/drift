@@ -71,17 +71,23 @@ town_lot :: proc(
 	return ring, height, true
 }
 
-// The generated buildings whose lot centre lies in lo ..< hi (Tile_Build), relative to lo.
-towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
+// A generated building: its ring (km, counter-clockwise on the map like the OSM rings), real height (m) and a
+// seed for its looks.
+Town_House :: struct {
+	ring:   [4][2]f32,
+	height: f32,
+	seed:   u32,
+}
+
+// The generated buildings whose lot centre lies in lo ..< hi, appended to out. The map (towns_build_tile) and the
+// street view (houses.odin) both draw these.
+town_houses :: proc(w: ^World, lo, hi: [2]f32, out: ^[dynamic]Town_House) {
 	b := &w.buildings
 	for o in b.origins[:b.count] {
 		// The whole tile inside a circle of real buildings: nothing to make.
 		far := linalg.max(linalg.abs(lo - o), linalg.abs(hi - o))
-		if linalg.length(far) < BUILDINGS_RADIUS_KM do return {}
+		if linalg.length(far) < BUILDINGS_RADIUS_KM do return
 	}
-	pos := make([dynamic][3]f32, 0, 1 << 14, context.temp_allocator)
-	col := make([dynamic][4]u8, 0, 1 << 14, context.temp_allocator)
-	LIGHT :: [2]f32{-0.7071, -0.7071}
 	lot := f32(TOWN_LOT_M) / 1000
 	for a, ai in w.m.areas {
 		if Area_Kind(a.kind) != .City do continue
@@ -107,29 +113,38 @@ towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 					if !in_triangle(c, p0, p1, p2) do continue
 					ring, height, ok := town_lot(b.origins[:b.count], seed, ax, ay, i, j)
 					if !ok do continue
-					height *= BUILDINGS_HEIGHT_X
-					for &q in ring do q -= lo
-					for e in 0 ..< 4 {
-						p, q := ring[e], ring[(e + 1) % 4]
-						d := linalg.normalize(q - p)
-						light := 0.68 + 0.22 * linalg.dot([2]f32{-d.y, d.x}, LIGHT)
-						top, low := u8(light * 255), u8(light * 0.7 * 255)
-						append(&pos, [3]f32{p.x, p.y, 0}, [3]f32{q.x, q.y, 0}, [3]f32{q.x, q.y, -height})
-						append(
-							&pos,
-							[3]f32{p.x, p.y, 0},
-							[3]f32{q.x, q.y, -height},
-							[3]f32{p.x, p.y, -height},
-						)
-						append(&col, [4]u8{low, 0, 0, 255}, [4]u8{low, 0, 0, 255}, [4]u8{top, 0, 0, 255})
-						append(&col, [4]u8{low, 0, 0, 255}, [4]u8{top, 0, 0, 255}, [4]u8{top, 0, 0, 255})
-					}
-					for v in ([6]int{0, 1, 2, 0, 2, 3}) {
-						append(&pos, [3]f32{ring[v].x, ring[v].y, -height})
-						append(&col, [4]u8{255, 255, 0, 255})
-					}
+					h := hash_u32(u32(i) * 2246822519 ~ u32(j) * 3266489917 ~ seed)
+					append(out, Town_House{ring, height * 1000, h})
 				}
 			}
+		}
+	}
+}
+
+// The generated buildings whose lot centre lies in lo ..< hi (Tile_Build), relative to lo.
+towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
+	houses := make([dynamic]Town_House, 0, 1024, context.temp_allocator)
+	town_houses(w, lo, hi, &houses)
+	pos := make([dynamic][3]f32, 0, len(houses) * 30, context.temp_allocator)
+	col := make([dynamic][4]u8, 0, len(houses) * 30, context.temp_allocator)
+	LIGHT :: [2]f32{-0.7071, -0.7071}
+	for th in houses {
+		ring := th.ring
+		height := th.height / 1000 * BUILDINGS_HEIGHT_X
+		for &q in ring do q -= lo
+		for e in 0 ..< 4 {
+			p, q := ring[e], ring[(e + 1) % 4]
+			d := linalg.normalize(q - p)
+			light := 0.68 + 0.22 * linalg.dot([2]f32{-d.y, d.x}, LIGHT)
+			top, low := u8(light * 255), u8(light * 0.7 * 255)
+			append(&pos, [3]f32{p.x, p.y, 0}, [3]f32{q.x, q.y, 0}, [3]f32{q.x, q.y, -height})
+			append(&pos, [3]f32{p.x, p.y, 0}, [3]f32{q.x, q.y, -height}, [3]f32{p.x, p.y, -height})
+			append(&col, [4]u8{low, 0, 0, 255}, [4]u8{low, 0, 0, 255}, [4]u8{top, 0, 0, 255})
+			append(&col, [4]u8{low, 0, 0, 255}, [4]u8{top, 0, 0, 255}, [4]u8{top, 0, 0, 255})
+		}
+		for v in ([6]int{0, 1, 2, 0, 2, 3}) {
+			append(&pos, [3]f32{ring[v].x, ring[v].y, -height})
+			append(&col, [4]u8{255, 255, 0, 255})
 		}
 	}
 	return tile_mesh(pos[:], col[:])
