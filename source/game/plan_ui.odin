@@ -18,12 +18,11 @@ HUB_MENU_W :: 230
 LAYERS_PANEL_W :: 300
 MAP_BUTTON :: 48
 MAP_BUTTON_GAP :: 10
-LEGEND_X :: 440
 HUB_PICK_PX :: 16 // a click this close to a hub marker opens its menu
 CAR_PICKER_H :: 56
 
 Layers :: struct {
-	hide_wind:   bool,
+	show_wind:   bool, // off by default (nasr, 2026-11-21), the other layers are on
 	hide_gusts:  bool,
 	hide_no_fly: bool,
 	hide_solar:  bool,
@@ -58,7 +57,14 @@ Plan :: struct {
 	layers_open:      bool,
 	hub_menu:         int, // hub id + 1 of the open menu on the map, 0 = closed
 	scroll:           f32, // route list scroll in px
+	nudge_t:          f32, // seconds left of the red outline on an empty from / to field after Start or Preview
 }
+
+// Start or Preview without a start or a destination: the empty fields shake for PLAN_SHAKE_S and stay red as
+// long as the toast that says what is missing.
+PLAN_SHAKE_S :: 0.4
+PLAN_SHAKE_PX :: 6
+PLAN_NUDGE_S :: TOAST_S + 2 * TOAST_FADE_S
 
 plan_panel_rect :: proc(w: ^World) -> rl.Rectangle {
 	return {PLAN_MARGIN, PLAN_MARGIN, PLAN_PANEL_W, f32(rl.GetScreenHeight()) - 2 * PLAN_MARGIN}
@@ -249,6 +255,7 @@ plan_ui :: proc(w: ^World) {
 	p := &w.plan
 	panel := plan_panel_rect(w)
 	buf: [96]u8
+	p.nudge_t = max(p.nudge_t - frame_time(w), 0)
 
 	// Card A: from / to, mode chips, departure. No brand row (Lars, 2026-11-21: the logo goes), no day / night
 	// button (light only).
@@ -272,7 +279,10 @@ plan_ui :: proc(w: ^World) {
 		hub := field == .From ? p.from : p.to
 		editing := p.editing == field
 		text := editing ? query : has ? hub_name(w, hub) : ""
-		if ui_input(w, r, text, field == .From ? "Choose start" : "Choose destination", editing) {
+		nudge := !has && !editing && p.nudge_t > 0
+		shake := p.nudge_t - (PLAN_NUDGE_S - PLAN_SHAKE_S)
+		if nudge && shake > 0 do r.x += math.sin(shake * 60) * PLAN_SHAKE_PX * shake / PLAN_SHAKE_S
+		if ui_input(w, r, text, field == .From ? "Choose start" : "Choose destination", editing, nudge) {
 			p.editing = field
 			p.query_len = 0
 			p.departure_open = false
@@ -438,16 +448,18 @@ plan_ui :: proc(w: ^World) {
 		ay := b.y + b.height - ACTIONS_H + 16
 		rl.DrawLineEx({b.x, ay - 16}, {b.x + b.width, ay - 16}, 1, pal.line)
 		ok := w.routes[p.mode].ok
-		if ui_pill_button(w, {b.x + 16, ay, 128, 44}, "Preview", .Secondary, .Play, true) && ok do cam_preview(w, p.mode)
-		if ui_pill_button(
-			   w,
-			   {b.x + 16 + 128 + 10, ay, b.width - 32 - 138, 44},
-			   "Start",
-			   .Primary,
-			   .Navigate,
-			   true,
-		   ) &&
-		   ok {
+		preview := ui_pill_button(w, {b.x + 16, ay, 128, 44}, "Preview", .Secondary, .Play, true)
+		start := ui_pill_button(
+			w,
+			{b.x + 16 + 128 + 10, ay, b.width - 32 - 138, 44},
+			"Start",
+			.Primary,
+			.Navigate,
+			true,
+		)
+		if (preview || start) && !ok do plan_nudge(w)
+		if preview && ok do cam_preview(w, p.mode)
+		if start && ok {
 			if nav_start(w, p.mode) {
 				w.screen = .Navigate
 				w.plan.layers_open = false
@@ -529,6 +541,23 @@ plan_ui :: proc(w: ^World) {
 	plan_hub_menu(w)
 }
 
+// Start or Preview with no route to fly: says what is missing, the empty fields shake and turn red.
+plan_nudge :: proc(w: ^World) {
+	p := &w.plan
+	switch {
+	case !p.has_from && !p.has_to:
+		ui_toast(w, "Choose a start and a destination first")
+	case !p.has_from:
+		ui_toast(w, "Choose a start first")
+	case !p.has_to:
+		ui_toast(w, "Choose a destination first")
+	case:
+		ui_toast(w, "No safe route with this wind, pick another route or time")
+		return
+	}
+	p.nudge_t = PLAN_NUDGE_S
+}
+
 // Click on a hub marker: "Fly from here" / "Fly to here" (230 px, under the icon).
 plan_hub_menu :: proc(w: ^World) {
 	p := &w.plan
@@ -580,8 +609,7 @@ plan_hub_menu :: proc(w: ^World) {
 	w.ui.in_popup = false
 }
 
-// Map buttons bottom right (layers, compass, zoom pill), the layers panel and the legend. Shown on the plan
-// screen; the compass also in navigation through pilot_ui.
+// Map buttons bottom right (music, layers, compass, zoom pill) and the layers panel, on the plan screen.
 plan_map_controls :: proc(w: ^World) {
 	pal := palette(w)
 	p := &w.plan
@@ -598,6 +626,7 @@ plan_map_controls :: proc(w: ^World) {
 	if compass_button(w, compass) do cam_north(w)
 	layers := rl.Rectangle{x, compass.y - MAP_BUTTON_GAP - MAP_BUTTON, MAP_BUTTON, MAP_BUTTON}
 	if ui_round_button(w, layers, .Layers, p.layers_open) do p.layers_open = !p.layers_open
+	music_button(w, {x, layers.y - MAP_BUTTON_GAP - MAP_BUTTON, MAP_BUTTON, MAP_BUTTON})
 
 	if p.layers_open {
 		// Profile and debug builds get one more row: the profiler overlay.
@@ -621,19 +650,21 @@ plan_map_controls :: proc(w: ^World) {
 		y += 100
 		heading(w, {r.x + 16, y}, "LAYERS")
 		y += 24
+		// show: the flag means shown (zero = off by default) instead of hidden (zero = on).
 		toggles := [4]struct {
 			label: string,
-			hide:  ^bool,
+			flag:  ^bool,
+			show:  bool,
 		} {
-			{"Wind flow", &p.layers.hide_wind},
-			{"Gust risk", &p.layers.hide_gusts},
-			{"No-fly zones", &p.layers.hide_no_fly},
-			{"Solar", &p.layers.hide_solar},
+			{"Wind flow", &p.layers.show_wind, true},
+			{"Gust risk", &p.layers.hide_gusts, false},
+			{"No-fly zones", &p.layers.hide_no_fly, false},
+			{"Solar", &p.layers.hide_solar, false},
 		}
 		for t in toggles {
 			ui_text(w, {r.x + 16, y + 2}, t.label, .Roboto_400, 14, pal.text)
-			on := !t.hide^
-			if ui_toggle(w, {r.x + r.width - 16 - 36, y, 36, 20}, &on) do t.hide^ = !on
+			on := t.flag^ == t.show
+			if ui_toggle(w, {r.x + r.width - 16 - 36, y, 36, 20}, &on) do t.flag^ = on == t.show
 			y += 32
 		}
 		when PROFILING {
@@ -649,28 +680,6 @@ plan_map_controls :: proc(w: ^World) {
 		ui_segment(w, {r.x + 16, y, r.width - 32, 36}, names[:], &p.layers.wind_layer)
 	}
 
-	// Legend: wind gradient 120 x 6, no-fly hatch, gust color.
-	{
-		r := rl.Rectangle{LEGEND_X, sh - 24 - 40, 420, 40}
-		if r.x + r.width > x - 12 do return
-		ui_card(w, r)
-		lx := r.x + 14
-		cy := r.y + 20
-		colors := wind_colors(w)
-		for k in 0 ..< 120 {
-			t := f32(k) / 119 * 16
-			rl.DrawRectangleV({lx + f32(k), cy - 3}, {1, 6}, wind_color_at(colors, t))
-		}
-		ui_text(w, {lx + 126, cy - 8}, "Wind 0-16 m/s", .Roboto_400, 12, pal.text_2)
-		hx := lx + 230
-		rl.DrawRectangleV({hx, cy - 7}, {14, 14}, rl.ColorAlpha(pal.red, 0.2))
-		for k in 0 ..< 3 do rl.DrawLineEx({hx + f32(k) * 5, cy + 7}, {hx + f32(k) * 5 + 7, cy - 7}, 1, pal.red)
-		rl.DrawRectangleLinesEx({hx, cy - 7, 14, 14}, 1.5, pal.red)
-		ui_text(w, {hx + 20, cy - 8}, "No-fly", .Roboto_400, 12, pal.text_2)
-		gx := hx + 76
-		rl.DrawCircleGradient({gx + 7, cy}, 8, pal.red, rl.ColorAlpha(pal.warning, 0.3))
-		ui_text(w, {gx + 20, cy - 8}, "Gust risk", .Roboto_400, 12, pal.text_2)
-	}
 }
 
 // Compass button: a red and grey needle that turns with the map.

@@ -5,58 +5,12 @@ import "core:fmt"
 import rl "vendor:raylib"
 
 // Flying controls on the navigation screen (docs/drift-design.pdf "Scherm 2", zones 7, 8, 9, 11, 12): the button
-// column, the speed circle, Re-centre, self-fly and Exit in the sheet and the 3 x 3 control
-// pad with its key card. The ship itself only reads Controls; the pad presses feed them like the keyboard.
+// column, the speed circle, Re-centre, self-fly and Exit in the sheet. The ship itself only reads Controls.
 NAV_BUTTON :: 64
 NAV_BUTTON_GAP :: 14
 SPEED_CIRCLE :: 74
 SELF_FLY_BUTTON :: 66
-PAD_KEY :: 52
-PAD_GAP :: 6
 
-// The control pad: which Controls axis each of the 3 x 3 keys pushes (6 used: throttle, turn, climb, descend).
-Pad_Key :: struct {
-	label: string,
-	icon:  Icon,
-	axis:  Controls,
-}
-
-PAD_KEYS :: [9]Pad_Key {
-	{"R", .Climb, {climb = 1}},
-	{"W", .Arrow_Up, {throttle = 1}},
-	{"", .Close, {}},
-	{"A", .Arrow_Left, {turn = -1}},
-	{"", .Close, {}},
-	{"D", .Arrow_Right, {turn = 1}},
-	{"F", .Descend, {climb = -1}},
-	{"S", .Arrow_Down, {throttle = -1}},
-	{"", .Close, {}},
-}
-
-// Reads the pad under the mouse, called before the fixed steps so a press steers the ship this frame.
-pilot_pad_controls :: proc(w: ^World) -> Controls {
-	c: Controls
-	if w.screen != .Navigate || !w.nav.manual || !rl.IsMouseButtonDown(.LEFT) do return c
-	m := rl.GetMousePosition()
-	keys := PAD_KEYS
-	for k, i in keys {
-		if k.label == "" do continue
-		if rl.CheckCollisionPointRec(m, pilot_pad_rect(w, i)) {
-			c.throttle += k.axis.throttle
-			c.turn += k.axis.turn
-			c.climb += k.axis.climb
-		}
-	}
-	return c
-}
-
-pilot_pad_rect :: proc(w: ^World, i: int) -> rl.Rectangle {
-	sheet := nav_sheet_rect(w)
-	right := f32(rl.GetScreenWidth()) - 16 - NAV_BUTTON - 24
-	x0 := right - 3 * PAD_KEY - 2 * PAD_GAP
-	y0 := sheet.y - 24 - 3 * PAD_KEY - 2 * PAD_GAP
-	return {x0 + f32(i % 3) * (PAD_KEY + PAD_GAP), y0 + f32(i / 3) * (PAD_KEY + PAD_GAP), PAD_KEY, PAD_KEY}
-}
 
 // Leaves navigation: back to the plan screen with the routes fitted beside the panel.
 // Steering yourself works like cruise control (Lars, 2026-11-21: "het sturen gaat niet goed": letting go of W,
@@ -92,31 +46,22 @@ pilot_ui :: proc(w: ^World) {
 	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
 	sheet := nav_sheet_rect(w)
 
-	// Button column, right middle: compass, overview, wind, report gust.
+	// Button column, right middle: music, wind, report gust.
 	{
-		count :: 4
+		count :: 3
 		x := sw - 16 - NAV_BUTTON
 		y := (sh - count * NAV_BUTTON - (count - 1) * NAV_BUTTON_GAP) / 2 - 40
 		r := rl.Rectangle{x, y, NAV_BUTTON, NAV_BUTTON}
-		if compass_button(w, r) do cam_north(w)
+		music_button(w, r)
 		r.y += NAV_BUTTON + NAV_BUTTON_GAP
-		if ui_round_button(w, r, .Search, w.cam.mode == .Free && w.cam.dragged) {
-			if route := nav_route(w); route != nil {
-				lo, hi := path_bounds(route.path)
-				cam_fit(w, lo - 2, hi + 2, {80, 160, sw - 260, sh - SHEET_H - 200})
-				w.cam.dragged = true
-			}
-		}
+		if ui_round_button(w, r, .Wind, w.nav_wind) do w.nav_wind = !w.nav_wind
 		r.y += NAV_BUTTON + NAV_BUTTON_GAP
-		show_wind := !w.plan.layers.hide_wind && w.nav_wind
-		if ui_round_button(w, r, .Wind, show_wind) do w.nav_wind = !w.nav_wind
-		r.y += NAV_BUTTON + NAV_BUTTON_GAP
-		// Report gust: the yellow triangle with a plus.
+		// Report gust: reroutes around a gust here, same icon as the reroute banner.
 		id, hot, fired := ui_widget(w, r)
 		c := [2]f32{r.x + r.width / 2, r.y + r.height / 2}
 		ui_shadow(w, r, r.width / 2)
 		rl.DrawCircleV(c, r.width / 2, hot ? pal.surface_2 : pal.surface)
-		ui_icon(w, .Report_Gust, c, 30, pal.warning)
+		ui_icon(w, .Reroute, c, 30, pal.warning)
 		ui_focus_ring(w, id, r, r.width / 2)
 		ui_block(w, r)
 		if fired {
@@ -174,42 +119,4 @@ pilot_ui :: proc(w: ^World) {
 		if fired && n.active do nav_set_manual(w, !n.manual)
 	}
 
-	// Control pad (only in self-fly) and the key card above it.
-	if n.manual || !n.active {
-		keys := PAD_KEYS
-		pressed := w.controls
-		for k, i in keys {
-			if k.label == "" do continue
-			r := pilot_pad_rect(w, i)
-			on :=
-				(k.axis.throttle != 0 && k.axis.throttle * pressed.throttle > 0) ||
-				(k.axis.turn != 0 && k.axis.turn * pressed.turn > 0) ||
-				(k.axis.climb != 0 && k.axis.climb * pressed.climb > 0)
-			round_rect(r, 14, on ? pal.accent : rl.ColorAlpha(pal.surface, 0.82))
-			ui_icon(w, k.icon, {r.x + r.width / 2, r.y + r.height / 2 - 5}, 22, on ? pal.sheet : pal.text)
-			ui_text(
-				w,
-				{r.x + r.width / 2 - 4, r.y + r.height - 17},
-				k.label,
-				.Mono_400,
-				11,
-				on ? pal.sheet : pal.text_2,
-			)
-			ui_block(w, r)
-		}
-		first := pilot_pad_rect(w, 0)
-		card := rl.Rectangle{first.x, first.y - 12 - 80, 3 * PAD_KEY + 2 * PAD_GAP, 80}
-		round_rect(card, 12, rl.ColorAlpha(pal.surface, 0.9))
-		ui_text(w, {card.x + 12, card.y + 9}, "W S  speed   A D  turn", .Mono_400, 12, pal.text_2)
-		ui_text(w, {card.x + 12, card.y + 31}, "R F  climb   Esc  exit", .Mono_400, 12, pal.text_2)
-		// Flying car: hold F at the lowest height above a road to land on it, R takes off again.
-		ui_text(
-			w,
-			{card.x + 12, card.y + 53},
-			w.ship.on_road ? "R  take off" : "F low  land",
-			.Mono_400,
-			12,
-			pal.text_2,
-		)
-	}
 }

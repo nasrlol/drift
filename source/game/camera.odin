@@ -110,7 +110,7 @@ cam_build :: proc(p: Cam_Pose, screen: [2]f32) -> (view: rl.Camera3D, px_per_km:
 	n := globe_normal(lon, lat)
 	phi0 := f32(BELGIUM_LAT0 * math.RAD_PER_DEG)
 	north_axis := [3]f32{0, -math.cos(phi0), -math.sin(phi0)}
-	east := linalg.normalize(linalg.cross(n, north_axis))
+	east := linalg.normalize(linalg.cross(north_axis, n))
 	south := linalg.normalize(linalg.cross(east, n))
 
 	// Blend Belgium's flat pan out as zoom drops below 0 so zooming out to space stays smooth.
