@@ -6,9 +6,14 @@ import rl "vendor:raylib"
 STICK_DEADZONE :: 0.15
 
 // Keyboard and the first gamepad add up, so either can be used at any time. Turn is positive to the right,
-// stick Y is negative when pushed up, so throttle and climb flip it.
-read_controls :: proc() -> Controls {
+// stick Y is negative when pushed up, so throttle and climb flip it. In the street view Space and Shift climb
+// and sink too (on the map Space fires the focused button).
+read_controls :: proc(street: bool) -> Controls {
 	c: Controls
+	if street {
+		if rl.IsKeyDown(.SPACE) do c.climb += 1
+		if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.LEFT_CONTROL) do c.climb -= 1
+	}
 	if rl.IsKeyDown(.W) || rl.IsKeyDown(.UP) do c.throttle += 1
 	if rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN) do c.throttle -= 1
 	if rl.IsKeyDown(.D) || rl.IsKeyDown(.RIGHT) do c.turn += 1

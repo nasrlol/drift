@@ -577,6 +577,33 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   cloudy where the noise is under 0.1 + 0.9 x cover, 650-1100 m up, drifting with the top layer
                   wind. Soft sprites in screen space (far first) with a ground shadow, fading in from zoom 2 to 3.5
                   and out when one fills the screen. Our values.
+  street.odin     (Lars) the street view (Lars, 2026-11-21: "een 3d game waar je tussen huizen kan vliegen, zoals
+                  gta in third person, zo realistisch mogelijk"). V on the navigation screen (or the plan screen, which
+                  goes to free flight first) switches it on, V or Esc back to the map; the cursor is locked while on.
+                  Street space: metres, x east, y up, z south, around w.street.origin (km, snapped to 0.25 km so the
+                  f32 values stay small). street_transform draws the map meshes (km, y south, z down) there. The
+                  ground is flat: the car is drawn at alt - height_at, like the buildings stand on the map. raylib's
+                  projection is near 0.05 / far 4000 units, so the view ends at 4 km; haze closes at 3.5 km.
+                  Camera: chase behind the car (8.5 m, wheel 4..40 m), mouse / right stick looks around and swings
+                  back after 1.6 s, never inside a wall (collide_car along the line), FOV 62 + 10 at top speed, a
+                  short shake after a hit. Draws: sky gradient, land quad, land use with natural colors (ground
+                  shader remaps the palette colors), road ribbons per 1 km tile at real width with lane markings,
+                  buildings at real height (height_scale 1 / BUILDINGS_HEIGHT_X), towns, trees, the cars at real size
+                  (car_draw_street: no bob, no glow) with a contact shadow, then a HUD (speed, height, heading).
+                  KNOWN BUG: the land use triangles and the road ribbons do not show (the land quad and the buildings
+                  do, with the same transform and material); see todo STREET VIEW.
+  collide.odin    (Lars, simulation, no raylib) collide_car(w, pos, hag, radius_m) -> (push m, roof m): the car as a
+                  circle against the building footprints the street view draws. Real buildings from BUILDINGS_DATA
+                  with a 100 m cell list per city (2.4 km square), generated town buildings made again from the City
+                  triangles around the point (town_lot, shared with towns.odin) with a 1 km cell list. Built on first
+                  use from the perm arena. 2026-11-21: 70582 buildings, 99243 cell entries, 76009 triangle entries.
+  free flight     (ship.odin) ship_free_step, used in the street view when nobody else flies (not the autopilot):
+                  velocity with momentum, thrust 8 m/s^2, quadratic drag to 70 m/s, sideways grip 2.4/s against the
+                  air (crabs in a crosswind), turn 1.4 rad/s hovering .. 0.55 at top speed, altitude hold (climbs
+                  settle at ~12 m/s), wind of the car's layer weaker below 80 m, gust index as smooth turbulence,
+                  hovers 0.9 m over the ground or a roof, pushed out of walls losing the speed into them. pos_frac
+                  keeps the part of the position below the f32 resolution of pos. Leaving the street view hands the
+                  forward speed back to ship_step. Not recorded in the replay yet (the free flag is not a control).
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   from.z / to.z are the tower tops (headless: height_at + HUB_TOWER_M).
@@ -800,6 +827,7 @@ Files and owners
   weather.odin, net.odin, plan_ui.odin            Andrei  weather, network, plan screen, layers panel, legend
   presence.odin                                   Andrei  other cars by gossip (network)
   buildings.odin, nature.odin, clouds.odin        nasr    3D buildings, trees, clouds (map rendering)
+  street.odin, collide.odin                       Lars    street view, building collision
   (owners of the 2026-11-21 files are our guess from the split above, to confirm in the PR)
 
 World fields (zero = the design default: plan screen, night theme, nothing chosen)

@@ -91,6 +91,8 @@ World :: struct {
 	others_copied_s: f32, // seconds since that copy
 	presence_send_s: f32,
 	presence_copy_s: f32,
+	street:          Street, // the third-person street view, street.odin
+	collide:         Collide, // building footprints for free flight, collide.odin
 }
 
 @(export)
@@ -172,6 +174,7 @@ game_hot_reloaded :: proc(memory: rawptr) {
 	w.grid.terrain_built = false
 	// The new library may change the shaders, so the mesh is rebuilt on the next frame.
 	line_meshes_unload(&w.line_meshes)
+	street_unload(&w.street)
 }
 
 @(export)
@@ -185,7 +188,7 @@ game_update :: proc(memory: rawptr) -> bool {
 	weather_poll(w)
 	node_poll(w)
 	ui_begin(w)
-	keys := read_controls()
+	keys := read_controls(w.street.on)
 	pad := pilot_pad_controls(w)
 	w.controls = {
 		clamp(keys.throttle + pad.throttle, -1, 1),
@@ -196,8 +199,10 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	if !typing {
 		if rl.IsKeyPressed(.T) do w.theme = w.theme == .Night ? .Day : .Night
+		// V: the third-person street view (street.odin), V again or Esc back to the map.
+		if rl.IsKeyPressed(.V) do street_toggle(w)
 		// M: free flight without a route (the old drive mode), or back to the plan screen.
-		if rl.IsKeyPressed(.M) {
+		if rl.IsKeyPressed(.M) && !w.street.on {
 			if w.screen == .Plan {
 				nav_stop(w)
 				w.screen = .Navigate
@@ -207,7 +212,9 @@ game_update :: proc(memory: rawptr) -> bool {
 			}
 		}
 	}
-	if w.screen == .Navigate {
+	if w.street.on && (w.screen != .Navigate || rl.IsKeyPressed(.ESCAPE)) {
+		street_toggle(w)
+	} else if w.screen == .Navigate {
 		if rl.IsKeyPressed(.ESCAPE) do pilot_exit(w)
 		// Design: whoever presses a steering key in navigation takes over at once.
 		if w.nav.active && !w.nav.manual && w.controls != {} do nav_set_manual(w, true)
@@ -219,10 +226,13 @@ game_update :: proc(memory: rawptr) -> bool {
 	for w.accum >= SIM_DT {
 		if w.screen == .Navigate {
 			c := w.controls
-			if w.nav.active && !w.nav.manual {
+			autopilot := w.nav.active && !w.nav.manual
+			// Street view by hand: free flight with momentum, the throttle is the thrust (no cruise control).
+			free := w.street.on && !autopilot
+			if autopilot {
 				c = nav_autopilot(w)
 				w.cruise = -1
-			} else {
+			} else if !free {
 				c.throttle = cruise_throttle(w, c.throttle, SIM_DT)
 			}
 			step := controls_pack(c)
@@ -230,7 +240,11 @@ game_update :: proc(memory: rawptr) -> bool {
 				w.replay.steps[w.replay.count] = step
 				w.replay.count += 1
 			}
-			ship_step(w, controls_unpack(step), SIM_DT)
+			if free {
+				ship_free_step(w, controls_unpack(step), SIM_DT)
+			} else {
+				ship_step(w, controls_unpack(step), SIM_DT)
+			}
 			nav_update(w, SIM_DT)
 		}
 		w.tick += 1
@@ -248,7 +262,7 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	// Camera: input when the mouse is not on last frame's UI, glides, chase / preview, then the raylib camera.
 	// The keyboard and stick pan only on the plan screen, in navigation they steer the ship.
-	cam_update(w, !ui_mouse_captured(w), w.screen == .Plan && !typing)
+	cam_update(w, !ui_mouse_captured(w) && !w.street.on, w.screen == .Plan && !typing)
 
 	palettes := PALETTES
 	w.palette = palettes[w.theme]
@@ -258,7 +272,8 @@ game_update :: proc(memory: rawptr) -> bool {
 	rl.BeginDrawing()
 	t = prof_begin()
 	rl.ClearBackground(pal.land)
-	{
+	if w.street.on do street_draw(w)
+	if !w.street.on {
 		lm := &w.line_meshes
 		if !lm.built {
 			segments := 0
@@ -488,10 +503,17 @@ game_update :: proc(memory: rawptr) -> bool {
 			rl.SetShaderValueV(sh, lm.loc_widths, &fill, .FLOAT, LINE_COLORS)
 			if show_wind do rl.DrawMesh(lm.wind, lm.material, rl.Matrix(1))
 
-			// Draw order 4: the 3D buildings around the cities and the trees, over the roads.
-			buildings_draw(w, fog)
-			towns_draw(w)
-			nature_draw(w)
+			// Draw order 4: the 3D buildings around the cities and the trees, over the roads. They grow out of the
+			// ground while the camera zooms in.
+			grow := clamp((w.cam.pose.zoom - BUILDINGS_ZOOM_0) / (BUILDINGS_ZOOM_1 - BUILDINGS_ZOOM_0), 0, 1)
+			if grow > 0 {
+				target := w.cam.view.target.xy
+				view_km := w.cam.screen.x / max(w.cam.px_per_km, 1e-3)
+				look := buildings_map_look(w)
+				buildings_draw(w, fog, ease_in_out(grow), target, BUILDINGS_CULL_KM + view_km, rl.Matrix(1), look)
+				towns_draw(w, target, TOWN_REACH_KM, rl.Matrix(1))
+				nature_draw(w, target, TREE_REACH_KM, rl.Matrix(1))
+			}
 		}
 		rl.EndMode3D()
 
@@ -541,7 +563,7 @@ game_update :: proc(memory: rawptr) -> bool {
 			pilot_ui(w)
 		}
 	}
-	{
+	credit: {
 		// The OpenStreetMap license (ODbL) asks for this credit wherever the map is shown, CC BY 4.0 for the car
 		// model (assets/car-LICENSE.txt).
 		CREDIT :: "© OpenStreetMap contributors, car model: Eric Chadwick (CC BY 4.0)"
@@ -654,6 +676,7 @@ game_shutdown :: proc(memory: rawptr) {
 	clouds_unload(&w.cloud_sprites)
 	tiles_unload(&w.nature)
 	tiles_unload(&w.towns)
+	street_unload(&w.street)
 	virtual.arena_destroy(&w.fetch.mem)
 	virtual.arena_destroy(&w.node.mem)
 	virtual.arena_destroy(&w.frame)

@@ -26,15 +26,16 @@ tile_centre :: proc(key: [2]i32, size: f32) -> [2]f32 {
 	return ([2]f32{f32(key.x), f32(key.y)} + 0.5) * size
 }
 
-// Updates the cache around the camera target and draws its tiles with material (inside BeginMode3D).
+// Updates the cache around target (km) and draws its tiles with material and transform (inside BeginMode3D).
 tiles_update_draw :: proc(
 	w: ^World,
 	cache: ^Tile_Cache,
 	size, reach: f32,
 	build: Tile_Build,
 	material: rl.Material,
+	target: [2]f32,
+	transform: rl.Matrix,
 ) {
-	target := w.cam.view.target.xy
 	keep := reach + 2 * size
 	for &t in cache.tiles {
 		if t.used && linalg.length(tile_centre(t.key, size) - target) > keep {
@@ -72,7 +73,7 @@ tiles_update_draw :: proc(
 	for t in cache.tiles {
 		if !t.used || t.mesh.vertexCount == 0 do continue
 		if linalg.length(tile_centre(t.key, size) - target) > reach + size do continue
-		rl.DrawMesh(t.mesh, material, rl.Matrix(1))
+		rl.DrawMesh(t.mesh, material, transform)
 	}
 }
 

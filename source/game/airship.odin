@@ -361,6 +361,41 @@ car_draw :: proc(w: ^World, pos: [2]f32, alt, heading: f32, an: Car_Anim, px: f3
 	rl.EndMode3D()
 }
 
+// The car at real size in the street view (inside its BeginMode3D): pos in street space (m, y up). Lit by the
+// street view's sun and sky. No bob and no thruster glow, the street view shows the car as it is (Lars:
+// "realistisch, niet te veel animatie"); bank and pitch stay, they come from the flight.
+car_draw_street :: proc(w: ^World, pos: [3]f32, an: Car_Anim, tint: rl.Color, look: Street_Look) {
+	a := &w.airship
+	if !a.ready do return
+	sh := a.material.shader
+	light := look.sun_dir
+	view := linalg.normalize(w.street.view.position - pos)
+	sky, gnd, sun := look.sky_amb, look.gnd_amb, look.sun
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "light_dir"), &light, .VEC3)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "view_dir"), &view, .VEC3)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sky"), &sky, .VEC3)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "ground"), &gnd, .VEC3)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sun"), &sun, .FLOAT)
+	// Model space: x forward, y up, z right. Heading 0 is north (-z in street space).
+	m := linalg.matrix4_translate_f32(pos)
+	m = m * linalg.matrix4_rotate_f32(math.PI / 2 - an.heading, {0, 1, 0})
+	m = m * linalg.matrix4_rotate_f32(-an.bank, {1, 0, 0})
+	m = m * linalg.matrix4_rotate_f32(an.pitch, {0, 0, 1})
+	mat := a.material
+	mat.maps[0].color = tint
+	for part in a.parts[:a.part_count] {
+		if part.kind == 0 {
+			rl.DrawMesh(part.mesh, mat, rl.Matrix(m))
+			continue
+		}
+		side: f32 = part.pivot.z > 0 ? 1 : -1
+		fold := an.fly * math.PI / 2 * side
+		wm := m * linalg.matrix4_translate_f32(part.pivot)
+		wm = wm * linalg.matrix4_rotate_f32(fold, {1, 0, 0})
+		rl.DrawMesh(part.mesh, mat, rl.Matrix(wm * linalg.matrix4_rotate_f32(an.roll, {0, 0, 1})))
+	}
+}
+
 // The player's car (navigation screen).
 airship_draw :: proc(w: ^World) {
 	car_anim_update(w, min(rl.GetFrameTime(), MAX_FRAME_DT))

@@ -26,6 +26,51 @@ in_triangle :: proc(p, a, b, c: [2]f32) -> bool {
 	return !(neg && pos)
 }
 
+// One lattice per City area: its own turn, the same for all of its triangles, so they do not overlap.
+town_lattice :: proc(area: int) -> (seed: u32, ax, ay: [2]f32) {
+	seed = hash_u32(u32(area) * 2654435761 + 17)
+	angle := f32(seed >> 8) / f32(1 << 24) * math.PI / 2
+	ax = {math.cos(angle), math.sin(angle)}
+	ay = {-ax.y, ax.x}
+	return
+}
+
+// The building on lot (i, j) of a lattice, if the lot keeps one: its ring (km) and its real height (km, the map
+// draws it BUILDINGS_HEIGHT_X taller). Lots within BUILDINGS_RADIUS_KM of a city with real buildings (cities)
+// stay empty. Drawing (towns_build_tile) and collision (collide.odin) both use this, so a wall stops the car
+// where it shows.
+town_lot :: proc(
+	cities: [][2]f32,
+	seed: u32,
+	ax, ay: [2]f32,
+	i, j: i32,
+) -> (
+	ring: [4][2]f32,
+	height: f32,
+	ok: bool,
+) {
+	lot := f32(TOWN_LOT_M) / 1000
+	c := (ax * (f32(i) + 0.5) + ay * (f32(j) + 0.5)) * lot
+	h := hash_u32(u32(i) * 73856093 ~ u32(j) * 19349663 ~ seed)
+	r0 := f32(h & 0xff) / 255
+	r1 := f32((h >> 8) & 0xff) / 255
+	r2 := f32((h >> 16) & 0xff) / 255
+	r3 := f32(h >> 24) / 255
+	if r0 > TOWN_FILL do return
+	for o in cities do if linalg.length(c - o) < BUILDINGS_RADIUS_KM do return
+	half := [2]f32{0.25 + 0.2 * r1, 0.25 + 0.2 * r2} * lot
+	height = (5 + 9 * r3 * r3 + (r1 > 0.97 ? 20 * r2 : 0)) / 1000
+	// Counter-clockwise on the map (y south): the lattice axes are a rotation, so -u-v, -u+v, +u+v, +u-v turns
+	// the same way as the ground quads.
+	ring = {
+		c - ax * half.x - ay * half.y,
+		c - ax * half.x + ay * half.y,
+		c + ax * half.x + ay * half.y,
+		c + ax * half.x - ay * half.y,
+	}
+	return ring, height, true
+}
+
 // The generated buildings whose lot centre lies in lo ..< hi (Tile_Build).
 towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	b := &w.buildings
@@ -41,11 +86,7 @@ towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	for a, ai in w.m.areas {
 		if Area_Kind(a.kind) != .City do continue
 		pts := w.m.area_points[a.start:][:a.count]
-		// One lattice per area: its own turn, the same for all of its triangles, so they do not overlap.
-		seed := hash_u32(u32(ai) * 2654435761 + 17)
-		angle := f32(seed >> 8) / f32(1 << 24) * math.PI / 2
-		ax := [2]f32{math.cos(angle), math.sin(angle)}
-		ay := [2]f32{-ax.y, ax.x}
+		seed, ax, ay := town_lattice(ai)
 		for k := 0; k + 2 < len(pts); k += 3 {
 			p0, p1, p2 := pts[k], pts[k + 1], pts[k + 2]
 			tlo := linalg.max(linalg.min(p0, linalg.min(p1, p2)), lo)
@@ -64,25 +105,9 @@ towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 					c := (ax * (f32(i) + 0.5) + ay * (f32(j) + 0.5)) * lot
 					if c.x < lo.x || c.y < lo.y || c.x >= hi.x || c.y >= hi.y do continue
 					if !in_triangle(c, p0, p1, p2) do continue
-					h := hash_u32(u32(i) * 73856093 ~ u32(j) * 19349663 ~ seed)
-					r0 := f32(h & 0xff) / 255
-					r1 := f32((h >> 8) & 0xff) / 255
-					r2 := f32((h >> 16) & 0xff) / 255
-					r3 := f32(h >> 24) / 255
-					if r0 > TOWN_FILL do continue
-					real := false
-					for o in b.origins[:b.count] do if linalg.length(c - o) < BUILDINGS_RADIUS_KM do real = true
-					if real do continue
-					half := [2]f32{0.25 + 0.2 * r1, 0.25 + 0.2 * r2} * lot
-					height := (5 + 9 * r3 * r3 + (r1 > 0.97 ? 20 * r2 : 0)) / 1000 * BUILDINGS_HEIGHT_X
-					// Counter-clockwise on the map (y south): the lattice axes are a rotation, so -u-v, -u+v, +u+v,
-					// +u-v turns the same way as the ground quads.
-					ring := [4][2]f32 {
-						c - ax * half.x - ay * half.y,
-						c - ax * half.x + ay * half.y,
-						c + ax * half.x + ay * half.y,
-						c + ax * half.x - ay * half.y,
-					}
+					ring, height, ok := town_lot(b.origins[:b.count], seed, ax, ay, i, j)
+					if !ok do continue
+					height *= BUILDINGS_HEIGHT_X
 					for e in 0 ..< 4 {
 						p, q := ring[e], ring[(e + 1) % 4]
 						d := linalg.normalize(q - p)
@@ -109,9 +134,9 @@ towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	return tile_mesh(pos[:], col[:])
 }
 
-// Inside BeginMode3D, right after buildings_draw (which sets the shader's uniforms).
-towns_draw :: proc(w: ^World) {
+// Inside BeginMode3D, right after buildings_draw (which sets the shader's uniforms), around target (km).
+towns_draw :: proc(w: ^World, target: [2]f32, reach: f32, transform: rl.Matrix) {
 	b := &w.buildings
-	if !b.ready || w.cam.pose.zoom <= BUILDINGS_ZOOM_0 do return
-	tiles_update_draw(w, &w.towns, TOWN_TILE_KM, TOWN_REACH_KM, towns_build_tile, b.material)
+	if !b.ready do return
+	tiles_update_draw(w, &w.towns, TOWN_TILE_KM, reach, towns_build_tile, b.material, target, transform)
 }

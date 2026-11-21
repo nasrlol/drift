@@ -66,9 +66,9 @@ nature_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	return tile_mesh(pos[:], col[:])
 }
 
-// Inside BeginMode3D, right after buildings_draw (which sets the shader's uniforms).
-nature_draw :: proc(w: ^World) {
+// Inside BeginMode3D, right after buildings_draw (which sets the shader's uniforms), around target (km).
+nature_draw :: proc(w: ^World, target: [2]f32, reach: f32, transform: rl.Matrix) {
 	b := &w.buildings
-	if !b.ready || w.cam.pose.zoom <= BUILDINGS_ZOOM_0 do return
-	tiles_update_draw(w, &w.nature, TREE_TILE_KM, TREE_REACH_KM, nature_build_tile, b.material)
+	if !b.ready do return
+	tiles_update_draw(w, &w.nature, TREE_TILE_KM, reach, nature_build_tile, b.material, target, transform)
 }

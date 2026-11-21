@@ -236,18 +236,26 @@ buildings_build :: proc(w: ^World) {
 	logf(w, "buildings", "%d buildings in %d cities", total_b, b.count)
 }
 
-// Inside BeginMode3D, after the roads. fog as the lines (game.odin passes the same range).
-buildings_draw :: proc(w: ^World, fog: [2]f32) {
+// Inside BeginMode3D, after the roads. fog as the lines (game.odin passes the same range), height_scale squashes
+// the heights (1 / BUILDINGS_HEIGHT_X is real height), cities within reach (km) of target are drawn with
+// transform. look gives the roof, wall, tree and fog colors.
+Buildings_Look :: struct {
+	roof, wall, tree, fog: [3]f32,
+}
+
+buildings_draw :: proc(
+	w: ^World,
+	fog: [2]f32,
+	height_scale: f32,
+	target: [2]f32,
+	reach: f32,
+	transform: rl.Matrix,
+	look: Buildings_Look,
+) {
 	b := &w.buildings
-	if !b.ready do return
-	grow := clamp((w.cam.pose.zoom - BUILDINGS_ZOOM_0) / (BUILDINGS_ZOOM_1 - BUILDINGS_ZOOM_0), 0, 1)
-	if grow <= 0 do return
-	grow = ease_in_out(grow)
-	pal := palette(w)
-	roof := rl.ColorNormalize(pal.roof).rgb
-	wall := rl.ColorNormalize(pal.wall).rgb
-	tree := rl.ColorNormalize(pal.tree).rgb
-	horizon := rl.ColorNormalize(pal.horizon).rgb
+	if !b.ready || height_scale <= 0 do return
+	grow := height_scale
+	roof, wall, tree, horizon := look.roof, look.wall, look.tree, look.fog
 	fog := fog
 	sh := b.material.shader
 	rl.SetShaderValue(sh, b.loc.roof, &roof, .VEC3)
@@ -256,12 +264,21 @@ buildings_draw :: proc(w: ^World, fog: [2]f32) {
 	rl.SetShaderValue(sh, b.loc.fog_c, &horizon, .VEC3)
 	rl.SetShaderValue(sh, b.loc.fog_r, &fog, .VEC2)
 	rl.SetShaderValue(sh, b.loc.scale, &grow, .FLOAT)
-	target := w.cam.view.target.xy
-	view_km := w.cam.screen.x / max(w.cam.px_per_km, 1e-3)
 	for i in 0 ..< b.count {
 		d := b.origins[i] - target
-		if math.sqrt(d.x * d.x + d.y * d.y) > BUILDINGS_CULL_KM + view_km do continue
-		rl.DrawMesh(b.meshes[i], b.material, rl.Matrix(1))
+		if math.sqrt(d.x * d.x + d.y * d.y) > reach do continue
+		rl.DrawMesh(b.meshes[i], b.material, transform)
+	}
+}
+
+// The map's colors for the buildings, trees and fog.
+buildings_map_look :: proc(w: ^World) -> Buildings_Look {
+	pal := palette(w)
+	return {
+		roof = rl.ColorNormalize(pal.roof).rgb,
+		wall = rl.ColorNormalize(pal.wall).rgb,
+		tree = rl.ColorNormalize(pal.tree).rgb,
+		fog = rl.ColorNormalize(pal.horizon).rgb,
 	}
 }
 

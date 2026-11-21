@@ -67,6 +67,12 @@ Ship :: struct {
 	lifting:   bool,
 	road_edge: int,
 	road_s:    f32,
+	// Free flight (street view, ship_free_step): velocity in m/s (x east, y south, z up) and the part of the
+	// position below the f32 resolution of pos, in m, so slow flight still moves at 150 km from the corner.
+	free:      bool,
+	vel:       [3]f32,
+	pos_frac:  [2]f32,
+	hit_s:     f32, // seconds since the car last hit a wall, for the street view's shake and the HUD
 }
 
 // Battery charge in kWh, BATTERY_START x BATTERY_KWH at the start, clamped to the capacity.
@@ -108,6 +114,13 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 			return
 		}
 		s.moored = false
+	}
+	if s.free {
+		// Back from free flight: keep the speed along the heading, the climb clamp below lifts the car to the
+		// lowest flying height.
+		s.free = false
+		s.speed = max(linalg.dot(s.vel.xy, [2]f32{math.sin(s.heading), -math.cos(s.heading)}), 0)
+		s.vel, s.pos_frac = {}, {}
 	}
 	// On the road (or landing on it) only the jam warning applies; in the air the warnings are rebuilt below.
 	if s.on_road || s.landing do s.warnings = ship_jam_factor(w) > 1 ? {.Jam} : {}
@@ -191,4 +204,150 @@ ship_jam_factor :: proc(w: ^World) -> f32 {
 	if w.other_count == 0 do return 1
 	s := &w.ship
 	return traffic_factor(u8(min(traffic_near(w, s.pos, s.alt, s.on_road, TRAFFIC_RADIUS_KM), 255)))
+}
+
+// Free flight in the street view (Lars, 2026-11-21: "zoals gta, zo realistisch mogelijk"): the car keeps its
+// momentum. Thrust along the heading, quadratic air drag (top speed SHIP_MAX_SPEED), sideways grip of the fans
+// against the air, so the car crabs in a crosswind and slides a little in fast turns; vertical thrust with an
+// altitude hold. Wind is the forecast at the car's layer, weaker near the ground, with gusts as smooth
+// turbulence. It hovers FREE_HOVER_M above the ground or a roof and is pushed out of walls (collide_car), losing
+// the speed into the wall. Our values. Deterministic: same inputs, same path.
+FREE_ACCEL :: 8.0 // m/s^2 at full throttle, 0-100 km/h in ~3.6 s
+FREE_BRAKE :: 11.0
+FREE_REVERSE_MS :: 8.0
+FREE_DRAG :: FREE_ACCEL / (SHIP_MAX_SPEED * SHIP_MAX_SPEED) // per m
+FREE_GRIP :: 2.4 // 1/s, how fast sideways air speed dies out
+FREE_TURN_SLOW :: 1.4 // rad/s turn rate when hovering
+FREE_TURN_FAST :: 0.55 // rad/s at top speed
+FREE_TURN_SMOOTH_S :: 0.22
+FREE_CLIMB_ACCEL :: 14.0
+FREE_VZ_DAMP :: 1.15 // 1/s, the altitude hold: climbs settle at ~12 m/s
+FREE_HOVER_M :: 0.9
+FREE_RADIUS_M :: 2.2 // the car as a circle for the walls
+FREE_WALL_KEEP :: 0.35 // share of the speed along the wall kept in a hit
+FREE_GROUND_WIND_M :: 80.0 // the wind grows to its layer value over this height
+FREE_GUST_ACCEL :: 2.2 // m/s^2 of turbulence at gust index 1
+
+ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
+	s := &w.ship
+	hour := sim_hour(w)
+	fwd := [2]f32{math.sin(s.heading), -math.cos(s.heading)}
+	if !s.free {
+		s.free = true
+		s.vel = {fwd.x * s.speed, fwd.y * s.speed, 0}
+		s.pos_frac = {}
+		s.on_road, s.landing, s.lifting = false, false, false
+		s.moored, s.docked = false, false
+		s.turn_rate = 0
+		s.hit_s = 10
+	}
+	s.hit_s += dt
+	ground := height_at(w, s.pos.x, s.pos.y)
+	hag := s.alt - ground
+
+	// Turning: quick when hovering, wider at speed, eased in.
+	vh := s.vel.xy
+	speed := linalg.length(vh)
+	max_turn := FREE_TURN_SLOW + (FREE_TURN_FAST - FREE_TURN_SLOW) * clamp(speed / SHIP_MAX_SPEED, 0, 1)
+	s.turn_rate += (c.turn * max_turn - s.turn_rate) * min(dt / FREE_TURN_SMOOTH_S, 1)
+	s.heading = math.mod(s.heading + s.turn_rate * dt + math.TAU, math.TAU)
+	fwd = {math.sin(s.heading), -math.cos(s.heading)}
+	right := [2]f32{-fwd.y, fwd.x}
+
+	// Wind at the car: the layer nearest its altitude, weaker near the ground, plus turbulence from the gust index.
+	layers := LAYER_ALT
+	layer := clamp(int(math.round((s.alt - layers[0]) / (layers[1] - layers[0]))), 0, WIND_LAYERS - 1)
+	wind := wind_at(w, s.pos.x, s.pos.y, layer, hour) * clamp(hag / FREE_GROUND_WIND_M, 0.25, 1)
+	gust := gust_at(w, s.pos.x, s.pos.y, layer, hour)
+	t := f32(w.tick % (60 * 3600)) * SIM_DT
+	turb := [3]f32 {
+		math.sin(t * 1.3) + 0.6 * math.sin(t * 3.1 + 1.7),
+		math.sin(t * 1.1 + 2.3) + 0.6 * math.sin(t * 2.7 + 0.4),
+		0.5 * math.sin(t * 1.9 + 4.1),
+	}
+	turb *= gust * FREE_GUST_ACCEL / 1.6
+
+	// Forces along and across the heading, from the speed through the air.
+	air := vh - wind
+	along := linalg.dot(air, fwd)
+	across := linalg.dot(air, right)
+	thrust: f32
+	if c.throttle > 0 {
+		thrust = c.throttle * FREE_ACCEL
+	} else if c.throttle < 0 {
+		// Brake while moving forward, then reverse slowly.
+		thrust = along > 0.5 ? c.throttle * FREE_BRAKE : (along > -FREE_REVERSE_MS ? c.throttle * FREE_ACCEL * 0.4 : 0)
+	}
+	a_along := thrust - FREE_DRAG * along * abs(along)
+	a_across := -FREE_GRIP * across - FREE_DRAG * across * abs(across)
+	acc := fwd * a_along + right * a_across + turb.xy
+	acc_z := c.climb * FREE_CLIMB_ACCEL - FREE_VZ_DAMP * s.vel.z + turb.z
+	// In a traffic jam the car is held back like the router expects (traffic_factor).
+	jam := ship_jam_factor(w)
+	s.vel.xy += acc * dt
+	s.vel.z += acc_z * dt
+	if jam > 1 do s.vel.xy *= 1 - min(dt * (jam - 1), 1)
+
+	// Move. pos is f32 km (~1.5 cm steps at 150 km): the rest goes into pos_frac and is added on in f64.
+	{
+		frac := s.pos_frac + s.vel.xy * dt
+		x := f64(s.pos.x) + f64(frac.x) / 1000
+		y := f64(s.pos.y) + f64(frac.y) / 1000
+		s.pos = {f32(x), f32(y)}
+		s.pos_frac = {f32((x - f64(s.pos.x)) * 1000), f32((y - f64(s.pos.y)) * 1000)}
+	}
+	s.alt += s.vel.z * dt
+
+	// Walls: out of every footprint the car overlaps, the speed into the wall is lost.
+	ground = height_at(w, s.pos.x, s.pos.y)
+	hag = s.alt - ground
+	push, roof := collide_car(w, s.pos, hag - FREE_HOVER_M * 0.5, FREE_RADIUS_M)
+	if push != {} {
+		x := f64(s.pos.x) + (f64(s.pos_frac.x) + f64(push.x)) / 1000
+		y := f64(s.pos.y) + (f64(s.pos_frac.y) + f64(push.y)) / 1000
+		s.pos = {f32(x), f32(y)}
+		s.pos_frac = {f32((x - f64(s.pos.x)) * 1000), f32((y - f64(s.pos.y)) * 1000)}
+		n := linalg.normalize(push)
+		into := linalg.dot(s.vel.xy, n)
+		if into < 0 {
+			tangent := s.vel.xy - n * into
+			s.vel.xy = tangent * (1 - (1 - FREE_WALL_KEEP) * clamp(-into / 20, 0, 1))
+			if -into > 3 do s.hit_s = 0
+		}
+	}
+
+	// Ground and roofs carry the car, the ceiling stops it.
+	floor := ground + max(roof, 0) + FREE_HOVER_M
+	if s.alt < floor {
+		s.alt = floor
+		s.vel.z = max(s.vel.z, 0)
+	}
+	if s.alt > SHIP_CEILING {
+		s.alt = SHIP_CEILING
+		s.vel.z = min(s.vel.z, 0)
+	}
+	edge_lo := [2]f32{SHIP_EDGE_KM, SHIP_EDGE_KM}
+	edge_hi := [2]f32{MAP_W_KM, MAP_H_KM} - SHIP_EDGE_KM
+	if s.pos != linalg.clamp(s.pos, edge_lo, edge_hi) {
+		s.pos = linalg.clamp(s.pos, edge_lo, edge_hi)
+		s.pos_frac = {}
+		s.vel.xy = {}
+	}
+	s.speed = linalg.length(s.vel.xy)
+
+	// Energy as ship_step: power at the air speed and the climbing power, solar from the cloud cover.
+	airspeed := linalg.length(s.vel.xy - wind)
+	s.used_kwh +=
+		(power_kw(min(airspeed, SHIP_POWER_CAP_MS), gust) + max(s.vel.z, 0) * SHIP_CLIMB_KW_PER_MS) *
+		dt /
+		3600
+	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, hour)) * dt / 3600
+
+	s.warnings = {}
+	for z in w.no_fly {
+		if z.radius > 0 && s.alt < z.ceiling && linalg.length(s.pos - z.center) < z.radius {
+			s.warnings += {.No_Fly}
+		}
+	}
+	if jam > 1 do s.warnings += {.Jam}
 }
