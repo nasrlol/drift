@@ -21,6 +21,7 @@ CAR_MAX_PARTS :: 12
 CAR_MAX_MATERIALS :: 32
 CAR_LEN :: 4.36 // m, the baked model
 CAR_WHEEL_R :: 0.36
+CAR_STEER :: 0.45 // the front wheels' lock as drawn, radians
 CAR_PX :: 110.0 // on-screen length on the flat map
 AIRSHIP_TILT :: 1.0 // radians from straight down, so the sides show
 CAR_BANK :: 0.35 // roll in radians at the maximum turn rate
@@ -179,6 +180,22 @@ airship_build :: proc(w: ^World) {
 			mat := materials[min(int(v.material), CAR_MAX_MATERIALS - 1)]
 			colors[i] = mat
 		}
+		if ph.kind > 0 {
+			// The model's front wheels are steered (~22 deg) at rest, so rolling them around the car's axle
+			// swung them about (Lars: "de voorbanden maken rare animatie"). Each wheel is turned straight: the
+			// direction of its largest spread in the ground plane (the rolling direction, found by the
+			// covariance of its points) is put on the car's forward axis. Its own steering is drawn later.
+			cxx, cxz, czz: f32
+			for v in verts {
+				cxx += v.x * v.x
+				cxz += v.x * v.z
+				czz += v.z * v.z
+			}
+			phi := 0.5 * math.atan2(2 * cxz, cxx - czz)
+			cp, sp := math.cos(phi), math.sin(phi)
+			for &v in verts do v = {v.x * cp + v.z * sp, v.y, -v.x * sp + v.z * cp}
+			for &n in normals do n = {n.x * cp + n.z * sp, n.y, -n.x * sp + n.z * cp}
+		}
 		off += vbytes
 		mem.copy(raw_data(indices), &data[off], ic * 2)
 		off += ic * 2
@@ -248,6 +265,7 @@ Car_Anim :: struct {
 	climb_ms: f32,
 	last_alt: f32,
 	roll:     f32, // wheel rotation, radians
+	steer:    f32, // front wheel angle, radians, positive to the right
 	time:     f32,
 	seeded:   bool,
 }
@@ -283,6 +301,8 @@ car_anim_update :: proc(w: ^World, dt: f32) {
 	an.pitch += (pitch - an.pitch) * k
 	an.heading = angle_lerp(an.heading, p.heading, 1 - math.exp(-dt * CAR_HEADING_RATE))
 	an.roll -= dt * s.speed / CAR_WHEEL_R * (1 - an.fly)
+	steer := (1 - an.fly) * w.controls.turn * CAR_STEER
+	an.steer += (steer - an.steer) * (1 - math.exp(-dt * 8))
 	an.time += dt
 }
 
@@ -350,6 +370,8 @@ car_draw :: proc(w: ^World, pos: [2]f32, alt, heading: f32, an: Car_Anim, px: f3
 		side: f32 = part.pivot.z > 0 ? 1 : -1
 		fold := an.fly * math.PI / 2 * side
 		wm := m * linalg.matrix4_translate_f32(part.pivot)
+		// Front wheels (kinds 1, 2) steer; model space x forward, z right, so right is a turn about -y.
+		if part.kind <= 2 do wm = wm * linalg.matrix4_rotate_f32(-an.steer, {0, 1, 0})
 		wm = wm * linalg.matrix4_rotate_f32(fold, {1, 0, 0})
 		rl.DrawMesh(part.mesh, mat, rl.Matrix(wm * linalg.matrix4_rotate_f32(an.roll, {0, 0, 1})))
 		if an.fly > 0.3 {
@@ -400,6 +422,8 @@ car_draw_street :: proc(
 		side: f32 = part.pivot.z > 0 ? 1 : -1
 		fold := an.fly * math.PI / 2 * side
 		wm := m * linalg.matrix4_translate_f32(part.pivot)
+		// Front wheels (kinds 1, 2) steer; model space x forward, z right, so right is a turn about -y.
+		if part.kind <= 2 do wm = wm * linalg.matrix4_rotate_f32(-an.steer, {0, 1, 0})
 		wm = wm * linalg.matrix4_rotate_f32(fold, {1, 0, 0})
 		rl.DrawMesh(part.mesh, mat, rl.Matrix(wm * linalg.matrix4_rotate_f32(an.roll, {0, 0, 1})))
 	}

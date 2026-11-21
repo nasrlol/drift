@@ -609,7 +609,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   unpacked once in game_init (airship_build) into body parts + 4 wheels, lit by CAR_VS / CAR_FS (paint,
                   glass, metal, lights, matte by material class). Drawn through an orthographic Camera3D, CAR_PX 110 px
                   long at every zoom, with a soft shadow. Car_Anim eases fly (wheels fold flat with a cyan glow disc in the
-                  air, roll on the road), bank with turn_rate, pitch with the climb, a slow bob. others_draw draws the
+                  air, roll on the road), bank with turn_rate, pitch with the climb, a slow bob. The model's front
+                  wheels are steered ~30 deg at rest (PCA of their points in the ground plane: 0.52 rad, rear 0.02),
+                  so rolling them about the car's axle swung them about (Lars: "rare animatie"): airship_build turns
+                  every wheel straight, the front ones are drawn steered by Car_Anim.steer (0.45 rad x turn input,
+                  only with the wheels down). others_draw draws the
                   other cars (presence.odin) 80 px, tinted, orange in a traffic jam.
   presence.odin   (author andrei) other cars on the map, peer-to-peer (Lars: "geen relay service, gossiping"): every
                   PRESENCE_S 2 s the game signs its position (Presence, 136 bytes, ed25519 identity) and the node swaps
