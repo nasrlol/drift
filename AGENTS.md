@@ -34,13 +34,29 @@ is missing, unclear or contradicts notes.txt or the spec:
        gh issue create --repo nasrlol/drift --label question --assignee nasrlol \
          --title "Question: <what is missing>" --body-file <file>
 
+   Where gh has no GraphQL (some cloud agent sessions), use the REST call:
+
+       gh api repos/nasrlol/drift/issues -f title="Question: <what is missing>" \
+         -F body=@<file> -f 'labels[]=question' -f 'assignees[]=nasrlol'
+
 2. Mark the spot in the code: `// BLOCKED: #NN <one line>`. Leave it open (a failing test or a
    compile error), never filled with a guess. CI fails while a BLOCKED marker exists, so it cannot
    reach main.
 3. Note it on the todo item: `[~] yourname: task (waiting: #NN)`.
 4. Keep building everything that does not depend on the missing piece.
-5. When nasr answers, write the answer into notes.txt or a constant in the owning file, never only
-   in the issue. Then fill the spot, remove the marker and close the issue.
+5. nasr answers in the issue. That answer is the only source: not a chat, not a guess.
+
+Before you work in a file, look for open questions: `git grep -n 'BLOCKED: #' -- '*.odin'`.
+For each marker, read its issue:
+
+    gh issue view NN --repo nasrlol/drift --comments
+    gh api repos/nasrlol/drift/issues/NN/comments --jq '.[] | .user.login + ": " + .body'
+
+No answer from nasr yet: leave the marker and work around it as in step 4. An answer from nasr:
+
+1. Write it into notes.txt or a constant in the owning file, never only in the issue.
+2. Fill the spot from there, remove the marker, run the tests.
+3. Close the issue with a comment that names the commit.
 
 Never, to get around a missing piece:
 - hardcode values (coordinates, sizes, speeds, keys, paths) that belong to another system or come
