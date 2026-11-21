@@ -171,12 +171,12 @@ ols.json, odinfmt.json   Odin language server + formatter (tabs, 110 columns)
 .gitattributes           LF everywhere, *.bin / *.pbf / *.pdf binary, geojson marked generated
 .githooks/pre-commit     format check (if odinfmt installed) + check.sh + debug build (compile.bat on Windows) + test/.
                          enable: git config core.hooksPath .githooks
-.github/workflows/ci.yml job build: ubuntu 24.04, Odin dev-2026-11a, odinfmt check, check.sh (+ PR size),
+.github/workflows/ci.yml job build: ubuntu 24.04, Odin dev-2026-11a, odinfmt check, check.sh,
                          debug + release build, bake reproduces belgium.bin, test/
                          job build-windows: windows 2022, compile.bat debug + release
 .github/CODEOWNERS       system files owned by their person + @nasrlol, protected files by @nasrlol
 check.sh                 allowed imports, no raylib in sim files, banned file names, one test file,
-                         max 1 MB per file (assets excepted), --pr <base>: max 400 changed lines
+                         max 1 MB per file (assets excepted)
 AGENTS.md                entry point for agents and new people, points to rules / notes / todo
 format.sh                formats all tracked .odin files with odinfmt, --check only reports (hook + CI).
                          new files must be git added first

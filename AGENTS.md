@@ -10,7 +10,7 @@ Read these three files before you change anything:
 
 1. Pick one unclaimed item in todo.txt. Claim it: `[~] yourname: task`. Work on that item only.
 2. Work on a branch: `yourname/short-topic`. Never commit to main.
-3. Keep the change small (under 400 changed lines outside assets/). One todo item per pull request.
+3. Keep the change small. One todo item per pull request.
 4. Before committing: `./format.sh`, `./check.sh`, `./compile.sh debug`. The pre-commit hook runs them too.
 5. Never skip the hook (`--no-verify`). If a check fails, fix the code, not the check.
 6. When done: tick the item in todo.txt, describe what was built in notes.txt.
