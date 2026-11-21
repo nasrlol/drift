@@ -1,298 +1,255 @@
 // author: dario
 package game
 
+import "core:compress/deflate"
 import "core:math"
 import "core:math/linalg"
+import "core:mem"
+import "core:mem/virtual"
 import rl "vendor:raylib"
 
-// The flying car (Lars, 2026-11-21: "het is een vliegende auto"): a low-poly car with four wheels and four
-// ducted fans on folding arms. On the road the arms lie folded along the body and the wheels are down; in the air
-// the arms swing out, the fans spin and the wheels tuck in. Car_Anim drives that change from the ship state, so
-// landing and take-off show as a transition. Model space: metres, x forward (nose is +x), y up, z to the right,
-// origin on the ground under the middle of the car. Colors from docs/drift-design.pdf ("Het luchtschip").
-CAR_LEN :: 5.2
-CAR_PX :: 90.0 // on-screen length on the flat map
-AIRSHIP_TILT :: 0.7 // radians from straight down, so the sides show
-CAR_BANK :: 0.4 // roll in radians at the maximum turn rate
-CAR_PITCH :: 0.22 // nose up in radians at the maximum climb rate
-CAR_ANIM_RATE :: 4.0 // the animation closes this share of the gap per second
-CAR_HEADING_RATE :: 8.0
-CAR_BOB_M :: 0.12 // hover bob in the air
-AIRSHIP_MAX_VERTS :: 4096
-AIRSHIP_PROP_VERTS :: 128
-CAR_WHEEL_VERTS :: 512
-CAR_POD_VERTS :: 2048
+// The flying car (Lars, 2026-11-21: "het is een vliegende auto", "iets realistisch in 3d"): the Car Concept model
+// (CC BY 4.0, Eric Chadwick / Darmstadt Graphics Group, from a CC0 model by Unity Fan; assets/car-LICENSE.txt),
+// baked by tools/bake_car into assets/car.bin.gz: smooth normals, a color and a shading class per vertex (paint,
+// glass, metal, lights, matte), lit by CAR_FS. Taking off, the wheels fold flat under the car and glow as
+// thrusters; landing, they fold back down. Car_Anim drives that from the ship state. Model space: metres, x
+// forward, y up, z to the right, origin on the ground under the middle of the car.
+CAR_DATA :: #load("../../assets/car.bin.gz")
+CAR_MAGIC :: 0x52435244 // "DRCR"
+CAR_VERSION :: 1
+CAR_MAX_PARTS :: 12
+CAR_MAX_MATERIALS :: 32
+CAR_LEN :: 4.36 // m, the baked model
 CAR_WHEEL_R :: 0.36
-CAR_DUCT_R :: 0.75
+CAR_PX :: 110.0 // on-screen length on the flat map
+AIRSHIP_TILT :: 1.0 // radians from straight down, so the sides show
+CAR_BANK :: 0.35 // roll in radians at the maximum turn rate
+CAR_PITCH :: 0.18 // nose up in radians at the maximum climb rate
+CAR_ANIM_RATE :: 3.0 // the animation closes this share of the gap per second
+CAR_HEADING_RATE :: 8.0
+CAR_BOB_M :: 0.06 // hover bob in the air
+CAR_GLOW :: rl.Color{90, 230, 255, 255}
 
-// Arms: root on the body (model space), folded angle (along the body) and open angle (out at 45 degrees), radians
-// around y; an angle t turns the arm from +x to (cos t, 0, -sin t).
-CAR_ARMS :: [4]struct {
-	root:   [3]f32,
-	folded: f32,
-	open:   f32,
-} {
-	{{1.9, 1.0, 0.8}, -math.PI, -math.PI * 0.25},
-	{{1.9, 1.0, -0.8}, math.PI, math.PI * 0.25},
-	{{-2.1, 1.0, 0.8}, 0, -math.PI * 0.75},
-	{{-2.1, 1.0, -0.8}, 0, math.PI * 0.75},
-}
-CAR_ARM_LEN :: 1.5
-CAR_WHEELS :: [4][3]f32 {
-	{1.55, CAR_WHEEL_R, 0.92},
-	{1.55, CAR_WHEEL_R, -0.92},
-	{-1.55, CAR_WHEEL_R, 0.92},
-	{-1.55, CAR_WHEEL_R, -0.92},
+Car_Part :: struct {
+	mesh:  rl.Mesh,
+	kind:  u32, // 0 body, 1..4 wheel front left, front right, rear left, rear right
+	pivot: [3]f32,
 }
 
 Airship :: struct {
-	verts:        [AIRSHIP_MAX_VERTS][3]f32,
-	colors:       [AIRSHIP_MAX_VERTS][4]u8,
-	prop_verts:   [AIRSHIP_PROP_VERTS][3]f32,
-	prop_colors:  [AIRSHIP_PROP_VERTS][4]u8,
-	wheel_verts:  [CAR_WHEEL_VERTS][3]f32,
-	wheel_colors: [CAR_WHEEL_VERTS][4]u8,
-	pod_verts:    [CAR_POD_VERTS][3]f32,
-	pod_colors:   [CAR_POD_VERTS][4]u8,
-	body:         rl.Mesh,
-	prop:         rl.Mesh,
-	wheel:        rl.Mesh,
-	pod:          rl.Mesh,
-	material:     rl.Material,
-	ready:        bool,
+	parts:      [CAR_MAX_PARTS]Car_Part,
+	part_count: int,
+	glow:       rl.Mesh, // thruster disc under a folded wheel
+	material:   rl.Material,
+	ready:      bool,
+}
+
+CAR_VS :: `#version 330
+in vec3 vertexPosition;
+in vec3 vertexNormal;
+in vec4 vertexColor;
+uniform mat4 mvp;
+uniform mat4 matNormal;
+out vec3 normal;
+out vec4 color;
+void main() {
+	normal = normalize((matNormal * vec4(vertexNormal, 0.0)).xyz);
+	color = vertexColor;
+	gl_Position = mvp * vec4(vertexPosition, 1.0);
+}
+`
+
+// Alpha of the vertex color is the shading class: 0 matte, 1 paint, 2 glass, 3 metal, 4 light.
+CAR_FS :: `#version 330
+in vec3 normal;
+in vec4 color;
+uniform vec4 colDiffuse;
+uniform vec3 light_dir;
+uniform vec3 view_dir;
+uniform vec3 sky;
+uniform vec3 ground;
+uniform float sun;
+out vec4 finalColor;
+void main() {
+	vec3 n = normalize(normal);
+	if (!gl_FrontFacing) n = -n;
+	int cls = int(color.a * 255.0 + 0.5);
+	vec3 base = color.rgb * colDiffuse.rgb;
+	vec3 l = normalize(light_dir);
+	vec3 v = normalize(view_dir);
+	vec3 h = normalize(l + v);
+	float ndl = max(dot(n, l), 0.0);
+	float ndh = max(dot(n, h), 0.0);
+	vec3 r = reflect(-v, n);
+	vec3 env = r.y > 0.0 ? mix(sky * 0.7, sky * 1.3, r.y) : mix(sky * 0.7, ground, min(-r.y * 3.0, 1.0));
+	vec3 amb = mix(ground, sky, n.y * 0.5 + 0.5) * 0.6;
+	float fres = pow(1.0 - max(dot(n, v), 0.0), 5.0);
+	vec3 c;
+	if (cls == 4) {
+		c = base * 1.3 + 0.25;
+	} else if (cls == 2) {
+		c = base * (amb + ndl * 0.3) + env * (0.3 + 0.6 * fres) + sun * pow(ndh, 220.0) * 1.6;
+	} else if (cls == 3) {
+		c = base * (amb * 0.4 + ndl * sun * 0.5) + base * env * 0.7 + sun * pow(ndh, 60.0) * 0.9;
+	} else if (cls == 1) {
+		c = base * (amb + ndl * sun * 0.95) + env * (0.04 + 0.5 * fres) + sun * pow(ndh, 140.0) * 1.1
+			+ sun * pow(ndh, 10.0) * 0.06;
+	} else {
+		c = base * (amb + ndl * sun * 0.9) + sun * pow(ndh, 16.0) * 0.04;
+	}
+	finalColor = vec4(c, colDiffuse.a);
+}
+`
+
+// Unpacks assets/car.bin.gz into GPU meshes (format in tools/bake_car). Staging memory is a local arena freed at
+// the end; only the index arrays stay (in w.perm), because raylib's DrawMesh picks indexed drawing by
+// mesh.indices. The GL objects live in raylib, a shared library in debug builds, so they survive a hot reload.
+// Needs the window.
+airship_build :: proc(w: ^World) {
+	a := &w.airship
+	scratch: virtual.Arena
+	if virtual.arena_init_growing(&scratch) != nil do return
+	defer virtual.arena_destroy(&scratch)
+	tmp := virtual.arena_allocator(&scratch)
+	perm := virtual.arena_allocator(&w.perm)
+
+	unzipped := make([dynamic]u8, 0, 2 << 20, tmp)
+	if err := deflate.inflate_gzip(&unzipped, CAR_DATA, allocator = tmp); err != nil {
+		logf(w, "car", "car.bin.gz does not unpack: %v", err)
+		return
+	}
+	data := unzipped[:]
+	Header :: struct {
+		magic, version, material_count, part_count: u32le,
+		scale:                                      f32le,
+		_:                                          [3]u32le,
+	}
+	Part_Header :: struct {
+		kind, vertex_count, index_count, _: u32le,
+		pivot:                              [3]f32le,
+		_:                                  f32le,
+	}
+	Vertex :: struct #packed {
+		pos:      [3]i16le,
+		normal:   [2]i8,
+		material: u8,
+		_:        u8,
+	}
+	#assert(size_of(Header) == 32 && size_of(Part_Header) == 32 && size_of(Vertex) == 10)
+	if len(data) < size_of(Header) do return
+	h: Header
+	mem.copy(&h, raw_data(data), size_of(Header))
+	if h.magic != CAR_MAGIC ||
+	   h.version != CAR_VERSION ||
+	   h.part_count > CAR_MAX_PARTS ||
+	   h.material_count > CAR_MAX_MATERIALS {
+		logf(w, "car", "car.bin.gz: wrong magic, version or counts")
+		return
+	}
+	off := size_of(Header)
+	need := off + int(h.material_count) * 4 + int(h.part_count) * size_of(Part_Header)
+	if len(data) < need do return
+	materials: [CAR_MAX_MATERIALS][4]u8
+	mem.copy(&materials, &data[off], int(h.material_count) * 4)
+	off += int(h.material_count) * 4
+	heads: [CAR_MAX_PARTS]Part_Header
+	mem.copy(&heads, &data[off], int(h.part_count) * size_of(Part_Header))
+	off += int(h.part_count) * size_of(Part_Header)
+
+	for ph, pi in heads[:h.part_count] {
+		vc, ic := int(ph.vertex_count), int(ph.index_count)
+		vbytes := vc * size_of(Vertex)
+		if vc > 65535 || off + vbytes + ic * 2 > len(data) {
+			logf(w, "car", "car.bin.gz: part %d is cut off", pi)
+			return
+		}
+		verts := make([][3]f32, vc, tmp)
+		normals := make([][3]f32, vc, tmp)
+		colors := make([][4]u8, vc, tmp)
+		indices := make([]u16, ic, perm)
+		for i in 0 ..< vc {
+			v: Vertex
+			mem.copy(&v, &data[off + i * size_of(Vertex)], size_of(Vertex))
+			verts[i] = {f32(v.pos.x), f32(v.pos.y), f32(v.pos.z)} * f32(h.scale)
+			// Octahedral normal.
+			o := [2]f32{f32(v.normal.x), f32(v.normal.y)} / 127
+			nz := 1 - abs(o.x) - abs(o.y)
+			if nz < 0 do o = {(1 - abs(o.y)) * math.sign(o.x), (1 - abs(o.x)) * math.sign(o.y)}
+			normals[i] = linalg.normalize0([3]f32{o.x, o.y, nz})
+			mat := materials[min(int(v.material), CAR_MAX_MATERIALS - 1)]
+			colors[i] = mat
+		}
+		off += vbytes
+		mem.copy(raw_data(indices), &data[off], ic * 2)
+		off += ic * 2
+		for off % 4 != 0 do off += 1
+		for &i in indices do if int(i) >= vc do i = 0
+		mesh := rl.Mesh {
+			vertexCount   = i32(vc),
+			triangleCount = i32(ic / 3),
+			vertices      = cast([^]f32)raw_data(verts),
+			normals       = cast([^]f32)raw_data(normals),
+			colors        = cast([^]u8)raw_data(colors),
+			indices       = raw_data(indices),
+		}
+		rl.UploadMesh(&mesh, false)
+		mesh.vertices, mesh.normals, mesh.colors = nil, nil, nil
+		a.parts[a.part_count] = {
+			mesh  = mesh,
+			kind  = u32(ph.kind),
+			pivot = {f32(ph.pivot.x), f32(ph.pivot.y), f32(ph.pivot.z)},
+		}
+		a.part_count += 1
+	}
+
+	// Thruster glow: a disc in the x-z plane, radius 1, light class.
+	{
+		SEG :: 20
+		verts := make([][3]f32, SEG * 3, tmp)
+		normals := make([][3]f32, SEG * 3, tmp)
+		colors := make([][4]u8, SEG * 3, tmp)
+		indices := make([]u16, SEG * 3, perm)
+		for k in 0 ..< SEG {
+			a0 := math.TAU * f32(k) / SEG
+			a1 := math.TAU * f32(k + 1) / SEG
+			verts[k * 3 + 0] = {0, 0, 0}
+			verts[k * 3 + 1] = {math.cos(a1), 0, math.sin(a1)}
+			verts[k * 3 + 2] = {math.cos(a0), 0, math.sin(a0)}
+			for j in 0 ..< 3 {
+				normals[k * 3 + j] = {0, -1, 0}
+				colors[k * 3 + j] = {CAR_GLOW.r, CAR_GLOW.g, CAR_GLOW.b, j == 0 ? 4 : 4}
+				indices[k * 3 + j] = u16(k * 3 + j)
+			}
+		}
+		a.glow = rl.Mesh {
+			vertexCount   = SEG * 3,
+			triangleCount = SEG,
+			vertices      = cast([^]f32)raw_data(verts),
+			normals       = cast([^]f32)raw_data(normals),
+			colors        = cast([^]u8)raw_data(colors),
+			indices       = raw_data(indices),
+		}
+		rl.UploadMesh(&a.glow, false)
+		a.glow.vertices, a.glow.normals, a.glow.colors = nil, nil, nil
+	}
+
+	a.material = rl.LoadMaterialDefault()
+	a.material.shader = rl.LoadShaderFromMemory(CAR_VS, CAR_FS)
+	a.ready = a.part_count > 0
+	logf(w, "car", "car model: %d parts", a.part_count)
 }
 
 // What the car shows this frame, eased from the ship state (drawing only, frame time is fine).
 Car_Anim :: struct {
-	fly:      f32, // 0 on the road (arms folded, wheels down) .. 1 in the air
+	fly:      f32, // 0 on the road (wheels down) .. 1 in the air (wheels folded flat, thrusters on)
 	bank:     f32,
 	pitch:    f32,
 	heading:  f32,
 	climb_ms: f32,
 	last_alt: f32,
-	spin:     f32,
+	roll:     f32, // wheel rotation, radians
 	time:     f32,
 	seeded:   bool,
-}
-
-Mesh_Build :: struct {
-	verts:  [][3]f32,
-	colors: [][4]u8,
-	count:  int,
-}
-
-LIGHT_DIR :: [3]f32{0.35, 0.85, 0.4}
-
-hex :: proc(rgb: u32) -> [3]f32 {
-	return {f32(rgb >> 16 & 0xff), f32(rgb >> 8 & 0xff), f32(rgb & 0xff)}
-}
-
-// One flat shaded triangle. The normal is flipped to point away from `centre` and the winding follows it, so
-// every part only has to give a point inside itself. Zero area triangles (the nose point) are dropped.
-tri :: proc(b: ^Mesh_Build, p0, p1, p2, centre: [3]f32, color: [3]f32) {
-	if b.count + 3 > len(b.verts) do return
-	n := linalg.cross(p1 - p0, p2 - p0)
-	if linalg.length(n) < 1e-5 do return
-	n = linalg.normalize(n)
-	p1, p2 := p1, p2
-	if linalg.dot(n, (p0 + p1 + p2) / 3 - centre) < 0 {
-		n = -n
-		p1, p2 = p2, p1
-	}
-	shade := 0.55 + 0.45 * max(linalg.dot(n, linalg.normalize(LIGHT_DIR)), 0)
-	c := color * shade
-	rgba := [4]u8{u8(clamp(c.x, 0, 255)), u8(clamp(c.y, 0, 255)), u8(clamp(c.z, 0, 255)), 255}
-	b.verts[b.count + 0], b.verts[b.count + 1], b.verts[b.count + 2] = p0, p1, p2
-	b.colors[b.count + 0], b.colors[b.count + 1], b.colors[b.count + 2] = rgba, rgba, rgba
-	b.count += 3
-}
-
-// A flat quad, visible from both sides (fins).
-quad_flat :: proc(b: ^Mesh_Build, p0, p1, p2, p3: [3]f32, color: [3]f32) {
-	mid := (p0 + p1 + p2 + p3) / 4
-	n := linalg.normalize(linalg.cross(p1 - p0, p2 - p0))
-	for side in ([2]f32{1, -1}) {
-		c := mid - n * side
-		tri(b, p0, p1, p2, c, color)
-		tri(b, p0, p2, p3, c, color)
-	}
-}
-
-box :: proc(b: ^Mesh_Build, lo, hi: [3]f32, color: [3]f32) {
-	mid := (lo + hi) / 2
-	v := [8][3]f32 {
-		{lo.x, lo.y, lo.z},
-		{hi.x, lo.y, lo.z},
-		{hi.x, hi.y, lo.z},
-		{lo.x, hi.y, lo.z},
-		{lo.x, lo.y, hi.z},
-		{hi.x, lo.y, hi.z},
-		{hi.x, hi.y, hi.z},
-		{lo.x, hi.y, hi.z},
-	}
-	faces := [6][4]int{{0, 1, 2, 3}, {5, 4, 7, 6}, {4, 0, 3, 7}, {1, 5, 6, 2}, {3, 2, 6, 7}, {4, 5, 1, 0}}
-	for f in faces {
-		tri(b, v[f[0]], v[f[1]], v[f[2]], mid, color)
-		tri(b, v[f[0]], v[f[2]], v[f[3]], mid, color)
-	}
-}
-
-// A cylinder around the z axis (radius 1, z -0.5..0.5), scaled per wheel when drawn.
-cylinder :: proc(b: ^Mesh_Build, sides: int, color, cap_color: [3]f32) {
-	centre := [3]f32{0, 0, 0}
-	for j in 0 ..< sides {
-		a0 := math.TAU * f32(j) / f32(sides)
-		a1 := math.TAU * f32(j + 1) / f32(sides)
-		p0 := [3]f32{math.cos(a0), math.sin(a0), 0}
-		p1 := [3]f32{math.cos(a1), math.sin(a1), 0}
-		h := [3]f32{0, 0, 0.5}
-		tri(b, p0 - h, p1 - h, p1 + h, centre, color)
-		tri(b, p0 - h, p1 + h, p0 + h, centre, color)
-		tri(b, -h, p0 - h, p1 - h, {0, 0, 1}, cap_color)
-		tri(b, h, p0 + h, p1 + h, {0, 0, -1}, cap_color)
-	}
-}
-
-// Builds the meshes once into the arrays inside World and uploads them. The GL objects live in raylib, which is a
-// shared library in debug builds, so they survive a hot reload. Needs the window.
-airship_build :: proc(a: ^Airship) {
-	b := Mesh_Build {
-		verts  = a.verts[:],
-		colors = a.colors[:],
-	}
-	cream := hex(0xf3e9d4)
-	navy := hex(0x22406f)
-	sage := hex(0x7ea886)
-	copper := hex(0xc98a52)
-	glass := hex(0xa9e6ea)
-	dark := hex(0x2b2f36)
-
-	// Body: chassis, a wedge nose, the cabin with glass all round, roof, sage stripe, mint glow strip under it.
-	box(&b, {-2.5, 0.38, -0.95}, {1.7, 1.0, 0.95}, cream)
-	{
-		// Nose wedge from the body front (x 1.7) down to the bumper (x 2.6).
-		c := [3]f32{2.0, 0.6, 0}
-		lt, lb := [3]f32{1.7, 1.0, -0.95}, [3]f32{1.7, 0.38, -0.95}
-		rt, rb := [3]f32{1.7, 1.0, 0.95}, [3]f32{1.7, 0.38, 0.95}
-		nlt, nlb := [3]f32{2.6, 0.72, -0.85}, [3]f32{2.6, 0.38, -0.85}
-		nrt, nrb := [3]f32{2.6, 0.72, 0.85}, [3]f32{2.6, 0.38, 0.85}
-		tri(&b, lt, rt, nrt, c, cream)
-		tri(&b, lt, nrt, nlt, c, cream)
-		tri(&b, nlt, nrt, nrb, c, cream)
-		tri(&b, nlt, nrb, nlb, c, cream)
-		tri(&b, lt, nlt, nlb, c, cream)
-		tri(&b, lt, nlb, lb, c, cream)
-		tri(&b, rt, nrb, nrt, c, cream)
-		tri(&b, rt, rb, nrb, c, cream)
-		tri(&b, lb, nlb, nrb, c, dark)
-		tri(&b, lb, nrb, rb, c, dark)
-	}
-	box(&b, {-1.6, 1.0, -0.82}, {0.9, 1.52, 0.82}, glass)
-	box(&b, {-1.65, 1.52, -0.86}, {0.7, 1.62, 0.86}, navy)
-	box(&b, {-1.2, 1.0, -0.84}, {-1.0, 1.52, 0.84}, navy)
-	box(&b, {-2.52, 0.62, -0.97}, {1.72, 0.72, 0.97}, sage)
-	box(&b, {-2.2, 0.3, -0.7}, {2.2, 0.38, 0.7}, hex(0x8ff2e8))
-	// Lights: white at the front, red at the back, and the nav lights left red, right green on the roof.
-	box(&b, {2.58, 0.52, -0.8}, {2.62, 0.66, -0.45}, hex(0xffffff))
-	box(&b, {2.58, 0.52, 0.45}, {2.62, 0.66, 0.8}, hex(0xffffff))
-	box(&b, {-2.53, 0.78, -0.9}, {-2.5, 0.92, -0.5}, hex(0xff3b3b))
-	box(&b, {-2.53, 0.78, 0.5}, {-2.5, 0.92, 0.9}, hex(0xff3b3b))
-	box(&b, {0.2, 1.62, -0.86}, {0.5, 1.68, -0.7}, hex(0xff3b3b))
-	box(&b, {0.2, 1.62, 0.7}, {0.5, 1.68, 0.86}, hex(0x3bd86b))
-	// Arm hinges on the body.
-	for arm in CAR_ARMS do box(&b, arm.root - {0.18, 0.1, 0.18}, arm.root + {0.18, 0.1, 0.18}, copper)
-	a.body = rl.Mesh {
-		vertexCount   = i32(b.count),
-		triangleCount = i32(b.count / 3),
-		vertices      = cast([^]f32)raw_data(a.verts[:]),
-		colors        = cast([^]u8)raw_data(a.colors[:]),
-	}
-
-	// Wheel: tyre with a light hub, radius 1, scaled when drawn.
-	wb := Mesh_Build {
-		verts  = a.wheel_verts[:],
-		colors = a.wheel_colors[:],
-	}
-	cylinder(&wb, 12, dark, hex(0xb8bcc4))
-	a.wheel = rl.Mesh {
-		vertexCount   = i32(wb.count),
-		triangleCount = i32(wb.count / 3),
-		vertices      = cast([^]f32)raw_data(a.wheel_verts[:]),
-		colors        = cast([^]u8)raw_data(a.wheel_colors[:]),
-	}
-
-	// Pod: the arm along +x from its root, the duct ring around the fan at the end (fan axis = y).
-	pb := Mesh_Build {
-		verts  = a.pod_verts[:],
-		colors = a.pod_colors[:],
-	}
-	box(&pb, {0, -0.06, -0.1}, {CAR_ARM_LEN, 0.06, 0.1}, copper)
-	SEGS :: 16
-	for j in 0 ..< SEGS {
-		a0 := math.TAU * f32(j) / SEGS
-		a1 := math.TAU * f32(j + 1) / SEGS
-		c := [3]f32{CAR_ARM_LEN, 0, 0}
-		for r in ([2]f32{CAR_DUCT_R, CAR_DUCT_R + 0.12}) {
-			p0 := c + [3]f32{math.cos(a0) * r, -0.15, math.sin(a0) * r}
-			p1 := c + [3]f32{math.cos(a1) * r, -0.15, math.sin(a1) * r}
-			q0 := p0 + {0, 0.3, 0}
-			q1 := p1 + {0, 0.3, 0}
-			inside := r < CAR_DUCT_R + 0.01
-			// The inner wall faces the fan, the outer wall faces out.
-			mid := (p0 + q1) / 2
-			centre := inside ? mid + (mid - c) : c
-			tri(&pb, p0, p1, q1, centre, inside ? hex(0x5b6170) : navy)
-			tri(&pb, p0, q1, q0, centre, inside ? hex(0x5b6170) : navy)
-		}
-		top0 := c + [3]f32{math.cos(a0), 0, math.sin(a0)}
-		top1 := c + [3]f32{math.cos(a1), 0, math.sin(a1)}
-		r0, r1 := f32(CAR_DUCT_R), f32(CAR_DUCT_R + 0.12)
-		tri(
-			&pb,
-			c + (top0 - c) * r0 + {0, 0.15, 0},
-			c + (top1 - c) * r0 + {0, 0.15, 0},
-			c + (top1 - c) * r1 + {0, 0.15, 0},
-			c,
-			cream,
-		)
-		tri(
-			&pb,
-			c + (top0 - c) * r0 + {0, 0.15, 0},
-			c + (top1 - c) * r1 + {0, 0.15, 0},
-			c + (top0 - c) * r1 + {0, 0.15, 0},
-			c,
-			cream,
-		)
-	}
-	box(&pb, {CAR_ARM_LEN - 0.12, -0.1, -0.12}, {CAR_ARM_LEN + 0.12, 0.08, 0.12}, copper)
-	a.pod = rl.Mesh {
-		vertexCount   = i32(pb.count),
-		triangleCount = i32(pb.count / 3),
-		vertices      = cast([^]f32)raw_data(a.pod_verts[:]),
-		colors        = cast([^]u8)raw_data(a.pod_colors[:]),
-	}
-
-	// Fan: two crossed blades in the x-z plane, radius 1, scaled per fan when drawn.
-	p := Mesh_Build {
-		verts  = a.prop_verts[:],
-		colors = a.prop_colors[:],
-	}
-	blade := hex(0xefe6d2)
-	box(&p, {-1, -0.03, -0.1}, {1, 0.03, 0.1}, blade)
-	box(&p, {-0.1, -0.03, -1}, {0.1, 0.03, 1}, blade)
-	a.prop = rl.Mesh {
-		vertexCount   = i32(p.count),
-		triangleCount = i32(p.count / 3),
-		vertices      = cast([^]f32)raw_data(a.prop_verts[:]),
-		colors        = cast([^]u8)raw_data(a.prop_colors[:]),
-	}
-
-	rl.UploadMesh(&a.body, false)
-	rl.UploadMesh(&a.wheel, false)
-	rl.UploadMesh(&a.pod, false)
-	rl.UploadMesh(&a.prop, false)
-	a.material = rl.LoadMaterialDefault()
-	a.ready = true
 }
 
 // Eases w.car_anim towards the ship state: fly from the height above the road (landing and take-off show as the
@@ -323,7 +280,7 @@ car_anim_update :: proc(w: ^World, dt: f32) {
 	an.bank += (bank - an.bank) * k
 	an.pitch += (pitch - an.pitch) * k
 	an.heading = angle_lerp(an.heading, s.heading, 1 - math.exp(-dt * CAR_HEADING_RATE))
-	an.spin += dt * (8 + s.speed * 0.6) * an.fly
+	an.roll -= dt * s.speed / CAR_WHEEL_R * (1 - an.fly)
 	an.time += dt
 }
 
@@ -345,7 +302,7 @@ car_draw :: proc(w: ^World, pos: [2]f32, alt, heading: f32, an: Car_Anim, px: f3
 	f := 1 - clamp(above / 400, 0, 0.6)
 	for k in 0 ..< 3 {
 		g := (1 - f32(k) * 0.25) * f
-		rl.DrawEllipse(i32(pg.x), i32(pg.y), px * 0.5 * g, px * 0.2 * g, {0, 0, 0, u8(40 * f)})
+		rl.DrawEllipse(i32(pg.x), i32(pg.y), px * 0.5 * g, px * 0.24 * g, {0, 0, 0, u8(45 * f)})
 	}
 
 	d := pa - screen / 2
@@ -362,37 +319,44 @@ car_draw :: proc(w: ^World, pos: [2]f32, alt, heading: f32, an: Car_Anim, px: f3
 		fovy       = screen.y,
 		projection = .ORTHOGRAPHIC,
 	}
+	sh := a.material.shader
+	light := [3]f32{-0.45, 1.3, 0.3}
+	view := [3]f32{0, cos_t, sin_t}
+	sky, gnd, sun := [3]f32{0.72, 0.82, 0.98}, [3]f32{0.24, 0.26, 0.3}, f32(1)
+	if w.theme == .Night do sky, gnd, sun = {0.2, 0.26, 0.4}, {0.05, 0.06, 0.09}, 0.6
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "light_dir"), &light, .VEC3)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "view_dir"), &view, .VEC3)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sky"), &sky, .VEC3)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "ground"), &gnd, .VEC3)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sun"), &sun, .FLOAT)
+
 	yaw := math.PI / 2 - (heading - w.cam.pose.yaw)
 	bob := math.sin(an.time * 2.2) * CAR_BOB_M * an.fly
 	m := linalg.matrix4_scale_f32({scale, scale, scale})
 	m = m * linalg.matrix4_rotate_f32(yaw, {0, 1, 0})
-	m = m * linalg.matrix4_translate_f32({0, bob, 0})
+	m = m * linalg.matrix4_translate_f32({0, bob + 0.25 * an.fly, 0})
 	m = m * linalg.matrix4_rotate_f32(-an.bank, {1, 0, 0})
 	m = m * linalg.matrix4_rotate_f32(an.pitch, {0, 0, 1})
 	mat := a.material
 	mat.maps[0].color = tint
 	rl.BeginMode3D(cam3)
-	rl.DrawMesh(a.body, mat, rl.Matrix(m))
-	// Wheels tuck up and in as the car flies.
-	wheels := CAR_WHEELS
-	for wp in wheels {
-		tuck := [3]f32{0, 0.25 * an.fly, -math.sign(wp.z) * 0.25 * an.fly}
-		r := CAR_WHEEL_R * (1 - 0.25 * an.fly)
-		wm := m * linalg.matrix4_translate_f32(wp + tuck) * linalg.matrix4_scale_f32({r, r, 0.26})
-		rl.DrawMesh(a.wheel, mat, rl.Matrix(wm))
-	}
-	// Arms swing from folded to open, the fans spin while flying.
-	arms := CAR_ARMS
-	for arm in arms {
-		ang := arm.folded + (arm.open - arm.folded) * an.fly
-		pm := m * linalg.matrix4_translate_f32(arm.root) * linalg.matrix4_rotate_f32(ang, {0, 1, 0})
-		rl.DrawMesh(a.pod, mat, rl.Matrix(pm))
-		fm :=
-			pm *
-			linalg.matrix4_translate_f32({CAR_ARM_LEN, 0, 0}) *
-			linalg.matrix4_rotate_f32(an.spin, {0, 1, 0})
-		fm = fm * linalg.matrix4_scale_f32({CAR_DUCT_R - 0.05, 1, CAR_DUCT_R - 0.05})
-		rl.DrawMesh(a.prop, mat, rl.Matrix(fm))
+	for part in a.parts[:a.part_count] {
+		if part.kind == 0 {
+			rl.DrawMesh(part.mesh, mat, rl.Matrix(m))
+			continue
+		}
+		// Wheels: roll on the road, fold flat (tread down, hub out) in the air.
+		side: f32 = part.pivot.z > 0 ? 1 : -1
+		fold := an.fly * math.PI / 2 * side
+		wm := m * linalg.matrix4_translate_f32(part.pivot)
+		wm = wm * linalg.matrix4_rotate_f32(fold, {1, 0, 0})
+		rl.DrawMesh(part.mesh, mat, rl.Matrix(wm * linalg.matrix4_rotate_f32(an.roll, {0, 0, 1})))
+		if an.fly > 0.3 {
+			r := CAR_WHEEL_R * 0.85 * (an.fly - 0.3) / 0.7
+			gm := wm * linalg.matrix4_rotate_f32(-fold, {1, 0, 0})
+			gm = gm * linalg.matrix4_translate_f32({0, -0.12, 0}) * linalg.matrix4_scale_f32({r, 1, r})
+			rl.DrawMesh(a.glow, mat, rl.Matrix(gm))
+		}
 	}
 	rl.EndMode3D()
 }
@@ -402,4 +366,19 @@ airship_draw :: proc(w: ^World) {
 	car_anim_update(w, min(rl.GetFrameTime(), MAX_FRAME_DT))
 	an := w.car_anim
 	car_draw(w, w.ship.pos, w.ship.alt, an.heading, an, CAR_PX, rl.WHITE)
+}
+
+// Other cars from the presence gossip, a bit smaller and tinted so the own car stands out.
+CAR_OTHER_PX :: 80.0
+CAR_OTHER_TINT :: rl.Color{190, 205, 255, 255}
+
+others_draw :: proc(w: ^World) {
+	px: f32 = w.screen == .Navigate ? CAR_OTHER_PX : CAR_OTHER_PX * 0.6
+	for o in w.others[:w.other_count] {
+		an := Car_Anim {
+			fly  = o.on_road ? 0 : 1,
+			time = w.car_anim.time + f32(o.author[0]),
+		}
+		car_draw(w, others_draw_pos(w, o), o.alt, o.heading, an, px, CAR_OTHER_TINT)
+	}
 }

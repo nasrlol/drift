@@ -812,40 +812,44 @@ Peer :: struct {
 
 // Zero is valid: not started, NODE_PORT, no peers. Lives in World, so the threads stop before a reload.
 Net_Node :: struct {
-	port:         int, // 0 = NODE_PORT; set another one to run two nodes on one machine
-	started:      bool,
-	loaded:       bool, // store and peer files read, once per run
-	id:           [8]u8, // random per run, tells a node it dialed itself
-	peers_dirty:  bool, // learned peers changed, write PEERS_PATH
-	own:          [4]net.Endpoint, // addresses that turned out to be this node, never added again
-	own_count:    int,
-	stop:         bool, // atomic
-	listening:    bool,
-	listener:     net.TCP_Socket,
-	server:       ^thread.Thread,
-	syncer:       ^thread.Thread,
-	mem:          virtual.Arena, // sync thread scratch
-	peers_lock:   sync.Mutex,
-	peers:        [MAX_PEERS]Peer,
-	peer_count:   int,
-	snaps_lock:   sync.Mutex, // taken before w.store.lock, never after
-	snaps:        [SNAP_KEEP][32]u8, // sha256 of the snapshots in SNAP_DIR
-	snap_time:    [SNAP_KEEP]i64, // their fetched_at
-	snap_count:   int,
+	port:           int, // 0 = NODE_PORT; set another one to run two nodes on one machine
+	started:        bool,
+	loaded:         bool, // store and peer files read, once per run
+	id:             [8]u8, // random per run, tells a node it dialed itself
+	peers_dirty:    bool, // learned peers changed, write PEERS_PATH
+	own:            [4]net.Endpoint, // addresses that turned out to be this node, never added again
+	own_count:      int,
+	stop:           bool, // atomic
+	listening:      bool,
+	listener:       net.TCP_Socket,
+	server:         ^thread.Thread,
+	syncer:         ^thread.Thread,
+	mem:            virtual.Arena, // sync thread scratch
+	peers_lock:     sync.Mutex,
+	peers:          [MAX_PEERS]Peer,
+	peer_count:     int,
+	snaps_lock:     sync.Mutex, // taken before w.store.lock, never after
+	snaps:          [SNAP_KEEP][32]u8, // sha256 of the snapshots in SNAP_DIR
+	snap_time:      [SNAP_KEEP]i64, // their fetched_at
+	snap_count:     int,
 	// Per thread, too big for a thread stack.
-	sync_ids:     [STORE_MAX][32]u8,
-	sync_msgs:    [SYNC_BATCH]Message,
-	serve_ids:    [STORE_MAX][32]u8,
-	serve_msgs:   [SYNC_BATCH]Message,
-	sync_snap:    Snapshot,
-	serve_snap:   Snapshot,
-	live_lock:    sync.Mutex,
-	live_slots:   [LIVE_SLOTS]Live_Packet, // latest per trip and direction, from anyone (see node_live)
-	live_at:      [LIVE_SLOTS]i64, // unix s it arrived, 0 = empty
-	live_out:     Live_Packet, // the game's latest, set by live_send
-	live_in:      Live_Packet, // the other side's newest, taken by live_poll
-	live_has_out: bool,
-	live_has_in:  bool,
+	sync_ids:       [STORE_MAX][32]u8,
+	sync_msgs:      [SYNC_BATCH]Message,
+	serve_ids:      [STORE_MAX][32]u8,
+	serve_msgs:     [SYNC_BATCH]Message,
+	sync_snap:      Snapshot,
+	serve_snap:     Snapshot,
+	live_lock:      sync.Mutex,
+	live_slots:     [LIVE_SLOTS]Live_Packet, // latest per trip and direction, from anyone (see node_live)
+	live_at:        [LIVE_SLOTS]i64, // unix s it arrived, 0 = empty
+	live_out:       Live_Packet, // the game's latest, set by live_send
+	live_in:        Live_Packet, // the other side's newest, taken by live_poll
+	live_has_out:   bool,
+	live_has_in:    bool,
+	// Other cars (presence.odin): the table and one scratch buffer per thread.
+	presence:       Presence_Table,
+	presence_sync:  [PRESENCE_GOSSIP]Presence,
+	presence_serve: [PRESENCE_GOSSIP]Presence,
 }
 
 // Called every frame, like weather_poll: starts the node after game start and after every reload.
@@ -1031,6 +1035,8 @@ node_serve :: proc(w: ^World, s: net.TCP_Socket, from: net.Endpoint) {
 			p, have := live_get(n, trip, req[32], time.time_to_unix(time.now()))
 			if !net_send(s, []u8{u8(have)}) do return
 			if have && !net_send(s, mem.ptr_to_bytes(&p)) do return
+		case 'Q':
+			if !presence_serve(w, s) do return
 		case 'W':
 			want: [32]u8
 			if !net_recv(s, want[:]) do return
@@ -1113,11 +1119,16 @@ node_sync_thread :: proc(t: ^thread.Thread) {
 		n.loaded = true
 	}
 	live_next: i64
+	presence_next: i64
 	for !sync.atomic_load(&n.stop) {
 		now := time.time_to_unix(time.now())
 		if now >= live_next {
 			node_live(w)
 			live_next = now + LIVE_S
+		}
+		if now_ms := time.time_to_unix_nano(time.now()) / 1e6; now_ms >= presence_next {
+			node_presence(w)
+			presence_next = now_ms + i64(PRESENCE_S * 1000)
 		}
 		p: Peer
 		due := -1

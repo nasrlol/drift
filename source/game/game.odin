@@ -34,50 +34,56 @@ DRIFT_PROFILE :: #config(DRIFT_PROFILE, false)
 BUILD_MODE :: "debug" when DRIFT_DEBUG else "profile" when DRIFT_PROFILE else "release"
 
 World :: struct {
-	perm:         virtual.Arena,
-	route_mem:    virtual.Arena,
-	frame:        virtual.Arena,
-	m:            Map,
-	weather:      Weather,
+	perm:            virtual.Arena,
+	route_mem:       virtual.Arena,
+	frame:           virtual.Arena,
+	m:               Map,
+	weather:         Weather,
 	// sha256 of weather, identifies the snapshot (carpool offers will carry it)
-	weather_hash: [32]u8,
-	fetch:        Fetch,
-	identity:     ed25519.Private_Key, // zero until identity_load_or_create succeeds
-	identity_pub: [32]u8,
-	store:        Store, // carpool messages, see net.odin
-	node:         Net_Node, // peer to peer threads and peers, see net.odin
-	trip:         Trip, // the accepted trip in progress, frame loop only
-	live_send_s:  f32, // seconds since our live position was last sent (carpool_frame)
-	partner:      [3]f32, // the carpool partner's newest live position, km, km, m
-	partner_seen: bool,
-	grid:         Grid,
-	controls:     Controls,
-	ship:         Ship,
-	screen:       Screen, // zero = plan: Controls move the camera. Navigate: Controls steer the ship
-	plan:         Plan,
-	plan_mem:     virtual.Arena, // paths and maneuvers of w.routes, reset by plan_routes
-	routes:       [Route_Mode]Planned_Route,
-	nav:          Nav,
-	nav_wind:     bool, // wind trails while navigating (design: off by default)
-	replay:       Replay,
-	no_fly:       [MAX_NO_FLY]No_Fly_Zone,
-	gust_zones:   [MAX_GUST_ZONES]Gust_Zone, // reported in flight, route() goes around them
-	tick:         u64,
-	accum:        f64,
-	prof:         Profiler,
-	cam:          Cam,
-	ui:           Ui,
-	loading_s:    f32, // seconds the window has shown frames, for the loading screen
-	scan_s:       f32, // seconds since the last plan, for the A* scan animation
+	weather_hash:    [32]u8,
+	fetch:           Fetch,
+	identity:        ed25519.Private_Key, // zero until identity_load_or_create succeeds
+	identity_pub:    [32]u8,
+	store:           Store, // carpool messages, see net.odin
+	node:            Net_Node, // peer to peer threads and peers, see net.odin
+	trip:            Trip, // the accepted trip in progress, frame loop only
+	live_send_s:     f32, // seconds since our live position was last sent (carpool_frame)
+	partner:         [3]f32, // the carpool partner's newest live position, km, km, m
+	partner_seen:    bool,
+	grid:            Grid,
+	controls:        Controls,
+	ship:            Ship,
+	screen:          Screen, // zero = plan: Controls move the camera. Navigate: Controls steer the ship
+	plan:            Plan,
+	plan_mem:        virtual.Arena, // paths and maneuvers of w.routes, reset by plan_routes
+	routes:          [Route_Mode]Planned_Route,
+	nav:             Nav,
+	nav_wind:        bool, // wind trails while navigating (design: off by default)
+	replay:          Replay,
+	no_fly:          [MAX_NO_FLY]No_Fly_Zone,
+	gust_zones:      [MAX_GUST_ZONES]Gust_Zone, // reported in flight, route() goes around them
+	tick:            u64,
+	accum:           f64,
+	prof:            Profiler,
+	cam:             Cam,
+	ui:              Ui,
+	loading_s:       f32, // seconds the window has shown frames, for the loading screen
+	scan_s:          f32, // seconds since the last plan, for the A* scan animation
 	// GPU texture and glyph tables owned by raylib, zero until the first frame with a window.
-	fonts:        Fonts,
-	line_meshes:  Line_Meshes,
-	labels:       Map_Labels,
-	theme:        Theme, // zero = night (the design default), T toggles
-	palette:      Palette, // PALETTES[theme], copied every frame, read through palette(w)
-	wind:         Wind_Particles,
-	airship:      Airship,
-	car_anim:     Car_Anim,
+	fonts:           Fonts,
+	line_meshes:     Line_Meshes,
+	labels:          Map_Labels,
+	theme:           Theme, // zero = night (the design default), T toggles
+	palette:         Palette, // PALETTES[theme], copied every frame, read through palette(w)
+	wind:            Wind_Particles,
+	airship:         Airship,
+	car_anim:        Car_Anim,
+	// Other cars from the presence gossip (presence.odin), copied from the node table every PRESENCE_COPY_S.
+	others:          [PRESENCE_SLOTS]Other_Car,
+	other_count:     int,
+	others_copied_s: f32, // seconds since that copy
+	presence_send_s: f32,
+	presence_copy_s: f32,
 }
 
 @(export)
@@ -121,7 +127,7 @@ game_init :: proc() -> rawptr {
 
 	if !weather_load_snapshot(w, SNAPSHOT_PATH) do weather_load_fallback(w)
 	identity_load_or_create(w)
-	if rl.IsWindowReady() do airship_build(&w.airship)
+	if rl.IsWindowReady() do airship_build(w)
 	w.replay.steps = make([]Control_Step, REPLAY_MAX_STEPS, virtual.arena_allocator(&w.perm))
 	logf(w, "game", "build %s", BUILD_MODE)
 	logf(
@@ -215,6 +221,7 @@ game_update :: proc(memory: rawptr) -> bool {
 		w.accum -= SIM_DT
 	}
 	carpool_frame(w, f32(min(f64(rl.GetFrameTime()), MAX_FRAME_DT)))
+	presence_frame(w, f32(min(f64(rl.GetFrameTime()), MAX_FRAME_DT)))
 	prof_end(w, .Update, t)
 
 	if rl.IsKeyPressed(.F5) {
@@ -469,6 +476,7 @@ game_update :: proc(memory: rawptr) -> bool {
 
 		// Draw order 5 and 6: routes, then the airship (only while flying).
 		nav_draw_routes(w)
+		others_draw(w)
 		if w.screen == .Navigate do airship_draw(w)
 		carpool_draw_partner(w)
 
@@ -512,8 +520,9 @@ game_update :: proc(memory: rawptr) -> bool {
 		}
 	}
 	{
-		// The OpenStreetMap license (ODbL) asks for this credit wherever the map is shown.
-		CREDIT :: "© OpenStreetMap contributors"
+		// The OpenStreetMap license (ODbL) asks for this credit wherever the map is shown, CC BY 4.0 for the car
+		// model (assets/car-LICENSE.txt).
+		CREDIT :: "© OpenStreetMap contributors, car model: Eric Chadwick (CC BY 4.0)"
 		PAD :: 4
 		text := ui_text_size(w, CREDIT, .Roboto_400, 12)
 		screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
