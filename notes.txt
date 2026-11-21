@@ -63,13 +63,21 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   3 layers = 975 / 950 / 925 hPa ~ LAYER_ALT 300 / 550 / 800 m, hours 0..8 from snapshot start
                   Weather struct: start (unix s), wind [hour][layer][cell][2]f32, gust [hour][layer][cell] 0..1,
                   cloud [hour][cell] 0..1. Fixed size 22.7 KB, zero = calm and clear.
-                  Snapshot file: 16 byte header (magic "DWTH", version 1, size_of(Weather) = 22688, pad, 4 x u32)
-                  then the Weather bytes, 22704 bytes total. weather_from_snapshot(data) checks size, header,
-                  start (whole hour, 2020..2100) and every value (wind |x|,|y| <= 100, gust / cloud 0..1, no NaN).
-                  Loading is a 22.7 KB copy plus one pass, ~0.02-0.03 ms in debug. Saving: todo (andrei).
-  net.odin        fetch_weather(out, scratch) -> ok: blocking Open-Meteo request with curl (15 s timeout,
-                  max 1 MB), converts the json into a Weather. Writes out only if every value is valid.
-                  Run it on a thread, never in the frame loop. Not called yet (snapshot + refresh todo).
+  net.odin        fetch_weather(out, scratch, cancel) -> ok: blocking Open-Meteo request with curl (15 s timeout,
+                  max 1 MB, aborts within ~1 s when cancel is set), converts the json into a Weather.
+                  Writes out only if every value is valid.
+                  Snapshot cycle (state in w.fetch, zero = fetch on the first update):
+                    game_init -> weather_load_snapshot(w, path): reads cache/weather.snap, checks size, magic, version,
+                      sha256 and weather_valid. Bad or missing file: weather stays zero, fetch right away.
+                    game_update -> weather_poll: every frame, starts a thread when now >= next (15 min after
+                      the snapshot was fetched, 5 min after a failure). The thread fetches, hashes and writes
+                      the file (temp + rename), all allocation in w.fetch.mem. When is_done, the frame loop
+                      copies the 22.7 KB Weather into w.weather. No network or disk IO in the frame loop.
+                    game_before_reload / game_shutdown -> weather_stop: cancel + join (measured 5-14 ms),
+                      because the thread runs code from the library that is about to be unloaded.
+                  cache/weather.snap: Snapshot_Header (magic "DRWS", version 1, fetched_at unix s,
+                  sha256 of the Weather bytes) + raw Weather, 22736 bytes. w.weather_hash = that sha256.
+                  The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
   debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
                   Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =
                   DRIFT_DEBUG || DRIFT_PROFILE). Overlay drawn in game_update, F3 toggles: frame ms with
@@ -78,45 +86,59 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   over it). Frame ms excludes EndDrawing (vsync wait) and the overlay itself.
                   Headless: ./build/drift --headless --snapshot <file> --inputs <file> runs without a window,
                   prints the result to stdout (deterministic text, no timings) and timings / errors to stderr,
-                  exit code 0 or 1. game_headless (exported, called by host and release main) reads the files,
-                  headless_run(w, snapshot, inputs, out) does the work and is what test/ calls.
+                  exit code 0 or 1. game_headless (exported, called by host and release main) reads the inputs,
+                  headless_run(w, snapshot_path, inputs, out) loads the snapshot (weather_load_snapshot, the
+                  cache/weather.snap format) and does the work and is what test/ calls.
                   Inputs: one command per line, # comment. "route <from hub> <to hub> <mode> <hour>",
                   hub = index into w.m.hubs, mode fastest / greenest / calmest, hour 0..8.
                   Output per route: "route 6 -> 11 fastest hour 0: 2 points, 104.812 km", then x y alt per point.
                   --dump appends the state dump after the result.
                   Log: logf(w, system, format, args) prints "[route t=1234] message" to stderr, t = w.tick.
                   No allocation (1 KB stack buffer, longer messages are cut). Code without a World
-                  (weather_from_snapshot, net.odin, argument parsing) prints "[system] message" with fmt.eprint.
-                  State dump: dump_world(w, out) writes tick, build, map counts, hubs, a weather line per hour
+                  (fetch thread, argument parsing) prints "[system] message" with fmt.eprint.
+                  State dump: dump_world(w, out) writes tick, build, map counts, hubs, weather start / sha256 /
+                  fetched_at, a weather line per hour
                   (max wind per layer, max gust, mean cloud) and arena used / reserved. No timings, so two dumps
                   of the same run are identical. F5 in the app prints it to stdout, --dump in headless mode.
                   Windows release is -subsystem:windows and has no console: use the debug or profile exe there.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   Stub: straight line. Path lives in w.route_mem until the next call.
+                  ok = false also when from or to lies outside the routing grid.
+                  Grid: 286 x 237 cells of 1 km x 3 layers (LAYER_ALT) = 203,346 nodes, covers every point
+                  in belgium.bin (x 0.6..285.2, y 1.0..236.5 km). node = layer * 286 * 237 + y * 286 + x,
+                  each layer a contiguous row-major plane. grid_node_at(pos) snaps to the cell under x, y
+                  and the closest layer, grid_node_pos(n) gives the cell centre, grid_neighbor(n, d) steps
+                  one entry of GRID_DIRS (8 horizontal directions, up, down) and fails past the edge.
+                  w.grid holds the search state as fixed arrays in World (no arena, allocated with World):
+                  visit stamp, cost, parent per node, 12 B x 203k = 2.4 MB. A node's cost and parent only
+                  count when visit[n] == grid.search, so a route starts with search += 1, not a 2.4 MB clear.
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
                   Each case = snapshot + inputs through game.headless_run, output compared line by line to the
                   .expected file. On a mismatch it prints the first differing line and writes the full output
                   to build/test_<name>.txt. Expected files change only with the owner's approval.
-  test/data/      calm.snap: zero wind / gust / cloud, start 1795176000. nan_wind.snap: same with
-                  wind[3][1][20].x = NaN, must be rejected. routes.txt: one route per mode, hours 0 / 4 / 8,
+  test/data/      snapshots in the cache/weather.snap format (valid sha256, fetched_at 1795176600).
+                  calm.snap: zero wind / gust / cloud, start 1795176000. nan_wind.snap: same with
+                  wind[3][1][20].x = NaN, must be rejected by weather_valid. routes.txt: one route per mode, hours 0 / 4 / 8,
                   a route to the same hub. calm_routes.expected: today the straight line stub.
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
-                  once snapshot saving exists, the calm one does not exercise the wind.
+                  (copy a cache/weather.snap), the calm one does not exercise the wind.
 bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.
                   200 rounds; wind_at / gust_at / cloud_at / height_at over 4096 fixed-seed points per round,
                   route, three modes, snapshot load, load_map one call per round. Prints min / avg / max per
                   call and arena usage, exits 1 when an average is over a budget (route 10 ms, three modes
                   30 ms, snapshot load 5 ms). Not run by the hook or CI: CI machines are too noisy for timings.
   measured 2026-11-21, Linux on Apple M2 (Asahi), profile config, timer resolution ~42 ns:
-                  wind_at / gust_at / cloud_at ~10 ns per call (~25-35 cycles: two float divides, clamps,
-                  4 loads from L1, ~20 flops; estimate 5-10 ns, divide latency dominates).
-                  route (stub) ~0.3 us, snapshot load ~7 us for 22.7 KB (copy ~1 us + 5.7k range checks;
-                  estimate 3 us, 2x off, fine for now: budget is 5 ms). load_map ~0.2 us (slicing + hub copy).
+                  wind_at / gust_at / cloud_at ~3.6 ns per call (~10-15 cycles: two float divides, clamps,
+                  4 loads from L1, ~20 flops; estimate 3-5 ns). An earlier run on the branch gave ~10 ns,
+                  probably an efficiency core: pin the bench to one core type before comparing numbers.
+                  route (stub + grid snap) ~0.3 us. Snapshot load ~23 us: read 22.7 KB from the page cache,
+                  sha256 (~10-15 us at ~2 GB/s), validation, copy; budget 5 ms. load_map ~0.2 us.
 source/host/      debug host: loads build/game.so (game.dll on Windows), checks its mtime every frame, copies it to
                   build/game_N.so and loads the copy, unloads the old one after. Compares memory_size,
-                  refuses a reload if World changed (restart needed). Run from the repo root.
+                  refuses a reload if World changed (restart needed). Calls game_before_reload on the old
+                  library right before unloading it (stops the weather thread). Run from the repo root.
 source/release/   release main: calls the game package directly, one static exe
 
 World memory

@@ -3,12 +3,24 @@ package game
 
 import "base:runtime"
 import "core:c"
+import "core:crypto/hash"
 import "core:encoding/json"
 import "core:fmt"
 import "core:math"
 import "core:mem"
+import "core:mem/virtual"
+import "core:os"
 import "core:strings"
+import "core:sync"
+import "core:thread"
+import "core:time"
 import curl "vendor:curl"
+
+// Static raylib drops libcmt (wants the dynamic CRT), vendor:curl drops msvcrt (wants the static one),
+// so a static Windows exe ends up with no CRT at all. Give the dynamic CRT back explicitly.
+when ODIN_OS == .Windows && !#config(RAYLIB_SHARED, false) {
+	@(require) foreign import windows_crt {"system:msvcrt.lib", "system:vcruntime.lib", "system:ucrt.lib"}
+}
 
 OPEN_METEO_URL :: "https://api.open-meteo.com/v1/forecast"
 FETCH_TIMEOUT_MS :: 15_000
@@ -26,9 +38,36 @@ MAP_LON0 :: 2.38
 MAP_LAT0 :: 51.56
 KM_PER_DEG :: 111.32
 
+SNAPSHOT_PATH :: "cache/weather.snap"
+SNAPSHOT_MAGIC :: 0x53575244 // "DRWS"
+SNAPSHOT_VERSION :: 1
+REFRESH_S :: 15 * 60
+RETRY_S :: 5 * 60
+
+// File layout: Snapshot_Header, then the raw bytes of one Weather. hash = sha256 of those Weather bytes.
+Snapshot_Header :: struct {
+	magic, version: u32,
+	fetched_at:     i64, // unix seconds
+	hash:           [32]u8,
+}
+
+// Zero is valid: no thread, fetch on the first update.
+// The thread owns mem and result while it runs. The frame loop only looks at them after is_done.
+Fetch :: struct {
+	mem:        virtual.Arena,
+	thread:     ^thread.Thread,
+	cancel:     bool, // atomic, set by the main thread to abort the request
+	ok:         bool,
+	result:     Snapshot_Header,
+	weather:    Weather,
+	next:       i64, // unix seconds of the next fetch
+	fetched_at: i64, // of the snapshot in w.weather
+}
+
 // Blocking HTTP request, call it from a thread, never from the frame loop.
 // Fills out only when the whole response is valid. All allocations go to scratch, the caller frees it.
-fetch_weather :: proc(out: ^Weather, scratch: mem.Allocator) -> bool {
+// Returns false within about a second after cancel^ becomes true.
+fetch_weather :: proc(out: ^Weather, scratch: mem.Allocator, cancel: ^bool) -> bool {
 	url: cstring
 	{
 		cos_lat := math.cos(50.5 * math.RAD_PER_DEG)
@@ -74,7 +113,13 @@ fetch_weather :: proc(out: ^Weather, scratch: mem.Allocator) -> bool {
 			if _, err := append(body, ..buf[:count]); err != nil do return 0
 			return c.size_t(count)
 		}
+		check_cancel :: proc "c" (cancel: rawptr, _, _, _, _: curl.off_t) -> c.int {
+			return sync.atomic_load((^bool)(cancel)) ? 1 : 0
+		}
 		curl.easy_setopt(h, .URL, url)
+		curl.easy_setopt(h, .NOPROGRESS, c.long(0))
+		curl.easy_setopt(h, .XFERINFOFUNCTION, check_cancel)
+		curl.easy_setopt(h, .XFERINFODATA, cancel)
 		curl.easy_setopt(h, .WRITEFUNCTION, write_body)
 		curl.easy_setopt(h, .WRITEDATA, &body)
 		curl.easy_setopt(h, .TIMEOUT_MS, c.long(FETCH_TIMEOUT_MS))
@@ -177,4 +222,118 @@ hourly_values :: proc(
 		v[hour] = f64(n)
 	}
 	return v, true
+}
+
+// game_init loads SNAPSHOT_PATH, headless mode its --snapshot file.
+// A missing or bad snapshot leaves w.weather as it was (zero at startup: calm, fetch now) and returns false.
+weather_load_snapshot :: proc(w: ^World, path: string) -> bool {
+	f := &w.fetch
+	defer virtual.arena_free_all(&f.mem)
+	data, err := os.read_entire_file(path, virtual.arena_allocator(&f.mem))
+	if err != nil {
+		logf(w, "weather", "no snapshot at %s (%v)", path, err)
+		return false
+	}
+	want := size_of(Snapshot_Header) + size_of(Weather)
+	if len(data) != want {
+		logf(w, "weather", "%s is %d bytes, want %d, ignored", path, len(data), want)
+		return false
+	}
+	h := (^Snapshot_Header)(raw_data(data))
+	if h.magic != SNAPSHOT_MAGIC || h.version != SNAPSHOT_VERSION {
+		logf(w, "weather", "%s has magic %x version %d, ignored", path, h.magic, h.version)
+		return false
+	}
+	digest: [32]u8
+	hash.hash_bytes_to_buffer(.SHA256, data[size_of(Snapshot_Header):], digest[:])
+	if digest != h.hash {
+		logf(w, "weather", "%s hash mismatch, file is corrupt, ignored", path)
+		return false
+	}
+	snap := (^Weather)(raw_data(data[size_of(Snapshot_Header):]))
+	if !weather_valid(snap) {
+		logf(w, "weather", "%s has values out of range, ignored", path)
+		return false
+	}
+	w.weather = snap^
+	w.weather_hash = h.hash
+	f.fetched_at = h.fetched_at
+	f.next = h.fetched_at + REFRESH_S
+	logf(w, "weather", "loaded %s, start %d, fetched at %d", path, w.weather.start, h.fetched_at)
+	return true
+}
+
+// Called every frame. Starts a fetch thread when one is due, takes over its result when it is done.
+weather_poll :: proc(w: ^World) {
+	f := &w.fetch
+	now := time.time_to_unix(time.now())
+	if f.thread == nil {
+		if now < f.next do return
+		f.cancel = false
+		f.ok = false
+		context.allocator = virtual.arena_allocator(&f.mem)
+		f.thread = thread.create(fetch_thread)
+		if f.thread == nil {
+			logf(w, "weather", "cannot create fetch thread")
+			f.next = now + RETRY_S
+			return
+		}
+		f.thread.data = w
+		thread.start(f.thread)
+		return
+	}
+	if !thread.is_done(f.thread) do return
+	thread.destroy(f.thread)
+	f.thread = nil
+	virtual.arena_free_all(&f.mem)
+	if !f.ok {
+		f.next = now + RETRY_S
+		logf(w, "weather", "fetch failed, keep snapshot from %d, retry in %d s", f.fetched_at, RETRY_S)
+		return
+	}
+	w.weather = f.weather
+	w.weather_hash = f.result.hash
+	f.fetched_at = f.result.fetched_at
+	f.next = now + REFRESH_S
+	logf(w, "weather", "new snapshot, start %d, saved to %s", w.weather.start, SNAPSHOT_PATH)
+}
+
+// Fetch, hash and save on the worker thread, so the frame loop never waits on network or disk.
+fetch_thread :: proc(t: ^thread.Thread) {
+	w := (^World)(t.data)
+	f := &w.fetch
+	if !fetch_weather(&f.weather, virtual.arena_allocator(&f.mem), &f.cancel) do return
+	f.result.magic = SNAPSHOT_MAGIC
+	f.result.version = SNAPSHOT_VERSION
+	f.result.fetched_at = time.time_to_unix(time.now())
+	hash.hash_bytes_to_buffer(.SHA256, mem.ptr_to_bytes(&f.weather), f.result.hash[:])
+
+	// Write to a temp file and rename, so a crash never leaves a half written snapshot.
+	if err := os.make_directory("cache"); err != nil && err != .Exist {
+		fmt.eprintln("[weather] cannot create cache/:", err)
+	}
+	file: [size_of(Snapshot_Header) + size_of(Weather)]u8
+	mem.copy(&file[0], &f.result, size_of(Snapshot_Header))
+	mem.copy(&file[size_of(Snapshot_Header)], &f.weather, size_of(Weather))
+	tmp := SNAPSHOT_PATH + ".tmp"
+	if err := os.write_entire_file(tmp, file[:]); err != nil {
+		fmt.eprintfln("[weather] cannot write %s: %v, snapshot used but not saved", tmp, err)
+	} else if err = os.rename(tmp, SNAPSHOT_PATH); err != nil {
+		fmt.eprintfln("[weather] cannot rename %s to %s: %v", tmp, SNAPSHOT_PATH, err)
+	}
+	f.ok = true
+}
+
+// Before a reload and at shutdown: the thread runs code from this library, it must end first.
+weather_stop :: proc(w: ^World) {
+	f := &w.fetch
+	if f.thread != nil {
+		t := time.tick_now()
+		sync.atomic_store(&f.cancel, true)
+		thread.destroy(f.thread)
+		f.thread = nil
+		f.next = 0
+		logf(w, "weather", "fetch stopped (reload or shutdown), waited %v", time.tick_since(t))
+	}
+	virtual.arena_free_all(&f.mem)
 }

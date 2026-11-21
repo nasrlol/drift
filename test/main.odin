@@ -42,22 +42,14 @@ run_case :: proc(c: Case) -> bool {
 	context.allocator = virtual.arena_allocator(&w.perm)
 	context.temp_allocator = virtual.arena_allocator(&w.frame)
 
-	snapshot, snapshot_err := os.read_entire_file(c.snapshot, context.allocator)
 	inputs, inputs_err := os.read_entire_file(c.inputs, context.allocator)
-	if snapshot_err != nil || inputs_err != nil {
-		fmt.printfln(
-			"test %s: cannot read %s (%v) or %s (%v)",
-			c.name,
-			c.snapshot,
-			snapshot_err,
-			c.inputs,
-			inputs_err,
-		)
+	if inputs_err != nil {
+		fmt.printfln("test %s: cannot read %s: %v", c.name, c.inputs, inputs_err)
 		return false
 	}
 
 	out := strings.builder_make()
-	ok := game.headless_run(w, snapshot, inputs, &out)
+	ok := game.headless_run(w, c.snapshot, inputs, &out)
 	if c.expected == "" {
 		if ok do fmt.printfln("test %s: run succeeded, it must fail", c.name)
 		return !ok

@@ -5,7 +5,6 @@ package bench
 
 import game "../source/game"
 import "core:fmt"
-import "core:mem"
 import "core:mem/virtual"
 import "core:os"
 import "core:time"
@@ -17,6 +16,8 @@ POINTS :: 4096 // samples per round for the per-point systems, 48 KB of position
 ROUTE_BUDGET_MS :: 10
 THREE_MODES_BUDGET_MS :: 30
 WEATHER_LOAD_BUDGET_MS :: 5
+
+BENCH_SNAPSHOT :: "test/data/calm.snap"
 
 Stat :: struct {
 	min, sum, max: f64, // ns per call
@@ -55,13 +56,9 @@ main :: proc() {
 	for &hour in w.weather.wind do for &layer in hour do for &v in layer do v = {rnd(&seed) * 30 - 15, rnd(&seed) * 30 - 15}
 	for &hour in w.weather.gust do for &layer in hour do for &g in layer do g = rnd(&seed)
 	for &hour in w.weather.cloud do for &c in hour do c = rnd(&seed)
+	generated := w.weather
 	pts := make([][2]f32, POINTS)
 	for &p in pts do p = {rnd(&seed) * 285, rnd(&seed) * 229}
-
-	snapshot := make([]u8, size_of(game.Weather_Header) + size_of(game.Weather))
-	header := game.Weather_Header{game.WEATHER_MAGIC, game.WEATHER_VERSION, size_of(game.Weather), 0}
-	mem.copy(raw_data(snapshot), &header, size_of(header))
-	mem.copy(raw_data(snapshot[size_of(header):]), &w.weather, size_of(game.Weather))
 
 	sink: f32
 	wind, gust, cloud, height, route, three, load, load_map: Stat
@@ -102,14 +99,17 @@ main :: proc() {
 		}
 		add(&three, t, 1)
 
+		// File read (from the page cache), sha256, validation and copy: what startup pays.
+		// It replaces the generated weather, which is put back for the next round.
 		t = time.tick_now()
-		weather, ok := game.weather_from_snapshot(snapshot)
+		ok := game.weather_load_snapshot(w, BENCH_SNAPSHOT)
 		add(&load, t, 1)
 		if !ok {
-			fmt.println("bench: the generated snapshot was rejected")
+			fmt.println("bench: cannot load", BENCH_SNAPSHOT)
 			os.exit(1)
 		}
-		sink += weather.cloud[hour][0]
+		sink += w.weather.cloud[hour][0]
+		w.weather = generated
 
 		t = time.tick_now()
 		m, _ := game.load_map()

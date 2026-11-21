@@ -50,16 +50,15 @@ ROUTE_MODE_NAMES :: [Route_Mode]string {
 	.Calmest  = "calmest",
 }
 
-// Loads the snapshot into w.weather, runs every command in inputs and writes the result to out.
+// Loads the snapshot file (net.odin format) into w.weather, runs every command in inputs and writes the result to out.
 // out only holds deterministic text (no timings), so it can be compared byte for byte.
 // Inputs, one command per line, # starts a comment:
 //   route <from hub> <to hub> <fastest|greenest|calmest> <hour 0..8>
-headless_run :: proc(w: ^World, snapshot, inputs: []u8, out: ^strings.Builder) -> bool {
+headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strings.Builder) -> bool {
 	t := prof_begin()
-	weather, weather_ok := weather_from_snapshot(snapshot)
+	weather_ok := weather_load_snapshot(w, snapshot_path)
 	prof_end(w, .Weather_Load, t)
 	if !weather_ok do return false
-	w.weather = weather
 	fmt.sbprintfln(out, "weather start %d", w.weather.start)
 
 	text := string(inputs)
@@ -184,11 +183,6 @@ game_headless :: proc(args: []string) -> bool {
 	context.allocator = virtual.arena_allocator(&w.perm)
 	context.temp_allocator = virtual.arena_allocator(&w.frame)
 
-	snapshot, snapshot_err := os.read_entire_file(snapshot_path, context.allocator)
-	if snapshot_err != nil {
-		logf(w, "headless", "cannot read snapshot %s: %v", snapshot_path, snapshot_err)
-		return false
-	}
 	inputs, inputs_err := os.read_entire_file(inputs_path, context.allocator)
 	if inputs_err != nil {
 		logf(w, "headless", "cannot read inputs %s: %v", inputs_path, inputs_err)
@@ -196,7 +190,7 @@ game_headless :: proc(args: []string) -> bool {
 	}
 
 	out := strings.builder_make(context.allocator)
-	ok := headless_run(w, snapshot, inputs, &out)
+	ok := headless_run(w, snapshot_path, inputs, &out)
 	if dump do dump_world(w, &out)
 	fmt.print(strings.to_string(out))
 	logf(
@@ -245,7 +239,9 @@ dump_world :: proc(w: ^World, out: ^strings.Builder) {
 		)
 	}
 
-	fmt.sbprintfln(out, "weather start %d", w.weather.start)
+	fmt.sbprintf(out, "weather start %d, sha256 ", w.weather.start)
+	for b in w.weather_hash do fmt.sbprintf(out, "%02x", b)
+	fmt.sbprintfln(out, ", fetched at %d", w.fetch.fetched_at)
 	for hour in 0 ..< FORECAST_HOURS {
 		max_wind: [WIND_LAYERS]f32
 		max_gust, cloud: f32
