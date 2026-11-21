@@ -696,6 +696,21 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   the towns; farmland: a patchwork of ~160 m fields (Voronoi cells of the absolute position), each
                   with its crop (wheat, green crop, ploughed soil, grass, rapeseed) and sowing direction, rows
                   0.75 m apart, tramlines every 20 m, a hedge or ditch along the border; parks a little varied.
+  trees.odin      (Lars) the street view's trees: 5 kinds (lime, poplar, oak, spruce, young street tree), a trunk and a
+                  crown of lumpy blobs (indexed meshes of height 1; the indices stay set, raylib draws a mesh by its
+                  indices only while mesh.indices is not nil: without them the crowns came out as shards), one
+                  blob or cone per tree beyond TREES_NEAR_M 350 m, to TREES_REACH_KM 2 km. Per 0.5 km tile (128
+                  slots, at most 2048 trees, in World) from a hash: Park triangles (own 1 km cell index) at 700 per
+                  km2, street trees every 11 m on both sides of town primary / secondary / tertiary roads on the
+                  sidewalk's outer edge, rows every 15 m along 40 % of the country roads (poplars or limes), 1-3
+                  garden trees in each empty town lot (town_houses gardens); never in a building (collide_car) or
+                  on a carriageway. Drawn with rl.DrawMeshInstanced per kind (STREET_TREE_VS + STREET_FS: wrapped
+                  light around the crown, light through the leaves, a green per tree from its position, leaf
+                  clumps); cast and receive shadows (STREET_TREE_DEPTH_VS). The map's tree clumps (nature.odin) are
+                  no longer drawn in the street view.
+                  Measured (profile build, 2026-11-21): a tree tile builds in 0.27 ms mean, 3.1 ms worst
+                  (Brussels); frame in a park 4.1 ms (shadow pass 0.4-1.3, trees 0.6-1.4, houses 0.25-0.9, roads
+                  0.15-0.3 ms), in a town street 2.4 ms. Over the 4 ms budget in parks: see todo.
   shadows         (street.odin) one 4096^2 depth map (rlgl framebuffer with only a depth texture, raylib's own
                   RenderTexture holds no depth texture) over a 420 m square ahead of the camera (0.1 m per texel),
                   drawn each frame from an orthographic sun camera 1500 m up the sun direction, its centre snapped

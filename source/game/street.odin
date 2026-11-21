@@ -87,6 +87,7 @@ Street :: struct {
 	},
 	// The shadow map: a framebuffer with only a depth texture (rlgl ids), the depth-only material, and the
 	// light's view-projection of this frame.
+	trees:      Trees, // trees.odin
 	shadow_fbo: u32,
 	shadow_tex: u32,
 	depth:      rl.Material,
@@ -384,6 +385,7 @@ void main() {
 	float glass = 0.0;
 	vec3 interior = vec3(0.012, 0.013, 0.015);
 	float spec = 0.0;
+	float leaf = 0.0;
 	vec2 uv = v_uv;
 	float fw = max(length(fwidth(uv)), 1e-4);
 
@@ -509,6 +511,14 @@ void main() {
 		sedum = mix(sedum, vec3(0.15, 0.055, 0.03), smoothstep(0.62, 0.8, a) * 0.8);
 		sedum = mix(sedum, vec3(0.19, 0.17, 0.05), smoothstep(0.7, 0.9, c) * 0.5);
 		base = sedum * 1.5;
+	} else if (mat == 12) {
+		base *= 0.8 + 0.35 * fnoise(uv * vec2(1.0, 0.3), 3.0, fw);
+	} else if (mat == 13) {
+		// A shade of green per tree (from its position), darker and lighter clumps of leaves.
+		float t = hash12(floor(v_lh * 0.37));
+		base *= mix(vec3(0.82, 0.95, 0.72), vec3(1.18, 1.06, 0.86), t) * (0.85 + 0.3 * hash12(floor(v_lh * 1.3) + 7.7));
+		base *= 0.68 + 0.64 * fnoise(uv, 1.6, fw);
+		leaf = 1.0;
 	} else if (mat == 9) {
 		float px = fract(uv.x / 1.05) * 1.05, py = fract(uv.y / 1.75) * 1.75;
 		float frame = (1.0 - box(px - 0.525, 0.5, fw) * box(py - 0.875, 0.83, fw)) * thin(0.05, fw);
@@ -521,11 +531,17 @@ void main() {
 		spec = 0.5;
 	}
 
-	float ndl = max(dot(n, sun_dir), 0.0);
-	if (ndl > 0.0) ndl *= sun_shadow(v_world, n);
+	// Leaves take the light around the crown (wrapped) and let it through when the sun is behind them.
+	float ndl = leaf > 0.5 ? clamp((dot(n, sun_dir) + 0.5) / 1.5, 0.0, 1.0) : max(dot(n, sun_dir), 0.0);
+	float shd = 1.0;
+	if (ndl > 0.0) {
+		shd = sun_shadow(v_world, n);
+		ndl *= shd;
+	}
 	vec3 amb = mix(amb_gnd, amb_sky, n.y * 0.5 + 0.5);
 	vec3 c = base * (sun_col * ndl + amb) * ao;
 	c += sun_col * spec * pow(max(dot(n, normalize(sun_dir + V)), 0.0), 60.0) * ndl;
+	if (leaf > 0.5) c += base * sun_col * 0.35 * pow(max(dot(-V, sun_dir), 0.0), 4.0) * shd;
 	if (glass > 0.001) {
 		vec3 r = reflect(-V, n);
 		float fres = 0.05 + 0.95 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
@@ -855,6 +871,7 @@ street_build :: proc(w: ^World) {
 	if !rl.IsShaderValid(road) do logf(w, "street", "road shader did not compile")
 	st.road = rl.LoadMaterialDefault()
 	st.road.shader = road
+	trees_build(w)
 	st.road_loc = {
 		layer = rl.GetShaderLocation(road, "layer"),
 		light = street_light_locs(road),
@@ -885,6 +902,7 @@ street_build :: proc(w: ^World) {
 street_unload :: proc(st: ^Street) {
 	tiles_unload(&st.roads)
 	tiles_unload(&st.houses)
+	trees_unload(&st.trees)
 	if !st.ready do return
 	rl.UnloadMesh(st.ground)
 	rl.UnloadShader(st.material.shader)
@@ -1187,8 +1205,7 @@ street_draw :: proc(w: ^World) {
 	// buildings_draw with no reach only sets their shader's uniforms).
 	street_light_set(w, st.lit.shader, st.lit_loc, st.view.position)
 	tiles_update_draw(w, &st.houses, HOUSE_TILE_KM, HOUSE_REACH_KM, houses_build_tile, st.lit, centre, place)
-	buildings_draw(w, STREET_FOG_M, 1 / BUILDINGS_HEIGHT_X, centre, -1, place, look.buildings)
-	nature_draw(w, centre, STREET_REACH_KM, place)
+	trees_draw(w, centre, TREES_REACH_KM, st.view.position, false)
 
 	// 5: the cars.
 	street_cars(w, nil)
@@ -1266,7 +1283,7 @@ street_shadow_pass :: proc(w: ^World, place: Placement) {
 	centre := st.origin + c.xz / 1000
 	reach := f32(SHADOW_BOX_M) * 0.75 / 1000
 	tiles_draw(&st.houses, HOUSE_TILE_KM, reach, st.depth, centre, place)
-	tiles_draw(&w.nature, TREE_TILE_KM, reach, st.depth, centre, place)
+	trees_draw(w, centre, reach, st.view.position, true)
 	street_cars(w, &st.depth)
 	rl.EndMode3D()
 	rl.EndTextureMode()

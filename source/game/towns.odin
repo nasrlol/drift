@@ -35,6 +35,11 @@ town_lattice :: proc(area: int) -> (seed: u32, ax, ay: [2]f32) {
 	return
 }
 
+// The hash of lot (i, j) of a lattice: its low byte decides whether it keeps a building (TOWN_FILL).
+town_lot_hash :: proc(seed: u32, i, j: i32) -> u32 {
+	return hash_u32(u32(i) * 73856093 ~ u32(j) * 19349663 ~ seed)
+}
+
 // The building on lot (i, j) of a lattice, if the lot keeps one: its ring (km) and its real height (km, the map
 // draws it BUILDINGS_HEIGHT_X taller). Lots within BUILDINGS_RADIUS_KM of a city with real buildings stay empty,
 // and so does a lot whose building would stand on a road or river or its sidewalk (town_lot_clear). Drawing
@@ -51,7 +56,7 @@ town_lot :: proc(
 ) {
 	lot := f32(TOWN_LOT_M) / 1000
 	c := (ax * (f32(i) + 0.5) + ay * (f32(j) + 0.5)) * lot
-	h := hash_u32(u32(i) * 73856093 ~ u32(j) * 19349663 ~ seed)
+	h := town_lot_hash(seed, i, j)
 	r0 := f32(h & 0xff) / 255
 	r1 := f32((h >> 8) & 0xff) / 255
 	r2 := f32((h >> 16) & 0xff) / 255
@@ -83,8 +88,9 @@ Town_House :: struct {
 }
 
 // The generated buildings whose lot centre lies in lo ..< hi, appended to out. The map (towns_build_tile) and the
-// street view (houses.odin) both draw these.
-town_houses :: proc(w: ^World, lo, hi: [2]f32, out: ^[dynamic]Town_House) {
+// street view (houses.odin) both draw these. gardens, when given, gets the centres (km) of the lots left empty by
+// TOWN_FILL: the street view puts garden trees there.
+town_houses :: proc(w: ^World, lo, hi: [2]f32, out: ^[dynamic]Town_House, gardens: ^[dynamic][2]f32 = nil) {
 	b := &w.buildings
 	for o in b.origins[:b.count] {
 		// The whole tile inside a circle of real buildings: nothing to make.
@@ -126,7 +132,11 @@ town_houses :: proc(w: ^World, lo, hi: [2]f32, out: ^[dynamic]Town_House) {
 					if c.x < lo.x || c.y < lo.y || c.x >= hi.x || c.y >= hi.y do continue
 					if !in_triangle(c, p0, p1, p2) do continue
 					ring, height, ok := town_lot(w, seed, ax, ay, i, j)
-					if !ok do continue
+					if !ok {
+						empty := f32(town_lot_hash(seed, i, j) & 0xff) / 255 > TOWN_FILL
+						if gardens != nil && empty do append(gardens, c)
+						continue
+					}
 					h := hash_u32(u32(i) * 2246822519 ~ u32(j) * 3266489917 ~ seed)
 					append(out, Town_House{ring, height * 1000, h})
 				}
