@@ -247,7 +247,7 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	rl.BeginDrawing()
 	t = prof_begin()
-	rl.ClearBackground(pal.background)
+	rl.ClearBackground(pal.land)
 	{
 		lm := &w.line_meshes
 		if !lm.built {
@@ -333,8 +333,12 @@ game_update :: proc(memory: rawptr) -> bool {
 		{
 			screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 			uniform: [LINE_COLORS][4]f32
-			for c, k in pal.lines do uniform[k] = rl.ColorNormalize(c)
-			uniform[WIND_COLOR] = rl.ColorNormalize(pal.wind)
+			// Until the land use bake: the border in text_2 (the design has no border color), rivers in the water
+			// color, motorways in their fill color.
+			uniform[Map_Kind.Border] = rl.ColorNormalize(pal.text_2)
+			uniform[Map_Kind.River] = rl.ColorNormalize(pal.water)
+			uniform[Map_Kind.Motorway] = rl.ColorNormalize(pal.motorway)
+			uniform[WIND_COLOR] = rl.ColorNormalize(pal.text)
 			rl.SetShaderValue(lm.material.shader, lm.loc_screen, &screen, .VEC2)
 			rl.SetShaderValueV(lm.material.shader, lm.loc_colors, &uniform, .VEC4, LINE_COLORS)
 			if lm.map_lines.vertexCount > 0 do rl.DrawMesh(lm.map_lines, lm.material, rl.Matrix(1))

@@ -105,6 +105,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   start of every frame: no pointer into this library's constants, so hot reload is safe. Map line
                   colors go to the line shader as a uniform, switching rebuilds nothing. The profiler overlay keeps
                   its own fixed colors.
+                  Map colors (same Palette, design "Kaart" table): land, city, park, farmland, marsh, beach, water,
+                  roof, wall, motorway / main_road / street / track with their _casing, route / alt_route with their
+                  _casing, sky, horizon. Used now: land (clear color), water (rivers), motorway; the border has no
+                  design color and uses text_2. Wind trails use text: the design names a speed ramp (white < 6 m/s,
+                  mint < 10, yellow < 14, coral above) without values, open question.
                   Line meshes (Line_Meshes in render.odin, built inline in game_update): map lines and wind trails
                   are meshes drawn by one shader (LINE_VS, GLSL 330), built on the first frame (needs the window,
                   never in headless). Each segment is 6 vertices (2 triangles, no index buffer: raylib indices are

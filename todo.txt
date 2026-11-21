@@ -48,7 +48,7 @@ Moved to the design split: plan screen + layers -> ANDREI,
 navigate screen -> LARS (banner, sheet) + DARIO (buttons, pad), route strips -> LARS.
 Shared signatures for all of this: notes.txt "DESIGN INTERFACES". nasr builds the base everyone uses:
 [x] tokens: Palette fields = the design token table (surface .. pill), night + day values, night is zero
-[ ] map colors: land, city, park, farmland, marsh, beach, water, buildings, roads, sky per theme
+[x] map colors: land, city, park, farmland, marsh, beach, water, buildings, roads, sky per theme
 [ ] fonts: embed Figtree + Roboto Mono like Roboto (#47), ui_text(w, pos, text, Font, px, color)
 [ ] icons: one embedded icon atlas, ui_icon(w, Icon, centre, px, color)
 [ ] ui kit: card + shadow, round button 48 / 64, zoom pill, pill buttons, chip, toggle, segment, tile
