@@ -16,6 +16,10 @@ FETCH_MAX_BYTES :: 1 << 20
 PRESSURE_HPA :: [WIND_LAYERS]int{975, 950, 925}
 // Gust minus mean wind at 10 m that counts as "very gusty" (index 1 at the lowest layer).
 GUST_SPREAD_MAX :: 10.0
+// Anything outside these is a broken response, not weather. Times: 2020-01-01 .. 2100-01-01.
+WIND_MAX :: 100.0
+TIME_MIN :: 1577836800
+TIME_MAX :: 4102444800
 
 // Same projection as tools/bake_map, inverted to get the lat / lon of each grid point.
 MAP_LON0 :: 2.38
@@ -108,17 +112,20 @@ fetch_weather :: proc(out: ^Weather, scratch: mem.Allocator) -> bool {
 			fmt.eprintfln("[weather] cell %d: no hourly object", cell)
 			return false
 		}
-		times := hourly_values(hourly, "time", cell) or_return
+		times := hourly_values(hourly, "time", cell, TIME_MIN, TIME_MAX) or_return
 		if cell == 0 do w.start = i64(times[0])
-		if i64(times[0]) != w.start {
-			fmt.eprintfln("[weather] cell %d: start time %v, cell 0 has %d", cell, times[0], w.start)
-			return false
+		for t, hour in times {
+			expected := w.start + i64(hour) * 3600
+			if i64(t) != expected || w.start % 3600 != 0 {
+				fmt.eprintfln("[weather] cell %d: hour %d has time %.0f, want %d", cell, hour, t, expected)
+				return false
+			}
 		}
 		for hpa, layer in PRESSURE_HPA {
 			speed_key := fmt.aprintf("wind_speed_%dhPa", hpa, allocator = scratch)
 			dir_key := fmt.aprintf("wind_direction_%dhPa", hpa, allocator = scratch)
-			speeds := hourly_values(hourly, speed_key, cell) or_return
-			dirs := hourly_values(hourly, dir_key, cell) or_return
+			speeds := hourly_values(hourly, speed_key, cell, 0, WIND_MAX) or_return
+			dirs := hourly_values(hourly, dir_key, cell, 0, 360) or_return
 			for hour in 0 ..< FORECAST_HOURS {
 				s, rad := speeds[hour], dirs[hour] * math.RAD_PER_DEG
 				w.wind[hour][layer][cell] = {f32(-s * math.sin(rad)), f32(s * math.cos(rad))}
@@ -126,23 +133,32 @@ fetch_weather :: proc(out: ^Weather, scratch: mem.Allocator) -> bool {
 		}
 		// Gusts only exist at 10 m. The spread between gust and mean wind, scaled down with height
 		// like in the spec (1.08 - alt / 1600), gives the 0..1 gust index per layer.
-		mean := hourly_values(hourly, "wind_speed_10m", cell) or_return
-		gusts := hourly_values(hourly, "wind_gusts_10m", cell) or_return
-		clouds := hourly_values(hourly, "cloud_cover", cell) or_return
+		mean := hourly_values(hourly, "wind_speed_10m", cell, 0, WIND_MAX) or_return
+		gusts := hourly_values(hourly, "wind_gusts_10m", cell, 0, WIND_MAX) or_return
+		clouds := hourly_values(hourly, "cloud_cover", cell, 0, 100) or_return
 		for hour in 0 ..< FORECAST_HOURS {
 			spread := clamp((gusts[hour] - mean[hour]) / GUST_SPREAD_MAX, 0, 1)
 			for alt, layer in LAYER_ALT {
 				w.gust[hour][layer][cell] = clamp(f32(spread) * (1.08 - alt / 1600), 0, 1)
 			}
-			w.cloud[hour][cell] = clamp(f32(clouds[hour] / 100), 0, 1)
+			w.cloud[hour][cell] = f32(clouds[hour] / 100)
 		}
 	}
 	out^ = w
 	return true
 }
 
-// Every hourly series must be FORECAST_HOURS numbers. Open-Meteo sends null for missing values.
-hourly_values :: proc(hourly: json.Object, key: string, cell: int) -> (v: [FORECAST_HOURS]f64, ok: bool) {
+// Every hourly series must be FORECAST_HOURS numbers in lo..hi. Open-Meteo sends null for missing values.
+// The range test is written so that NaN and infinity fail it too.
+hourly_values :: proc(
+	hourly: json.Object,
+	key: string,
+	cell: int,
+	lo, hi: f64,
+) -> (
+	v: [FORECAST_HOURS]f64,
+	ok: bool,
+) {
 	a, is_array := hourly[key].(json.Array)
 	if !is_array || len(a) != FORECAST_HOURS {
 		fmt.eprintfln("[weather] cell %d: %s needs %d values, got %d", cell, key, FORECAST_HOURS, len(a))
@@ -151,7 +167,11 @@ hourly_values :: proc(hourly: json.Object, key: string, cell: int) -> (v: [FOREC
 	for x, hour in a {
 		n, is_number := x.(json.Float)
 		if !is_number {
-			fmt.eprintfln("[weather] cell %d: %s hour %d is %v, not a number", cell, key, hour, x)
+			fmt.eprintfln("[weather] cell %d: %s hour %d is null or not a number", cell, key, hour)
+			return
+		}
+		if !(f64(n) >= lo && f64(n) <= hi) {
+			fmt.eprintfln("[weather] cell %d: %s hour %d is %v, outside %v..%v", cell, key, hour, n, lo, hi)
 			return
 		}
 		v[hour] = f64(n)
