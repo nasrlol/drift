@@ -1,0 +1,7 @@
+# windy.snap: 300 m 4 m/s toward the west, 550 m calm, 800 m 12 m/s toward the east, gusty on 800 m east of x 120 km.
+# Each mode must pick its own layers: fastest rides the 800 m tailwind all the way, calmest and greenest
+# leave it before the gusts (calmest first). Westbound fastest stays in the 300 m tailwind.
+route 6 10 fastest 0
+route 6 10 greenest 0
+route 6 10 calmest 0
+route 10 6 fastest 0
