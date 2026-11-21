@@ -41,7 +41,7 @@ NASR: MAP + RENDERING + UI
 [ ] routes as screen-width strips, built once per route, alternatives grey
 [x] wind particles: SoA arrays (x[], y[], age[]), one update loop, one draw batch, fixed count
 [x] labels: collect into a flat array per frame (temp allocator), cull, draw in one pass
-[ ] immediate mode UI (raygui or our own), no retained widget tree
+[x] immediate mode UI (our own, raygui needs a system lib on Linux), no retained widget tree
 [ ] plan screen: from/to hub, mode, departure +0..+8 h, route cards with time/kWh, start
 [ ] navigate screen: banner, then-card, speed, battery, used, solar, height, sim speed
 [ ] layers toggles: wind, gusts, no-fly, solar, altitude layer

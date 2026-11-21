@@ -161,6 +161,10 @@ game_update :: proc(memory: rawptr) -> bool {
 	// Throttle / turn pan, climb zooms around the screen centre. The mouse stays camera only: drag pans, the
 	// wheel zooms keeping the point under the cursor in place.
 	// Drive mode (M toggles): the controls go to the ship and the camera sits on it, only the wheel zooms.
+	// The toolbar is drawn after the map, but laid out here so the mouse does not pan or zoom the map under it.
+	toolbar := rl.Rectangle{f32(rl.GetScreenWidth()) - TOOLBAR_W - 8, 8, TOOLBAR_W, TOOLBAR_H}
+	mouse_on_ui := rl.CheckCollisionPointRec(rl.GetMousePosition(), toolbar)
+
 	cam: rl.Camera2D
 	{
 		v := &w.view
@@ -172,10 +176,10 @@ game_update :: proc(memory: rawptr) -> bool {
 		z0 := fit * math.pow(f32(2), v.zoom)
 
 		v.pan += [2]f32{c.turn, -c.throttle} * PAN_PX_PER_S * dt / z0
-		if rl.IsMouseButtonDown(.LEFT) && !w.drive_mode do v.pan -= rl.GetMouseDelta() / z0
+		if rl.IsMouseButtonDown(.LEFT) && !w.drive_mode && !mouse_on_ui do v.pan -= rl.GetMouseDelta() / z0
 		zoom := c.climb * ZOOM_PER_S * dt
 		anchor := centre
-		if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+		if wheel := rl.GetMouseWheelMove(); wheel != 0 && !mouse_on_ui {
 			zoom += wheel * WHEEL_ZOOM_STEP
 			anchor = rl.GetMousePosition()
 		}
@@ -324,6 +328,29 @@ game_update :: proc(memory: rawptr) -> bool {
 		for &l in labels {
 			rl.DrawCircleV(l.dot, 3, pal.city)
 			if l.shown do rl.DrawText(l.text, i32(l.rect.x + LABEL_GAP_PX), i32(l.rect.y + LABEL_GAP_PX), LABEL_PX, pal.city)
+		}
+
+		// Toolbar: map / drive mode, sim speed, theme. The same keys still work (M, 1-4, T).
+		// A click changes the state after this frame's update, so it shows from the next frame on.
+		rl.DrawRectangleRec(toolbar, pal.panel)
+		r := rl.Rectangle{toolbar.x + UI_PAD, toolbar.y + UI_PAD, UI_BUTTON_W, UI_BUTTON_H}
+		if ui_button(r, "Map", !w.drive_mode, pal) do w.drive_mode = false
+		r.x += UI_BUTTON_W + UI_GAP
+		if ui_button(r, "Drive", w.drive_mode, pal) do w.drive_mode = true
+		r.x += UI_BUTTON_W + UI_GROUP_GAP
+		for s, i in speeds {
+			if ui_button(r, fmt.ctprintf("%.0fx", s), w.sim_speed == i, pal) do w.sim_speed = i
+			r.x += UI_BUTTON_W + UI_GAP
+		}
+		r.x += UI_GROUP_GAP - UI_GAP
+		THEME_NAMES :: [Theme]cstring {
+			.Day   = "Day",
+			.Night = "Night",
+		}
+		names := THEME_NAMES
+		for name, theme in names {
+			if ui_button(r, name, w.theme == theme, pal) do w.theme = theme
+			r.x += UI_BUTTON_W + UI_GAP
 		}
 	}
 	prof_end(w, .Draw, t)

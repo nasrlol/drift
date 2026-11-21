@@ -100,6 +100,13 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   pass draws dots (3 px) and texts (default font, LABEL_PX 10). Pixel size stays the same at every
                   zoom. The default font covers Latin-1, "Liege" with e grave draws correctly. 15 cities: O(n^2)
                   overlap test, fine until there are hundreds of labels.
+  ui.odin         Immediate mode UI, our own (raygui needs a system library on Linux, it is not in the build).
+                  A widget is a proc call that draws itself and returns what happened this frame; nothing is kept
+                  between frames. ui_button(rect, text, on, pal) -> clicked: on = button_on color, mouse over =
+                  button_hot, default font 10 px. Toolbar top right (TOOLBAR_W x TOOLBAR_H, laid out in
+                  game_update before the camera so the mouse does not pan or zoom the map under it, drawn after the
+                  labels): Map / Drive, sim speeds (names from SIM_SPEEDS), Day / Night. Keys M, 1-4, T still work.
+                  A click changes the state after the frame's update, so it shows from the next frame.
   map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
                   load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
                   Hubs are copied into a fixed array w.m.hubs[:w.m.hub_count], hub id = index.
