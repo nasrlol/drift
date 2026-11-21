@@ -54,7 +54,7 @@ LARS: ROUTING + NAVIGATION
 [x] 3D grid: 1 km cells x 3 layers (203k nodes), all buffers allocated once, reused per route
 [ ] blocked bitset built once per weather hour: terrain + margin, no-fly zones (fixed array, max 8)
 [x] A*: 8 dirs + up/down, binary heap in a fixed array, no allocation during search
-[ ] cost per mode: fastest (time), greenest (energy), calmest (time x gusts)
+[~] lars: cost per mode: fastest (time), greenest (energy), calmest (time x gusts)
 [ ] ground speed: wind along track + sqrt(v^2 - crosswind^2), retry +6 m/s if < 2.5, block if < 1.5
 [ ] energy: battery 180 kWh start 86%, P(v, g) = 3 + 0.0085 v^3 + 6 g, solar from cloud cover, climb cost
 [ ] path cleanup: skip redundant nodes, Chaikin, ramp to tower top, 40 m terrain clearance
