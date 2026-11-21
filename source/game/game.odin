@@ -48,6 +48,9 @@ World :: struct {
 	store:        Store, // carpool messages, see net.odin
 	node:         Net_Node, // peer to peer threads and peers, see net.odin
 	trip:         Trip, // the accepted trip in progress, frame loop only
+	live_send_s:  f32, // seconds since our live position was last sent (carpool_frame)
+	partner:      [3]f32, // the carpool partner's newest live position, km, km, m
+	partner_seen: bool,
 	grid:         Grid,
 	controls:     Controls,
 	ship:         Ship,
@@ -216,6 +219,7 @@ game_update :: proc(memory: rawptr) -> bool {
 		w.tick += 1
 		w.accum -= SIM_DT
 	}
+	carpool_frame(w, f32(min(f64(rl.GetFrameTime()), MAX_FRAME_DT)))
 	prof_end(w, .Update, t)
 
 	if rl.IsKeyPressed(.F5) {
@@ -471,6 +475,7 @@ game_update :: proc(memory: rawptr) -> bool {
 		// Draw order 5 and 6: routes, then the airship (only while flying).
 		nav_draw_routes(w)
 		if w.screen == .Navigate do airship_draw(w)
+		carpool_draw_partner(w)
 
 		// Draw order 7: hub markers with their names (design: green 26 px circle, white 2 px border, tower icon
 		// 15 px, name in Figtree 600 13 px). Names are the real ones from belgium.bin. Screen space, culled: a

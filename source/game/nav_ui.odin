@@ -395,3 +395,20 @@ nav_ui :: proc(w: ^World) {
 		ui_stat_chip(w, {x + f32(i) * (cw + 8), sheet.y + 108, cw, 58}, c.label, c.value, c.meter)
 	}
 }
+
+// The carpool partner during an accepted trip (live position from net.odin): a ring with the airship arrow and
+// "Partner" under it, so two players see each other on the map.
+carpool_draw_partner :: proc(w: ^World) {
+	if !w.trip.active || !w.partner_seen do return
+	pal := palette(w)
+	p, visible := cam_to_screen(w, {w.partner.x, w.partner.y, 0})
+	if !visible do return
+	rl.DrawCircleV(p, 15, rl.WHITE)
+	rl.DrawCircleV(p, 12, pal.accent)
+	ui_icon(w, .Navigate, p, 16, rl.WHITE)
+	size := ui_text_size(w, "Partner", .Figtree_600, 13)
+	for o in ([?][2]f32{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}) {
+		ui_text(w, {p.x - size.x / 2, p.y + 18} + o, "Partner", .Figtree_600, 13, pal.label_halo)
+	}
+	ui_text(w, {p.x - size.x / 2, p.y + 18}, "Partner", .Figtree_600, 13, pal.area_label)
+}
