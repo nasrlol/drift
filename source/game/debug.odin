@@ -73,7 +73,7 @@ headless_run :: proc(w: ^World, snapshot, inputs: []u8, out: ^strings.Builder) -
 		n := 0
 		for field in strings.fields_iterator(&line) {
 			if n == len(f) {
-				fmt.eprintfln("[headless] inputs line %d: more than %d words", line_no, len(f))
+				logf(w, "headless", "inputs line %d: more than %d words", line_no, len(f))
 				return false
 			}
 			f[n] = field
@@ -90,16 +90,20 @@ headless_run :: proc(w: ^World, snapshot, inputs: []u8, out: ^strings.Builder) -
 				if f[3] == name do mode, mode_ok = m, true
 			}
 			if n != 5 || !from_ok || !to_ok || !mode_ok || !hour_ok {
-				fmt.eprintfln(
-					"[headless] inputs line %d: %q, want: route <from hub> <to hub> <fastest|greenest|calmest> <hour>",
+				logf(
+					w,
+					"headless",
+					"inputs line %d: %q, want: route <from hub> <to hub> <fastest|greenest|calmest> <hour>",
 					line_no,
 					line,
 				)
 				return false
 			}
 			if from < 0 || from >= w.m.hub_count || to < 0 || to >= w.m.hub_count {
-				fmt.eprintfln(
-					"[headless] inputs line %d: hubs %d -> %d, valid ids are 0..%d",
+				logf(
+					w,
+					"headless",
+					"inputs line %d: hubs %d -> %d, valid ids are 0..%d",
 					line_no,
 					from,
 					to,
@@ -108,8 +112,10 @@ headless_run :: proc(w: ^World, snapshot, inputs: []u8, out: ^strings.Builder) -
 				return false
 			}
 			if hour < 0 || hour >= FORECAST_HOURS {
-				fmt.eprintfln(
-					"[headless] inputs line %d: hour %d outside 0..%d",
+				logf(
+					w,
+					"headless",
+					"inputs line %d: hour %d outside 0..%d",
 					line_no,
 					hour,
 					FORECAST_HOURS - 1,
@@ -134,7 +140,7 @@ headless_run :: proc(w: ^World, snapshot, inputs: []u8, out: ^strings.Builder) -
 			fmt.sbprintfln(out, "%d points, %.3f km", len(path), km)
 			for p in path do fmt.sbprintfln(out, "  %.3f %.3f %.1f", p.x, p.y, p.z)
 		case:
-			fmt.eprintfln("[headless] inputs line %d: unknown command %q", line_no, f[0])
+			logf(w, "headless", "inputs line %d: unknown command %q", line_no, f[0])
 			return false
 		}
 	}
@@ -142,15 +148,18 @@ headless_run :: proc(w: ^World, snapshot, inputs: []u8, out: ^strings.Builder) -
 }
 
 // Called by the host and the release main with the command line after the program name:
-//   --headless --snapshot <file> --inputs <file>
-// Prints the result to stdout and timings to stderr. No window is opened.
+//   --headless --snapshot <file> --inputs <file> [--dump]
+// Prints the result (and with --dump the World after the last command) to stdout and timings to stderr. No window is opened.
 @(export)
 game_headless :: proc(args: []string) -> bool {
-	USAGE :: "usage: drift --headless --snapshot <file> --inputs <file>"
+	USAGE :: "usage: drift --headless --snapshot <file> --inputs <file> [--dump]"
 	snapshot_path, inputs_path: string
+	dump: bool
 	for i := 0; i < len(args); i += 1 {
 		switch args[i] {
 		case "--headless":
+		case "--dump":
+			dump = true
 		case "--snapshot", "--inputs":
 			if i + 1 == len(args) {
 				fmt.eprintfln("[headless] %s needs a file name\n%s", args[i], USAGE)
@@ -177,22 +186,96 @@ game_headless :: proc(args: []string) -> bool {
 
 	snapshot, snapshot_err := os.read_entire_file(snapshot_path, context.allocator)
 	if snapshot_err != nil {
-		fmt.eprintfln("[headless] cannot read snapshot %s: %v", snapshot_path, snapshot_err)
+		logf(w, "headless", "cannot read snapshot %s: %v", snapshot_path, snapshot_err)
 		return false
 	}
 	inputs, inputs_err := os.read_entire_file(inputs_path, context.allocator)
 	if inputs_err != nil {
-		fmt.eprintfln("[headless] cannot read inputs %s: %v", inputs_path, inputs_err)
+		logf(w, "headless", "cannot read inputs %s: %v", inputs_path, inputs_err)
 		return false
 	}
 
 	out := strings.builder_make(context.allocator)
 	ok := headless_run(w, snapshot, inputs, &out)
+	if dump do dump_world(w, &out)
 	fmt.print(strings.to_string(out))
-	fmt.eprintfln(
-		"[headless] weather load %.3f ms, last route %.3f ms",
+	logf(
+		w,
+		"headless",
+		"weather load %.3f ms, last route %.3f ms",
 		w.prof.ms[.Weather_Load],
 		w.prof.ms[.Route],
 	)
 	return ok
+}
+
+// One event per line on stderr: "[route t=1234] no path, 3 cells blocked". No allocation, long messages are cut.
+logf :: proc(w: ^World, system: string, format: string, args: ..any) {
+	buf: [1024]u8
+	fmt.eprintfln("[%s t=%d] %s", system, w.tick, fmt.bprintf(buf[:], format, ..args))
+}
+
+// The World as text, for bug reports: F5 in the app, --dump in headless mode.
+// Only deterministic values (no timings), so a dump can be diffed against another run.
+dump_world :: proc(w: ^World, out: ^strings.Builder) {
+	fmt.sbprintfln(
+		out,
+		"tick %d (%.2f s), accum %.4f s, build %s",
+		w.tick,
+		f64(w.tick) * SIM_DT,
+		w.accum,
+		BUILD_MODE,
+	)
+	fmt.sbprintfln(
+		out,
+		"map %d lines, %d points, %d cities, %d hubs",
+		len(w.m.lines),
+		len(w.m.points),
+		len(w.m.cities),
+		w.m.hub_count,
+	)
+	for &h, i in w.m.hubs[:w.m.hub_count] {
+		fmt.sbprintfln(
+			out,
+			"  hub %d %.3f %.3f %s",
+			i,
+			h.pos.x,
+			h.pos.y,
+			strings.truncate_to_byte(string(h.name[:]), 0),
+		)
+	}
+
+	fmt.sbprintfln(out, "weather start %d", w.weather.start)
+	for hour in 0 ..< FORECAST_HOURS {
+		max_wind: [WIND_LAYERS]f32
+		max_gust, cloud: f32
+		for layer in 0 ..< WIND_LAYERS {
+			for cell in 0 ..< WEATHER_CELLS {
+				max_wind[layer] = max(max_wind[layer], linalg.length(w.weather.wind[hour][layer][cell]))
+				max_gust = max(max_gust, w.weather.gust[hour][layer][cell])
+			}
+		}
+		for c in w.weather.cloud[hour] do cloud += c
+		fmt.sbprintfln(
+			out,
+			"  hour %d: max wind %.1f / %.1f / %.1f m/s, max gust %.2f, mean cloud %.2f",
+			hour,
+			max_wind[0],
+			max_wind[1],
+			max_wind[2],
+			max_gust,
+			cloud / WEATHER_CELLS,
+		)
+	}
+
+	fmt.sbprintfln(
+		out,
+		"arenas perm %d / %d, route %d / %d, frame %d / %d bytes (used / reserved)",
+		w.perm.total_used,
+		w.perm.total_reserved,
+		w.route_mem.total_used,
+		w.route_mem.total_reserved,
+		w.frame.total_used,
+		w.frame.total_reserved,
+	)
 }

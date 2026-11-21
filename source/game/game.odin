@@ -3,6 +3,7 @@ package game
 
 import "core:fmt"
 import "core:mem/virtual"
+import "core:strings"
 import rl "vendor:raylib"
 
 SIM_HZ :: 60
@@ -44,9 +45,11 @@ game_init :: proc() -> rawptr {
 		return nil
 	}
 	game_hot_reloaded(w)
-	fmt.eprintln("[game] build:", BUILD_MODE)
-	fmt.eprintfln(
-		"[map] %d lines, %d points, %d cities, %d hubs",
+	logf(w, "game", "build %s", BUILD_MODE)
+	logf(
+		w,
+		"map",
+		"%d lines, %d points, %d cities, %d hubs",
 		len(w.m.lines),
 		len(w.m.points),
 		len(w.m.cities),
@@ -61,8 +64,10 @@ game_hot_reloaded :: proc(memory: rawptr) {
 	w := (^World)(memory)
 	m, ok := load_map()
 	if !ok {
-		fmt.eprintfln(
-			"[map] belgium.bin: wrong magic or version (want %d) or more than %d hubs",
+		logf(
+			w,
+			"map",
+			"belgium.bin: wrong magic or version (want %d) or more than %d hubs",
 			MAP_VERSION,
 			MAX_HUBS,
 		)
@@ -84,6 +89,12 @@ game_update :: proc(memory: rawptr) -> bool {
 		w.accum -= SIM_DT
 	}
 	prof_end(w, .Update, t)
+
+	if rl.IsKeyPressed(.F5) {
+		b := strings.builder_make(context.temp_allocator)
+		dump_world(w, &b)
+		fmt.print(strings.to_string(b))
+	}
 
 	rl.BeginDrawing()
 	t = prof_begin()
