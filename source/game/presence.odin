@@ -34,7 +34,8 @@ Presence_Flag :: enum u8 {
 Presence :: struct {
 	magic:   u32le,
 	flags:   bit_set[Presence_Flag;u8],
-	_:       [3]u8,
+	skin:    u8, // Car_Skin of the author's car, unknown values draw as Concept
+	_:       [2]u8,
 	time_ms: i64le, // unix milliseconds, set by the author
 	author:  [32]u8, // ed25519 public key
 	x, y:    f32le, // km
@@ -62,6 +63,7 @@ Other_Car :: struct {
 	heading: f32,
 	speed:   f32,
 	on_road: bool,
+	skin:    Car_Skin,
 	age_s:   f32, // seconds since the author sent it, at the copy
 }
 
@@ -194,6 +196,7 @@ presence_frame :: proc(w: ^World, dt: f32) {
 			alt     = f32le(s.alt),
 			heading = f32le(s.heading),
 			speed   = f32le(s.speed),
+			skin    = u8(w.car_skin),
 		}
 		if s.on_road do p.flags += {.On_Road}
 		if s.landing do p.flags += {.Landing}
@@ -222,6 +225,7 @@ presence_frame :: proc(w: ^World, dt: f32) {
 			heading = f32(q.heading),
 			speed   = f32(q.speed),
 			on_road = .On_Road in q.flags,
+			skin    = car_skin_of(q.skin),
 			age_s   = max(age, 0),
 		}
 		w.other_count += 1

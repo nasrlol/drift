@@ -620,7 +620,19 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   so rolling them about the car's axle swung them about (Lars: "rare animatie"): airship_build turns
                   every wheel straight, the front ones are drawn steered by Car_Anim.steer (0.45 rad x turn input,
                   only with the wheels down). others_draw draws the
-                  other cars (presence.odin) 80 px, tinted, orange in a traffic jam.
+                  other cars (presence.odin) 80 px in their own skin, orange in a traffic jam.
+  car_models.odin (author andrei) car skins: Concept (car.bin) plus three generic bodies without brand or logo
+                  (Sport, Hatch, 4x4) lofted at start-up from a side profile (Body_Key rings, wheel arches, lights,
+                  grille, bumpers, mirrors as boxes and blobs) into one u16 mesh each; the Car Concept wheels are moved
+                  and scaled to their axles. Smoke (Andrei: "een sigaret op wielen") has no shell, only cylinders
+                  (filter, gold band, paper, ash) and a glowing tip. Picked in plan panel card A (turning preview in
+                  its own render texture + segment), saved by name in cache/car_skin.txt, sent in Presence.skin (a padding byte, the size
+                  stays 136; unknown values draw as Concept). Shapes and colours are ours.
+  music.odin      (author andrei) the soundtrack, made in code (no audio file): Am F C G, two bars per chord at
+                  84 BPM, pad + bass + plucked arpeggio with a ping-pong echo + hi-hat + soft kick. A raylib audio
+                  stream (44100 Hz, f32 stereo) refilled from game_update (music_frame), no callback thread. N turns
+                  it on and off, saved in cache/music.txt. Silent when there is no audio device. Notes and levels are
+                  ours.
   presence.odin   (author andrei) other cars on the map, peer-to-peer (Lars: "geen relay service, gossiping"): every
                   PRESENCE_S 2 s the game signs its position (Presence, 136 bytes, ed25519 identity) and the node swaps
                   the fresh positions it knows with up to 8 recently synced peers (op 'Q'), so they spread over several
