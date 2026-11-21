@@ -66,7 +66,7 @@ LARS: ROUTING + NAVIGATION
 [ ] navigation state: next maneuver, distance, then-card, ETA, all derived from path index
 [ ] autopilot: follow route (lookahead point), outputs Controls struct
 [ ] switch manual <-> autopilot
-[ ] bench: one route < 10 ms, three modes < 30 ms
+[~] lars: bench: one route < 10 ms, three modes < 30 ms (waiting: #66)
 
 DARIO: SHIP + CONTROLS
 [x] Windows smoke test: compile.bat debug, run build\drift.exe from the repo root, rebuild once while it runs
