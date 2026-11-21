@@ -83,6 +83,7 @@ World :: struct {
 	towns:           Tile_Cache,
 	// Cruise control while steering yourself: the throttle the ship holds, -1 = take the current speed first.
 	cruise:          f32,
+	cruise_on_road:  bool,
 	car_anim:        Car_Anim,
 	// Other cars from the presence gossip (presence.odin), copied from the node table every PRESENCE_COPY_S.
 	others:          [PRESENCE_SLOTS]Other_Car,

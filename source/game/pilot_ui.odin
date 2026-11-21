@@ -66,9 +66,12 @@ CRUISE_RATE :: 0.35
 
 cruise_throttle :: proc(w: ^World, input, dt: f32) -> f32 {
 	s := &w.ship
-	if w.cruise < 0 {
+	// The road and the air have their own top speed: on landing or take-off the held throttle is taken from the
+	// speed again, so the car does not jump to the other top speed.
+	if w.cruise < 0 || s.on_road != w.cruise_on_road {
 		top: f32 = s.on_road ? ROAD_MAX_SPEED : SHIP_MAX_SPEED
 		w.cruise = clamp(s.speed / top, 0, 1)
+		w.cruise_on_road = s.on_road
 	}
 	w.cruise = clamp(w.cruise + input * CRUISE_RATE * dt, 0, 1)
 	return w.cruise
