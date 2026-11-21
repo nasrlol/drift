@@ -276,7 +276,8 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 		thrust = c.throttle * FREE_ACCEL
 	} else if c.throttle < 0 {
 		// Brake while moving forward, then reverse slowly.
-		thrust = along > 0.5 ? c.throttle * FREE_BRAKE : (along > -FREE_REVERSE_MS ? c.throttle * FREE_ACCEL * 0.4 : 0)
+		thrust =
+			along > 0.5 ? c.throttle * FREE_BRAKE : (along > -FREE_REVERSE_MS ? c.throttle * FREE_ACCEL * 0.4 : 0)
 	}
 	a_along := thrust - FREE_DRAG * along * abs(along)
 	a_across := -FREE_GRIP * across - FREE_DRAG * across * abs(across)

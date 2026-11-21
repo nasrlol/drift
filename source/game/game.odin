@@ -510,7 +510,15 @@ game_update :: proc(memory: rawptr) -> bool {
 				target := w.cam.view.target.xy
 				view_km := w.cam.screen.x / max(w.cam.px_per_km, 1e-3)
 				look := buildings_map_look(w)
-				buildings_draw(w, fog, ease_in_out(grow), target, BUILDINGS_CULL_KM + view_km, rl.Matrix(1), look)
+				buildings_draw(
+					w,
+					fog,
+					ease_in_out(grow),
+					target,
+					BUILDINGS_CULL_KM + view_km,
+					rl.Matrix(1),
+					look,
+				)
 				towns_draw(w, target, TOWN_REACH_KM, rl.Matrix(1))
 				nature_draw(w, target, TREE_REACH_KM, rl.Matrix(1))
 			}
