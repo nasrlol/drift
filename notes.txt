@@ -131,7 +131,8 @@ compile.bat same modes on Windows (no mold, raylib.dll copied to build\, random 
   so a loaded pdb never blocks the next build, host not rebuilt while drift.exe runs,
   release uses -subsystem:windows). format.bat / check.bat run the .sh versions with Git for Windows sh.
   all modes: -vet -vet-cast -strict-style -warnings-as-errors -linker:mold, prints build time
-  debug:   host + game.so, -debug -o:none -use-separate-modules (~900 ms for both)
+  debug:   host + game.so, -debug -o:none -use-separate-modules (~900 ms for both, 2026-11-21 after
+           profiler / headless / log / dump: 874-917 ms, main before them 767-875 ms; limit 2 s)
            game.so uses raylib as a shared lib (RAYLIB_SHARED), copied to build/, rpath $ORIGIN,
            so raylib state survives reloads. Outputs are written to a temp name, then moved.
   profile: source/release, -debug -o:speed, single exe (~2 s)
