@@ -148,6 +148,10 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Replay: every step the controls are packed to Control_Step ([3]i8, 3 bytes) and the ship steps with the
                   unpacked value, so the recording reproduces the path exactly. w.replay.steps is 60 * 3600 steps (1 h,
                   648 KB) from the perm arena, w.replay.count says how many are filled, recording stops when full.
+                  Bench (profile build, 2026-11-21, Windows, height_at still a stub): ship_step min 59 / avg 65 / max 319 ns
+                  against the 1 us budget. It is ~2 sin/cos, wind_at (8 ns), 15 hub distances and 8 zone checks. The tower
+                  height_at is only called for a hub that is within 30 m horizontally, not for all 15, because the real
+                  height_at will cost more than the stub.
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
                   R/F climb up / down, gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
