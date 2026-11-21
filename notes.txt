@@ -65,6 +65,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   step and nothing is recorded.
                   Drive mode: Controls go to ship_step and the replay record, the camera sits on the ship, only the
                   wheel zooms. The ship is drawn as an 8 px red triangle pointing along its heading in both modes.
+                  Start: game_init puts the ship on the Brussels tower (hub named "Bruxelles - Brussel", looked up
+                  by name since hub ids follow the bake order), alt = height_at + HUB_TOWER_M, heading north.
+                  Only on a fresh World, a hot reload keeps the ship where it is. Missing hub: log line, map corner.
                   Map drawing: each Map_Line is one rl.DrawLineStrip
                   straight from w.m.points ([2]f32 km has the rl.Vector2 layout, no copy, no allocation).
                   Colors: border dark grey, rivers blue, motorways orange. 10872 strips, 36k points per frame.
