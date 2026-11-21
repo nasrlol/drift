@@ -16,6 +16,7 @@ POINTS :: 4096 // samples per round for the per-point systems, 48 KB of position
 ROUTE_BUDGET_MS :: 10
 THREE_MODES_BUDGET_MS :: 30
 WEATHER_LOAD_BUDGET_MS :: 5
+SHIP_STEP_BUDGET_MS :: 0.001
 
 BENCH_SNAPSHOT :: "test/data/calm.snap"
 
@@ -61,7 +62,7 @@ main :: proc() {
 	for &p in pts do p = {rnd(&seed) * 285, rnd(&seed) * 229}
 
 	sink: f32
-	wind, gust, cloud, height, route, three, load, load_map: Stat
+	wind, gust, cloud, height, ship, route, three, load, load_map: Stat
 	for round in 0 ..< ROUNDS {
 		layer, hour := round % game.WIND_LAYERS, round % game.FORECAST_HOURS
 
@@ -83,6 +84,20 @@ main :: proc() {
 		t = time.tick_now()
 		for p in pts do sink += game.height_at(w, p.x, p.y)
 		add(&height, t, POINTS)
+
+		// Varied controls and positions so the clamps, the wind layers and the dock test all run.
+		w.ship = {
+			pos = pts[round % POINTS],
+			alt = 300,
+		}
+		t = time.tick_now()
+		for i in 0 ..< POINTS {
+			c := game.Controls{f32(i % 7) / 3 - 1, f32(i % 5) / 2 - 1, f32(i % 3) - 1}
+			game.ship_step(w, c, game.SIM_DT)
+			w.tick += 1
+		}
+		add(&ship, t, POINTS)
+		sink += w.ship.pos.x + w.ship.alt
 
 		a := w.m.hubs[round % w.m.hub_count].pos
 		b := w.m.hubs[(round * 7 + 3) % w.m.hub_count].pos
@@ -127,6 +142,7 @@ main :: proc() {
 	report("gust_at", gust)
 	report("cloud_at", cloud)
 	report("height_at", height)
+	ship_ms := report("ship_step", ship)
 	route_ms := report("route", route)
 	three_ms := report("route, three modes", three)
 	load_ms := report("weather snapshot load", load)
@@ -147,6 +163,7 @@ main :: proc() {
 		name:     string,
 		avg, max: f64,
 	} {
+		{"ship_step", ship_ms, SHIP_STEP_BUDGET_MS},
 		{"route", route_ms, ROUTE_BUDGET_MS},
 		{"route, three modes", three_ms, THREE_MODES_BUDGET_MS},
 		{"weather snapshot load", load_ms, WEATHER_LOAD_BUDGET_MS},
