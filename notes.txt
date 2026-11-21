@@ -333,7 +333,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Writes out only if every value is valid.
                   Snapshot cycle (state in w.fetch, zero = fetch on the first update):
                     game_init -> weather_load_snapshot(w, path): reads cache/weather.snap, checks size, magic, version,
-                      sha256 and weather_valid. Bad or missing file: weather stays zero, fetch right away.
+                      sha256 and weather_valid. Bad or missing file: weather_load_fallback uses the snapshot
+                      embedded with #load (assets/weather_fallback.snap, fetched on Lars's Mac 2026-11-21, 22736
+                      bytes, sha256 7761b8c7...aaa3690), its old fetched_at makes the first poll fetch right away.
                     game_update -> weather_poll: every frame, starts a thread when now >= next (15 min after
                       the snapshot was fetched, 5 min after a failure). The thread fetches, hashes and writes
                       the file (temp + rename), all allocation in w.fetch.mem. When is_done, the frame loop

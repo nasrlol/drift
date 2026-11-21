@@ -120,7 +120,7 @@ game_init :: proc() -> rawptr {
 	}
 	if !start_found do logf(w, "ship", "no hub named %q in belgium.bin, the ship starts at the map corner", START_HUB)
 
-	weather_load_snapshot(w, SNAPSHOT_PATH)
+	if !weather_load_snapshot(w, SNAPSHOT_PATH) do weather_load_fallback(w)
 	identity_load_or_create(w)
 	if rl.IsWindowReady() do airship_build(&w.airship)
 	w.replay.steps = make([]Control_Step, REPLAY_MAX_STEPS, virtual.arena_allocator(&w.perm))

@@ -199,7 +199,7 @@ EXTRA (future, not now: C API so the core can be ported to Swift / Kotlin apps)
 
 RELEASE (single executable)
 [x] release build compiles the game into the exe, no hot reload dll
-[ ] embed a fallback weather snapshot with #load so the exe runs offline on first start
+[x] embed a fallback weather snapshot with #load so the exe runs offline on first start
 [x] weather cache in the user's data folder, not next to the exe
     source/release: the exe runs from os.user_data_dir()/Drift, so all of cache/ goes there
 [ ] curl: link statically or use the OS HTTP API, so the exe has no libcurl dependency

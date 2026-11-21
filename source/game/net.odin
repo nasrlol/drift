@@ -261,6 +261,32 @@ weather_load_snapshot :: proc(w: ^World, path: string) -> bool {
 	return true
 }
 
+// First start without a cached snapshot (or a corrupt one): the snapshot embedded in the exe, so the game has
+// weather offline. Its fetched_at is old, so the first poll fetches a fresh one when the network is there.
+// Open-Meteo forecast data (CC BY 4.0), fetched with this game, see notes.txt.
+WEATHER_FALLBACK :: #load("../../assets/weather_fallback.snap")
+
+weather_load_fallback :: proc(w: ^World) -> bool {
+	// Copied into a Snapshot first: snapshot_check needs 8 byte aligned bytes.
+	buf: Snapshot
+	if len(WEATHER_FALLBACK) != size_of(Snapshot) {
+		logf(w, "weather", "embedded fallback snapshot has the wrong size, no weather until a fetch")
+		return false
+	}
+	mem.copy(&buf, raw_data(WEATHER_FALLBACK), size_of(Snapshot))
+	snap, why := snapshot_check(mem.ptr_to_bytes(&buf))
+	if snap == nil {
+		logf(w, "weather", "embedded fallback snapshot: %s", why)
+		return false
+	}
+	w.weather = snap.weather
+	w.weather_hash = snap.header.hash
+	w.fetch.fetched_at = snap.header.fetched_at
+	w.fetch.next = snap.header.fetched_at + REFRESH_S
+	logf(w, "weather", "using the embedded fallback snapshot, start %d", w.weather.start)
+	return true
+}
+
 // The one check for snapshot bytes, from disk or from a peer: size, magic, version, the sha256 in the
 // header against the weather bytes, value ranges. data must be 8 byte aligned (arena memory or a Snapshot).
 // Returns nil and a constant reason when anything is off.
