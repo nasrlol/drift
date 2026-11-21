@@ -177,6 +177,12 @@ license (SIL OFL 1.1) next to it. Raw downloads in assets/raw/fonts (not in git)
     Italic 5983a032...06599439, license Figtree-OFL.txt
   Roboto Mono v3.001 (github.com/googlefonts/RobotoMono, tag v3.001, fonts/ttf/): Regular af0bff75...1be17cb4,
     Bold 3ecf35e5...aa95c4db (no static SemiBold exists, Font.Mono_600 uses Bold), license RobotoMono-OFL.txt
+  Material Symbols Rounded (Apache 2.0, license MaterialSymbolsRounded-LICENSE.txt), 2026-11-21: a subset from
+    the Google Fonts css2 API (family Material Symbols Rounded, FILL 1, wght 500, opsz 24, icon_names = the 38
+    icons of ui.odin ICON_CODEPOINTS), file MaterialSymbolsRounded-Filled.ttf, 12756 bytes, sha256 f6fc79a3...
+    1ed1f092fc5e (full f6fc79a366be9647afa5f24e0a624388430573edc1ffccbea1277ed1f092fc5e). The full font is 3.7 MB,
+    over the 1 MB check. The subset keeps the legacy codepoints for a few icons (schedule 0xe8b5, location_on
+    0xe0c8, warning 0xe002), see ICON_CODEPOINTS. Tower and Logo are drawn with shapes, they are not icons.
 
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
@@ -250,14 +256,43 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   ui.odin         Fonts: Font enum (Figtree 500/600/700/800 + italic 400, Roboto 400/500/700, Mono 400/600),
                   font_get rasterizes each (font, px) pair on first use (codepoints 32..255, up to 64 pairs in
                   w.fonts), fonts_unload in game_shutdown. ui_text(w, pos, text, font, px, color) draws at the
-                  top-left pos, ui_text_size measures. The OSM credit and the toolbar use them.
+                  top-left pos, ui_text_size measures. Font.Icons is the Material Symbols subset (see FONT),
+                  ui_icon(w, icon, centre, px, color) draws one Icon.
                   Immediate mode UI, our own (raygui needs a system library on Linux, it is not in the build).
-                  A widget is a proc call that draws itself and returns what happened this frame; nothing is kept
-                  between frames. ui_button(rect, text, on, pal) -> clicked: on = button_on color, mouse over =
-                  button_hot, default font 10 px. Toolbar top right (TOOLBAR_W x TOOLBAR_H, laid out in
-                  game_update before the camera so the mouse does not pan or zoom the map under it, drawn after the
-                  labels): Map / Drive, sim speeds (names from SIM_SPEEDS), Day / Night. Keys M, 1-4, T still work.
-                  A click changes the state after the frame's update, so it shows from the next frame.
+                  A widget is a proc call that draws itself and returns what happened this frame; only w.ui (focus,
+                  last frame's blocks and popup, toast, toggle animations) is kept. ui_begin once per frame.
+                  ui_widget(w, r) -> (id, hot, fired): ids count up per frame, Tab / Shift-Tab move the focus,
+                  Enter / Space fire the focused widget, hit areas grow to 44 px. ui_block(w, r) marks UI that keeps
+                  the mouse off the map next frame (ui_mouse_captured), w.ui.popup takes the clicks inside it.
+                  Kit: ui_card, ui_round_button, ui_pill_button, ui_chip, ui_toggle, ui_segment, ui_stat_chip,
+                  ui_input, ui_zoom_pill, ui_tile, ui_toast (1.6 s), ui_focus_ring, round_rect.
+  camera.odin     (Dario) Cam in World: pose {pan, zoom, yaw, tilt}, a perspective Camera3D over the ground plane
+                  (world = x km, y km, -alt km, FOV 45). Modes Free / Chase / Preview, glides with ease-out.
+                  cam_to_screen(w, pos) is how everything projects; cam_ground_at(w, px) is the inverse on z = 0.
+                  cam_fit (0.8 s), cam_chase (53 deg tilt behind the ship, 1.2 s dive), cam_preview (flies the
+                  route in 9 s with route_sample), cam_recentre, cam_overview, cam_north, cam_zoom_by (0.6 s glide).
+  nav.odin        (Lars, simulation, no raylib) plan_routes -> w.routes, summaries (time, km, net kWh, wind, tag,
+                  why), maneuvers (spec "Extractie", road names from map_nearest_name), nav_start / nav_update
+                  (path index window, banner, Then, ETA, warning, reroute after 190 m off for 1.2 s x sim speed),
+                  gust_report (260 m zone 700 m ahead + reroute), nav_autopilot -> Controls.
+  nav_ui.odin     (Lars) route strips, time bubbles, start ring + destination pin, banner + Then, road sign,
+                  pill under the ship (layer, or the road name while driving), warning pill, sheet,
+                  carpool_draw_partner.
+  pilot_ui.odin   (Dario) button column, speed circle, Re-centre, self-fly + Exit / Done, sim speed chips,
+                  3 x 3 control pad + key card. No sound button (speech is NOT DOING).
+  plan_ui.odin    (Andrei) plan panel (cards A and B, hub search, departure list, route rows, wind note,
+                  Preview / Start), hub menu on the map, map buttons, layers panel + legend, layers_draw_ground.
+  labels.odin     (nasr) river names and motorway shields: places picked once along the lines (labels_build),
+                  projected and culled against each other and the hub names every frame.
+  road.odin       (Lars, simulation, no raylib) the airship as a flying car on the road graph (#67, #68 B):
+                  road_try_land (descending at the lowest flying height within ROAD_LAND_KM = 250 m of a road;
+                  the 250 m is ours, not from the spec), road_step (edge + km along it, one-way respected, turn
+                  input picks the edge at a junction, climb takes off), road_nearest_edge, road_at.
+  carpool.odin    (Andrei) carpool_offer_make (energy = net kWh with the current snapshot, its hash in the offer),
+                  carpool_verify (recompute with the same snapshot, VERIFY_TOLERANCE 1 %), carpool_match (weather
+                  cell + forecast hour filter, then four router runs for the detour), carpool_split (passenger:
+                  seats / (seats + 1) of the shared leg + the whole detour), carpool_reputation (one review per
+                  side of an accepted trip), carpool_frame (live position once a second, partner on the map).
   map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
                   load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
                   Hubs are copied into a fixed array w.m.hubs[:w.m.hub_count], hub id = index.
@@ -435,6 +470,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   hub = index into w.m.hubs, mode fastest / greenest / calmest, hour 0..8.
                   "no_fly <x km> <y km> <radius km> <ceiling m>" fills the next free slot of w.no_fly.
                   "gust <x km> <y km> <radius km>" fills the next free slot of w.gust_zones.
+                  "plan <from> <to> <hour>" prints the three summaries and their maneuvers (nav.odin).
+                  "fly <mode> <max s> [gust after s]" flies the autopilot at 1x, prints new maneuvers, reroutes and
+                  the arrival. "drive <x> <y> <s> <turn>" lands on the nearest road and drives (road.odin).
                   Output per route: "route 6 -> 11 fastest hour 0: 2 points, 104.812 km", then x y alt per point.
                   --dump appends the state dump after the result.
                   Log: logf(w, system, format, args) prints "[route t=1234] message" to stderr, t = w.tick.
@@ -678,7 +716,7 @@ World memory
   w.weather is a fixed-size Weather inside World (22.7 KB), so it needs no weather arena.
   game_update sets context.allocator = perm and context.temp_allocator = frame.
 
-DESIGN INTERFACES (planned, not built yet; from docs/drift-design.pdf, the todo items under "design")
+DESIGN INTERFACES (built on lars/all-todos; from docs/drift-design.pdf, the todo items under "design")
 The look and feel is docs/drift-design.pdf (Dutch): screens, sizes, colors, fonts, motion. Only the look:
 names, values and logic come from the code on main. Place, road and river names are the real ones in
 belgium.bin (never the doc's examples), wind layers are LAYER_ALT, zoom is ZOOM_MIN / MAX, and doc features
@@ -707,14 +745,14 @@ Base (nasr)
   palette(w) -> ^Palette               token fields as in the design: surface, surface_2, surface_3, text, text_2,
                                        line, accent, accent_strong, green, banner, banner_2, red, warning,
                                        reroute, arrived, sheet, chip, bubble, bubble_text, pill + map colors
-  Font :: enum u8 {Figtree_500, Figtree_600, Figtree_700, Figtree_800, Roboto_400, Roboto_500, Roboto_700,
-                   Mono_400, Mono_600}
+  Font :: enum u8 {Figtree_500, Figtree_600, Figtree_700, Figtree_800, Figtree_Italic_400, Roboto_400,
+                   Roboto_500, Roboto_700, Mono_400, Mono_600, Icons}
   Icon :: enum u8                      the icon table of the design (leaf, bolt, waves, tower, ...) + maneuvers
   ui_text(w, pos: [2]f32, text: string, font: Font, px: f32, color: rl.Color)
   ui_icon(w, icon: Icon, centre: [2]f32, px: f32, color: rl.Color)
   ui_card(w, r: rl.Rectangle)                                       18 px corners + shadow
   ui_round_button(w, r, icon: Icon, on: bool) -> bool               48 px map, 64 px nav
-  ui_pill_button(w, r, text: string, kind: Pill_Kind) -> bool      Primary / Secondary / Danger
+  ui_pill_button(w, r, text: string, kind: Pill_Kind, icon := .Close, has_icon := false) -> bool
   ui_chip(w, r, icon: Icon, top, bottom: string, on: bool) -> bool
   ui_toggle(w, r, on: ^bool) -> bool
   ui_segment(w, r, labels: []string, sel: ^int) -> bool
@@ -729,10 +767,11 @@ Camera (Dario)
 
 Routes and navigation (Lars)
   plan_routes(w, from, to: int, hour: int)                          all three modes into w.routes
-  Planned_Route :: struct {path: [][3]f32, ok: bool, sum: Route_Summary, maneuvers: []Maneuver}
+  Planned_Route :: struct {path: [][3]f32, ok: bool, sum: Route_Summary, maneuvers: []Maneuver,
+                           times, dist: []f32}                     all in w.plan_mem until the next plan
   Route_Summary :: struct {minutes, km, kmh, net_kwh, wind_ms: f32, tag: Route_Tag, why: [64]u8}
   route_sample(w, mode: Route_Mode, t: f32) -> (pos: [3]f32, heading: f32)   t 0..1 along the path
-  Maneuver :: struct {kind: Maneuver_Kind, path_index: int, text: [48]u8, sub: [48]u8, road: [32]u8}
+  Maneuver :: struct {kind: Maneuver_Kind, path_index: int, s_km: f32, text: [48]u8, sub: [48]u8, road: [64]u8}
   Maneuver_Kind :: enum u8 {Straight, Slight_Left, Slight_Right, Left, Right, Sharp_Left, Sharp_Right,
                             Climb, Descend, Depart, Arrive}
   Nav :: struct {mode: Route_Mode, next: int (maneuver index), next_m: f32, then_visible: bool,
@@ -743,12 +782,14 @@ Routes and navigation (Lars)
 
 Plan screen and weather (Andrei)
   plan_panel_rect(w) -> rl.Rectangle                                for cam_fit (routes go right of it)
-  Layers :: struct {hide_wind, hide_gusts, hide_no_fly, hide_solar: bool, wind_layer: int (index in LAYER_ALT)}
+  Layers :: struct {hide_wind, hide_gusts, hide_no_fly, hide_solar, terrain: bool, wind_layer: int}
+                                                                    terrain = the "3D terrain" map type (hillshade)
   layers_draw_ground(w)                                             gust coloring + no-fly hatching
   wind_note(w, mode: Route_Mode, out: []u8) -> string               one sentence about the wind on the route
 
 Draw order (game.odin, nasr keeps the list; the design's "Tekenvolgorde")
-  1 map fills (nasr)  2 layers_draw_ground (Andrei)  3 road casings, fills (nasr)  4 buildings (nasr)
+  1 map fills: land use areas, hillshade (nasr)  2 layers_draw_ground (Andrei)  3 road casings, fills, wind
+  (nasr)  4 buildings (nasr, not baked: #76)
   5 routes (Lars)  6 airship shadow + airship (Dario)  7 labels (nasr), bubbles, road sign, pill (Lars)
   8 screen UI: Plan -> plan_ui (Andrei); Navigate -> nav_ui (Lars) + pilot_ui (Dario); layers panel (Andrei);
     toasts last (nasr)
