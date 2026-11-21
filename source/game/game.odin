@@ -1,6 +1,7 @@
 // author: nasr
 package game
 
+import "core:crypto/ed25519"
 import "core:fmt"
 import "core:mem/virtual"
 import curl "vendor:curl"
@@ -19,6 +20,8 @@ World :: struct {
 	// sha256 of weather, identifies the snapshot (carpool offers will carry it)
 	weather_hash: [32]u8,
 	fetch:        Fetch,
+	identity:     ed25519.Private_Key, // zero until identity_load_or_create succeeds
+	identity_pub: [32]u8,
 	tick:         u64,
 	accum:        f64,
 }
@@ -46,6 +49,7 @@ game_init :: proc() -> rawptr {
 	}
 	game_hot_reloaded(w)
 	weather_load_snapshot(w)
+	identity_load_or_create(w)
 	fmt.printfln("[map] %d lines, %d points, %d cities", len(w.m.lines), len(w.m.points), len(w.m.cities))
 	return w
 }

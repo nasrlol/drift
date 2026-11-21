@@ -74,6 +74,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                       because the thread runs code from the library that is about to be unloaded.
                   cache/weather.snap: Snapshot_Header (magic "DRWS", version 1, fetched_at unix s,
                   sha256 of the Weather bytes) + raw Weather, 22736 bytes. w.weather_hash = that sha256.
+                  Identity: game_init -> identity_load_or_create. cache/identity.key holds the 32 byte ed25519
+                    seed (owner-only permissions). Missing: generate from the system entropy source and save.
+                    Present but wrong size or invalid: logged and left alone (it is the user's reputation),
+                    w.identity stays zero and network features stay off. w.identity_pub = public key,
+                    logged as the first 8 bytes in hex. Moves to the user data folder with the release item.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hubs = map cities for now.
                   Stub: straight line. Path lives in w.route_mem until the next call.

@@ -3,6 +3,8 @@ package game
 
 import "base:runtime"
 import "core:c"
+import "core:crypto"
+import "core:crypto/ed25519"
 import "core:crypto/hash"
 import "core:encoding/json"
 import "core:fmt"
@@ -43,6 +45,7 @@ MAP_LON0 :: 2.38
 MAP_LAT0 :: 51.56
 KM_PER_DEG :: 111.32
 
+IDENTITY_PATH :: "cache/identity.key"
 SNAPSHOT_PATH :: "cache/weather.snap"
 SNAPSHOT_MAGIC :: 0x53575244 // "DRWS"
 SNAPSHOT_VERSION :: 1
@@ -339,4 +342,59 @@ weather_stop :: proc(w: ^World) {
 		fmt.printfln("[weather] fetch stopped (reload or shutdown), waited %v", time.tick_since(t))
 	}
 	virtual.arena_free_all(&f.mem)
+}
+
+// Called once from game_init. The 32 byte ed25519 seed in IDENTITY_PATH is the user: offers and reviews
+// are signed with it, so a file that exists but is bad is reported and left alone, never replaced.
+// Without an identity w.identity stays zero and network features stay off.
+identity_load_or_create :: proc(w: ^World) {
+	seed: [ed25519.PRIVATE_KEY_SIZE]u8
+	defer crypto.zero_explicit(&seed, size_of(seed))
+
+	if os.exists(IDENTITY_PATH) {
+		file, err := os.open(IDENTITY_PATH)
+		if err != nil {
+			fmt.eprintfln("[net] cannot open %s: %v, network off", IDENTITY_PATH, err)
+			return
+		}
+		buf: [ed25519.PRIVATE_KEY_SIZE + 1]u8
+		n, read_err := os.read(file, buf[:])
+		os.close(file)
+		copy(seed[:], buf[:])
+		crypto.zero_explicit(&buf, size_of(buf))
+		if read_err != nil || n != ed25519.PRIVATE_KEY_SIZE {
+			fmt.eprintfln(
+				"[net] %s: read %d bytes (%v), want %d, network off",
+				IDENTITY_PATH,
+				n,
+				read_err,
+				ed25519.PRIVATE_KEY_SIZE,
+			)
+			return
+		}
+		if !ed25519.private_key_set_bytes(&w.identity, seed[:]) {
+			fmt.eprintfln("[net] %s is not a valid ed25519 key, network off", IDENTITY_PATH)
+			return
+		}
+	} else {
+		if !ed25519.private_key_generate(&w.identity) {
+			fmt.eprintln("[net] no system entropy source, cannot create a key, network off")
+			return
+		}
+		ed25519.private_key_bytes(&w.identity, seed[:])
+		if err := os.make_directory("cache"); err != nil && err != .Exist {
+			fmt.eprintln("[net] cannot create cache/:", err)
+		}
+		// A new temp file gets owner-only permissions, rename keeps them.
+		tmp := IDENTITY_PATH + ".tmp"
+		os.remove(tmp)
+		if err := os.write_entire_file(tmp, seed[:], {.Read_User, .Write_User}); err != nil {
+			fmt.eprintfln("[net] cannot write %s: %v, key only lives until exit", tmp, err)
+		} else if err = os.rename(tmp, IDENTITY_PATH); err != nil {
+			fmt.eprintfln("[net] cannot rename %s to %s: %v", tmp, IDENTITY_PATH, err)
+		}
+		fmt.printfln("[net] created a new identity in %s", IDENTITY_PATH)
+	}
+	ed25519.private_key_public_bytes(&w.identity, w.identity_pub[:])
+	fmt.printfln("[net] identity %x", string(w.identity_pub[:8]))
 }
