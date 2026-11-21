@@ -42,20 +42,22 @@ NASR: MAP + RENDERING + UI
 [ ] labels: collect into a flat array per frame (temp allocator), cull, draw in one pass
 [ ] immediate mode UI (raygui or our own), no retained widget tree
 [ ] A* scan animation: replay the expanded-node order Lars records, no extra work in the router
-design (docs/drift-design.pdf). Moved to the design split: plan screen + layers -> ANDREI,
+design (docs/drift-design.pdf). The doc is look and feel only: names, values and logic come from the code on
+main (real Belgian names from belgium.bin, LAYER_ALT, ZOOM_MIN / MAX, the NOT DOING list).
+Moved to the design split: plan screen + layers -> ANDREI,
 navigate screen -> LARS (banner, sheet) + DARIO (buttons, pad), route strips -> LARS.
 Shared signatures for all of this: notes.txt "DESIGN INTERFACES". nasr builds the base everyone uses:
 [ ] tokens: Palette fields = the design token table (surface .. pill), night + day values, night is zero
 [ ] map colors: land, city, park, farmland, marsh, beach, water, buildings, roads, sky per theme
-[ ] fonts: embed Figtree + Roboto Mono like Roboto (#47), ui_text(w, pos, text, Font, px, color)
-[ ] icons: one embedded icon atlas, ui_icon(w, Icon, centre, px, color) (waiting: icon set question)
+[ ] fonts: embed Figtree + Roboto Mono like Roboto (#47), ui_text(w, pos, text, Font, px, color) (waiting: same)
+[ ] icons: one embedded icon atlas, ui_icon(w, Icon, centre, px, color) (waiting: icon + font question)
 [ ] ui kit: card + shadow, round button 48 / 64, zoom pill, pill buttons, chip, toggle, segment, tile
 [ ] ui kit: input field, stat chip (with meter), toast 1.6 s, hover = surface-2, 2 px focus ring, 44 px hits
 [ ] screen state: w.screen (Plan / Navigate) + draw order in game.odin (see notes.txt), Esc -> Plan
-[ ] bake land use, road classes (motorway / main / street / track) and buildings into belgium.bin
+[ ] bake land use, road classes (motorway / main / street / track) and buildings from the same OSM extract
 [ ] map draw: road casings then fills, widths constant on screen (10 / 8 / 6 / 4 px + 2 px casing)
-[ ] map labels: area + water names, road shields, hub markers (26 px green + tower), start ring, dest pin
-[ ] place names: real Belgian or invented English ones as in the design (waiting: names question)
+[ ] map labels: city + river names, motorway shields (OSM ref, e.g. E40), hub markers, start ring, dest pin
+[ ] names: only the real names in belgium.bin (cities, hubs, rivers, motorways), never the doc's examples
 [ ] loading screen: night sky, 38 px cyan ring (0.9 s per turn), fades out in 0.4 s
 later:
 [ ] bake 3 detail levels + 10 km cell grid, draw only visible cells
@@ -82,16 +84,16 @@ design (route.odin, nav.odin = simulation; nav_ui.odin = drawing):
 [ ] three routes at once: plan_routes(w, from, to, hour) fills w.routes[mode] for all modes
 [ ] route summary per mode: minutes, km, km/h, net kWh, mean wind, tag, one-line "why" (after metrics)
 [ ] route_sample(w, mode, t) -> pos + heading along the path, t 0..1 (Dario's preview camera)
-[ ] maneuver kinds: straight, slight / normal / sharp left + right, climb, descend, jet, depart, arrive
-[ ] maneuver text: instruction + subline + road name (road names waiting: names question)
+[ ] maneuver kinds: straight, slight / normal / sharp left + right, climb, descend, depart, arrive
+[ ] maneuver text: instruction + subline + road name = nearest real motorway / river / hub in belgium.bin
 [ ] nav: then-tab only when the maneuver after next is within 700 m
 [ ] nav: banner state flying / rerouting (1.6 s) / arrived ("Docked at <hub>" + kWh used)
-[ ] nav: warning ahead from zones ("Quiet zone, climb above 260 m"), No_Fly_Zone gets a kind
+[ ] nav: warning ahead from w.no_fly / gust zones ("No-fly zone ahead, climb above <ceiling> m")
 [ ] nav: manual flag, nav_set_manual(w, on) (Dario's keys and button call it)
 [ ] nav_ui: route strips, chosen cyan 14 px, others grey 11 px, 2 px casing, part behind the ship hidden
 [ ] nav_ui: time bubbles on the part of each route furthest from the others, chosen on top, leaf on greenest
 [ ] nav_ui: banner (teal, 96 px icon column, 34 px text) + "Then" tab + rerouting / arrived colors
-[ ] nav_ui: road sign at the next maneuver, road pill 26 px under the ship
+[ ] nav_ui: road sign (real name) at the next maneuver, pill 26 px under the ship with the layer (LAYER_ALT)
 [ ] nav_ui: yellow warning pill 170 px from the top
 [ ] nav_ui: sheet: ETA (green + leaf), "km, arrive hh:mm", stat chips (speed, battery, used, solar, height)
 
@@ -124,7 +126,7 @@ design (airship.odin = model + drawing, camera.odin = camera, pilot_ui.odin = fl
 [ ] airship draw: heading + crab angle into the wind, bank in turns, props spin with speed, nav lights
 [ ] airship on the flat map: 70-90 px long, low above the ground, soft shadow ellipse
 [ ] camera.odin: move View + map / drive camera out of game.odin (after #57), Camera3D, zero = whole map
-[ ] camera: ease-out glide on zoom (0.6 s), zoom range 250 m .. 16 km, compass button resets north
+[ ] camera: ease-out glide on zoom (0.6 s) within ZOOM_MIN / ZOOM_MAX, compass button resets north
 [ ] cam_fit(w, min, max, screen rect): fit routes beside the plan panel in 0.8 s ease-out
 [ ] chase camera: 53 deg tilt behind the ship, turns with heading, small lag; Start dives in 1.2 s
 [ ] preview: camera flies the chosen route in 9 s, ease in + out (uses Lars's route_sample)
@@ -162,11 +164,10 @@ design (plan_ui.odin = plan screen + layers panel; weather.odin for the wind tex
 [ ] mode chips: icon + travel time + label for fastest / greenest / calmest, chosen = accent
 [ ] departure list "Leave now" .. "+8 h" -> w.plan.hour (forecast hour index)
 [ ] route rows: 4 px bar, time (green + leaf for greenest), km + speed, why, tag, net kWh + wind in mono
-[ ] wind note: wind_note(w, mode, out) -> one sentence from the forecast ("Sea breeze from the east...")
+[ ] wind note: wind_note(w, mode, out) -> one sentence from wind_at along the route ("Wind from the east...")
 [ ] action bar: Preview (Dario's camera) + Start (w.screen = Navigate, Lars's nav_start)
-[ ] layers panel 300 px: Map / 3D tiles, toggles wind, gusts, no-fly, solar, wind layer -> w.plan.layers
-[ ] wind layer labels in the segment (waiting: layer question, design 180 / 320 / 460 m, ours 300 / 550 / 800)
-[ ] ground layers: gust risk (soft orange -> red from gust_at), no-fly hatching (red reserve, orange quiet)
+[ ] layers panel 300 px: toggles wind, gusts, no-fly, solar + wind layer segment (LAYER_ALT labels)
+[ ] ground layers: gust risk (soft orange -> red from gust_at), no-fly hatching of w.no_fly (red)
 [ ] wind particles colored by speed (white < 6, mint < 10, yellow < 14 m/s, coral), 40% in plan, off in nav
 [ ] legend card: wind gradient 120 x 6 px, no-fly hatch, gust color
 
@@ -192,12 +193,6 @@ RELEASE (single executable)
 TOGETHER, AT THE END
 [ ] demo run: plan Brussels -> Gent, pick greenest, Preview, Start, report gust, reroute, dock, Done
 [ ] headless test case for that flow, plus a screenshot of both screens in night and day
-
-LATER (in the design doc, but on NOT DOING below, waiting: scope question)
-[ ] 3D terrain view: low-poly world, routes as glowing tubes with a curtain, 1 s crossfade
-[ ] 3D buildings and shadows, cloud shadows
-[ ] mobile layout below 760 px (plan panel as bottom sheet) and touch gestures
-[ ] spoken instructions, reduced motion setting
 
 NOT DOING
 film, procedural world, web stack, touch / responsive layout, speech, extruded buildings, shadows
