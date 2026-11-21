@@ -20,9 +20,8 @@ SIM_SPEEDS :: [4]f64{1, 5, 15, 40}
 ZOOM_MIN :: -1
 ZOOM_MAX :: 7
 WHEEL_ZOOM_STEP :: 0.25
-PAD_ZOOM_PER_S :: 2
-PAD_PAN_PX_PER_S :: 600
-PAD_DEADZONE :: 0.15
+ZOOM_PER_S :: 2
+PAN_PX_PER_S :: 600
 
 View :: struct {
 	pan:  [2]f32, // km from the map centre to the screen centre
@@ -48,7 +47,7 @@ World :: struct {
 	grid:         Grid,
 	controls:     Controls,
 	ship:         Ship,
-	free_camera:  bool, // zero = the camera follows the ship
+	drive_mode:   bool, // zero = map mode: Controls move the camera. Drive mode: Controls steer the ship
 	replay:       Replay,
 	no_fly:       [MAX_NO_FLY]No_Fly_Zone,
 	tick:         u64,
@@ -125,18 +124,21 @@ game_update :: proc(memory: rawptr) -> bool {
 	weather_poll(w)
 	w.controls = read_controls()
 
+	if rl.IsKeyPressed(.M) do w.drive_mode = !w.drive_mode
 	for key, i in ([?]rl.KeyboardKey{.ONE, .TWO, .THREE, .FOUR}) {
 		if rl.IsKeyPressed(key) do w.sim_speed = i
 	}
 	speeds := SIM_SPEEDS
 	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT) * speeds[w.sim_speed]
 	for w.accum >= SIM_DT {
-		step := controls_pack(w.controls)
-		if w.replay.count < len(w.replay.steps) {
-			w.replay.steps[w.replay.count] = step
-			w.replay.count += 1
+		if w.drive_mode {
+			step := controls_pack(w.controls)
+			if w.replay.count < len(w.replay.steps) {
+				w.replay.steps[w.replay.count] = step
+				w.replay.count += 1
+			}
+			ship_step(w, controls_unpack(step), SIM_DT)
 		}
-		ship_step(w, controls_unpack(step), SIM_DT)
 		w.tick += 1
 		w.accum -= SIM_DT
 	}
@@ -149,44 +151,33 @@ game_update :: proc(memory: rawptr) -> bool {
 	}
 
 	// km -> px: Camera2D zoom is px per km, w.view.pan is where the screen centre looks.
-	// Drag with the left mouse button or the right stick to pan, wheel or triggers to zoom.
-	// Zooming keeps the point under the cursor (wheel) or the screen centre (triggers) in place.
+	// Map mode: the ship controls move the camera, so keyboard and gamepad work the same way as when flying.
+	// Throttle / turn pan, climb zooms around the screen centre. The mouse stays camera only: drag pans, the
+	// wheel zooms keeping the point under the cursor in place.
+	// Drive mode (M toggles): the controls go to the ship and the camera sits on it, only the wheel zooms.
 	cam: rl.Camera2D
 	{
 		v := &w.view
+		c := w.controls
+		if w.drive_mode do c = {}
 		dt := rl.GetFrameTime()
 		centre := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())} / 2
 		fit := 0.95 * min(centre.x * 2 / MAP_W_KM, centre.y * 2 / MAP_H_KM)
 		z0 := fit * math.pow(f32(2), v.zoom)
 
-		if rl.IsMouseButtonDown(.LEFT) {
-			v.pan -= rl.GetMouseDelta() / z0
-			w.free_camera = true
-		}
-		zoom := rl.GetMouseWheelMove() * WHEEL_ZOOM_STEP
-		anchor := rl.GetMousePosition()
-		if rl.IsGamepadAvailable(0) {
-			stick := [2]f32{rl.GetGamepadAxisMovement(0, .RIGHT_X), rl.GetGamepadAxisMovement(0, .RIGHT_Y)}
-			if linalg.length(stick) > PAD_DEADZONE {
-				v.pan += stick * PAD_PAN_PX_PER_S * dt / z0
-				w.free_camera = true
-			}
-			// Triggers rest at -1 and read 0 before the first press, the difference is 0 in both cases.
-			pad_zoom :=
-				(rl.GetGamepadAxisMovement(0, .RIGHT_TRIGGER) -
-					rl.GetGamepadAxisMovement(0, .LEFT_TRIGGER)) /
-				2
-			if abs(pad_zoom) > PAD_DEADZONE {
-				zoom += pad_zoom * PAD_ZOOM_PER_S * dt
-				anchor = centre
-			}
+		v.pan += [2]f32{c.turn, -c.throttle} * PAN_PX_PER_S * dt / z0
+		if rl.IsMouseButtonDown(.LEFT) && !w.drive_mode do v.pan -= rl.GetMouseDelta() / z0
+		zoom := c.climb * ZOOM_PER_S * dt
+		anchor := centre
+		if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+			zoom += wheel * WHEEL_ZOOM_STEP
+			anchor = rl.GetMousePosition()
 		}
 		v.zoom = clamp(v.zoom + zoom, ZOOM_MIN, ZOOM_MAX)
 		z1 := fit * math.pow(f32(2), v.zoom)
 		v.pan += (anchor - centre) * (1 / z0 - 1 / z1)
 		half := [2]f32{MAP_W_KM, MAP_H_KM} / 2
-		if rl.IsKeyPressed(.C) || rl.IsGamepadButtonPressed(0, .RIGHT_THUMB) do w.free_camera = false
-		if !w.free_camera do v.pan = w.ship.pos - half
+		if w.drive_mode do v.pan = w.ship.pos - half
 		v.pan = linalg.clamp(v.pan, -half, half)
 
 		cam = {
