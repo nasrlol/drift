@@ -1,10 +1,11 @@
 package game
 
 MAP_MAGIC :: 0x54465244
-MAP_VERSION :: 2
+MAP_VERSION :: 3
 MAX_HUBS :: 32
 // Docking towers, top = ground + HUB_TOWER_M (spec).
 HUB_TOWER_M :: 58
+// BLOCKED: #73 one tertiary road point lies at x = 286.27 km, clip in the bake or not.
 // Every point in belgium.bin lies inside 0..MAP_W_KM x 0..MAP_H_KM (same extent as the routing grid).
 MAP_W_KM :: 286
 MAP_H_KM :: 237
@@ -25,9 +26,14 @@ Map_Hub :: struct {
 	pos:  [2]f32,
 	name: [32]u8,
 }
+// belgium.bin lists the lines in this order, so a bigger road is drawn on top of a smaller one.
 Map_Kind :: enum u32 {
 	Border,
 	River,
+	Tertiary,
+	Secondary,
+	Primary,
+	Trunk,
 	Motorway,
 }
 

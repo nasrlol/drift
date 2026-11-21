@@ -45,10 +45,21 @@ Palette :: struct {
 	text:       rl.Color,
 }
 
+// Road colors come from the map table in docs/drift-design.pdf: main road = trunk + primary, street =
+// secondary + tertiary. Day uses the casing color, the white fill would vanish on the background while lines
+// are 1 px without casings. Night uses the fill.
 PALETTES :: [Theme]Palette {
 	.Day = {
 		background = {245, 245, 245, 255},
-		lines = {.Border = {80, 80, 80, 255}, .River = {0, 121, 241, 255}, .Motorway = {255, 161, 0, 255}},
+		lines = {
+			.Border = {80, 80, 80, 255},
+			.River = {0, 121, 241, 255},
+			.Tertiary = {219, 214, 206, 255},
+			.Secondary = {219, 214, 206, 255},
+			.Primary = {211, 206, 197, 255},
+			.Trunk = {211, 206, 197, 255},
+			.Motorway = {255, 161, 0, 255},
+		},
 		city = {20, 20, 20, 255},
 		ship = {230, 41, 55, 255},
 		wind = {60, 90, 150, 255},
@@ -63,6 +74,10 @@ PALETTES :: [Theme]Palette {
 		lines = {
 			.Border = {150, 150, 165, 255},
 			.River = {70, 140, 230, 255},
+			.Tertiary = {79, 98, 153, 255},
+			.Secondary = {79, 98, 153, 255},
+			.Primary = {100, 118, 176, 255},
+			.Trunk = {100, 118, 176, 255},
 			.Motorway = {230, 150, 40, 255},
 		},
 		city = {235, 235, 235, 255},
@@ -106,7 +121,7 @@ Line_Meshes :: struct {
 WIND_COLOR :: len(Map_Kind)
 LINE_COLORS :: len(Map_Kind) + 1
 WIND_VERTICES :: WIND_PARTICLES * 6
-#assert(LINE_COLORS == 4) // colors[4] in LINE_VS
+#assert(LINE_COLORS == 8) // colors[8] in LINE_VS
 
 // Every vertex of a segment quad carries both ends: vertexPosition = A, vertexNormal.xy = B. Which corner it is
 // follows from gl_VertexID % 6: A-, B-, B+ and A-, B+, A+, counter-clockwise on screen whatever the direction
@@ -118,7 +133,7 @@ in vec3 vertexNormal;
 in vec4 vertexColor;
 uniform mat4 mvp;
 uniform vec2 screen;
-uniform vec4 colors[4];
+uniform vec4 colors[8];
 out vec4 fragColor;
 const float LINE_PX = 1.0;
 const float AT_B[6] = float[6](0.0, 1.0, 1.0, 0.0, 1.0, 0.0);

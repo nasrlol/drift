@@ -9,18 +9,32 @@ Tool: GDAL (ogr2ogr), installed with micromamba, no sudo:
   micromamba create -n gis -c conda-forge gdal
 
 tools/extract_map.sh
-  pulls 4 layers out of the .pbf into assets/geojson/ (1.7 MB total)
+  pulls 4 layers out of the .pbf into assets/geojson/
     border.geojson     Belgium outline (1 polygon)
     rivers.geojson     waterway=river
-    motorways.geojson  highway=motorway
+    roads.geojson      highway = motorway, trunk, primary, secondary, tertiary and their _link ramps (32 MB,
+                       not in git yet: #71). Keeps name + highway, the others keep only name.
     cities.geojson     place=city (15 points)
-  keeps only the name field, simplifies lines, 5 decimal coordinates
+  simplifies lines (0.0005 deg), 5 decimal coordinates
+  2026-11-21: GDAL 3.13.3 (conda-forge), run on a laptop because the cloud sessions can not reach geofabrik.
+  Road ways in the extract (simplified points / full points), #67:
+    motorway 7768 (16322 / 37007)    motorway_link 7405 (15813 / 50319)
+    trunk 8612 (17766 / 43913)       trunk_link 2781 (5684 / 16534)
+    primary 39821 (80804 / 202075)   primary_link 1317 (2641 / 6788)
+    secondary 46421 (96935 / 316274) secondary_link 954 (1922 / 5400)
+    tertiary 77127 (162674 / 581283) tertiary_link 584 (1170 / 3104)
   takes a few minutes (most of it on the border)
 
 tools/bake_map/  (odin run tools/bake_map, from repo root)
-  reads the geojson files, writes assets/belgium.bin (422 KB)
+  reads the geojson files, writes assets/belgium.bin (MAP_VERSION 3, 2.9 MB)
   projection: equirectangular, km, origin top-left (lon 2.38, lat 51.56), y down
-  10872 lines, 36364 points, 15 cities, 15 hubs
+  road kind from the highway tag, a _link counts as its road. Empty geometries (ways with missing nodes) are
+  skipped. Lines of one kind that meet end to end where no third line of that kind touches are joined into
+  one (OSM starts a new way at every tag change): 195894 -> 56385 lines, 421773 -> 282270 points,
+  5.7 -> 2.9 MB, the same 225885 segments. Then sorted by kind, so bigger roads are drawn on top.
+  56385 lines, 282270 points, 15 cities, 15 hubs. Bytes per kind (line entries + points):
+    border 31 KB, river 117 KB, tertiary 1096 KB (#72), secondary 659 KB, primary 544 KB, trunk 169 KB,
+    motorway 250 KB
 
 belgium.bin format (version 2, all little endian, 4-byte aligned)
   header  magic "DRFT", version, line_count, point_count, city_count, hub_count (6 x u32)
@@ -111,7 +125,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   vertexColor.a scales the alpha. The CPU arrays live in the frame arena; after UploadMesh the mesh
                   pointers are set to nil, so UnloadMesh only frees GPU buffers. Rebuilt after a hot reload (the
                   shader may have changed), unloaded in game_shutdown.
-                  Map: static, 25493 segments, 152958 vertices, 4.1 MB on the GPU, one DrawMesh.
+                  Map: static, 225885 segments, 1355310 vertices, 36.2 MB on the GPU, one DrawMesh (was 25493 /
+                  4.1 MB before the road classes of #67). Under Xvfb (software GL, CPU) a frame went 13 -> 48 ms;
+                  still to measure on a real GPU (budget 4 ms). "3 detail levels + 10 km cells" cuts it.
                   Wind: dynamic mesh, rewritten every frame with 3 UpdateMeshBuffer calls, one DrawMesh.
                   Measured 2026-11-21 (Asahi M2, 800 x 450, debug): map draw 8.6 ms with DrawLineStrip -> 0.55 ms
                   with the mesh. The first frame takes ~34 ms (mesh build).
