@@ -27,7 +27,7 @@ FIRST, TOGETHER (so everyone can work in parallel)
 
 NASR: MAP + RENDERING + UI
 [x] load belgium.bin and draw lines (km -> px: scale + offset)
-[ ] camera: pan + zoom to cursor (mouse wheel / controller)
+[x] camera: pan + zoom to cursor (mouse wheel / controller)
 [ ] draw cities + names
 [ ] "(c) OpenStreetMap contributors" on screen
 [ ] download Copernicus GLO-90 tiles N49-N51, E002-E006 (sea tiles 404, fine)
