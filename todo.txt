@@ -41,6 +41,8 @@ NASR: MAP + RENDERING + UI
 [x] build static map meshes once at startup, never per frame
 [x] day / night theme: one palette struct, swap the pointer (an index: a pointer dangles after reload)
 [x] wind particles: SoA arrays (x[], y[], age[]), one update loop, one draw batch, fixed count
+[x] everything stays over Belgium: wind, clouds, ground layers, camera centre, ship, air routes
+    (belgium mask in terrain.odin; 3 route tests updated with nasr's ok)
 [x] labels: collect into a flat array per frame (temp allocator), cull, draw in one pass
 [x] immediate mode UI (our own, raygui needs a system lib on Linux), no retained widget tree
 [x] A* scan animation: replay the expanded-node order Lars records, no extra work in the router

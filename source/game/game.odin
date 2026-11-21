@@ -38,6 +38,8 @@ World :: struct {
 	route_mem:       virtual.Arena,
 	frame:           virtual.Arena,
 	m:               Map,
+	world_map:       World_Map,
+	globe:           Globe_GPU,
 	weather:         Weather,
 	// sha256 of weather, identifies the snapshot (carpool offers will carry it)
 	weather_hash:    [32]u8,
@@ -51,6 +53,7 @@ World :: struct {
 	partner:         [3]f32, // the carpool partner's newest live position, km, km, m
 	partner_seen:    bool,
 	grid:            Grid,
+	belgium:         [HEIGHT_W * HEIGHT_H]u8, // inside-Belgium mask with depth, see belgium_build
 	controls:        Controls,
 	ship:            Ship,
 	screen:          Screen, // zero = plan: Controls move the camera. Navigate: Controls steer the ship
@@ -172,11 +175,17 @@ game_hot_reloaded :: proc(memory: rawptr) {
 		)
 	}
 	w.m = m
+	belgium_build(w)
+	wm, wm_ok := load_world()
+	if !wm_ok do logf(w, "map", "world.bin: wrong magic or version")
+	w.world_map = wm
+	globe_unload(&w.globe)
 	w.labels.built = false
 	w.grid.terrain_built = false
 	// The new library may change the shaders, so the mesh is rebuilt on the next frame.
 	line_meshes_unload(&w.line_meshes)
 	street_unload(&w.street)
+	globe_unload(&w.globe)
 }
 
 @(export)
@@ -292,7 +301,9 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	rl.BeginDrawing()
 	t = prof_begin()
-	rl.ClearBackground(pal.land)
+	space := pal.sky
+	bg := rl.ColorLerp(pal.land, space, clamp(-w.cam.pose.zoom, 0, 1))
+	rl.ClearBackground(bg)
 	if w.street.on do street_draw(w)
 	if !w.street.on {
 		lm := &w.line_meshes
@@ -387,9 +398,14 @@ game_update :: proc(memory: rawptr) -> bool {
 			for i in 0 ..< WIND_PARTICLES {
 				wp.age[i] += frame_dt
 				out := wp.x[i] < lo.x || wp.x[i] > hi.x || wp.y[i] < lo.y || wp.y[i] > hi.y
+				out ||= !belgium_inside(w, wp.x[i], wp.y[i])
 				if !wp.seeded || out || wp.age[i] >= WIND_LIFE_S {
-					wp.x[i] = lo.x + wind_rand(wp) * (hi.x - lo.x)
-					wp.y[i] = lo.y + wind_rand(wp) * (hi.y - lo.y)
+					// A few picks to land in Belgium. One that still misses has fade 0 and tries again next frame.
+					for _ in 0 ..< WIND_SPAWN_TRIES {
+						wp.x[i] = lo.x + wind_rand(wp) * (hi.x - lo.x)
+						wp.y[i] = lo.y + wind_rand(wp) * (hi.y - lo.y)
+						if belgium_inside(w, wp.x[i], wp.y[i]) do break
+					}
 					wp.age[i] = wp.seeded ? 0 : wind_rand(wp) * WIND_LIFE_S
 				}
 				v := wind_at(w, wp.x[i], wp.y[i], w.plan.layers.wind_layer, hour)
@@ -409,7 +425,7 @@ game_update :: proc(memory: rawptr) -> bool {
 				speed := linalg.length(v)
 				if speed < WIND_CALM_MS do continue
 				p := [2]f32{wp.x[i], wp.y[i]}
-				fade := math.sin(math.PI * wp.age[i] / WIND_LIFE_S) * alpha * map_edge_fade(p.x, p.y)
+				fade := math.sin(math.PI * wp.age[i] / WIND_LIFE_S) * alpha * belgium_fade(w, p.x, p.y)
 				tail := p - v * km_per_ms * WIND_TRAIL_S
 				k := speed < 6 ? 0 : speed < 10 ? 1 : speed < 14 ? 2 : 3
 				line_quad(pos, other, color, i * 6, p, tail, {u8(WIND_COLOR + k), 0, 0, u8(fade * 255)})
@@ -434,7 +450,9 @@ game_update :: proc(memory: rawptr) -> bool {
 
 		// Everything lies on the ground plane (z = 0): raylib's depth test passes equal depths, so later draws go on
 		// top. Triangles face the camera when they are counter-clockwise on the map (x east, y south).
+		globe_set_clip(w)
 		rl.BeginMode3D(w.cam.view)
+		globe_draw(w)
 
 		// Draw order 1: land use areas, water last.
 		areas_draw(w)
@@ -506,6 +524,13 @@ game_update :: proc(memory: rawptr) -> bool {
 			rl.SetShaderValue(sh, lm.loc_screen, &screen, .VEC2)
 			rl.SetShaderValue(sh, lm.loc_fog_c, &horizon, .VEC3)
 			rl.SetShaderValue(sh, lm.loc_fog_r, &fog, .VEC2)
+			{
+				bias := f32(0.5 * LINE_DEPTH_BIAS)
+				rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
+				rl.SetShaderValueV(sh, lm.loc_colors, &colors, .VEC4, LINE_COLORS)
+				rl.SetShaderValueV(sh, lm.loc_widths, &fill, .FLOAT, LINE_COLORS)
+				globe_draw_lines(w)
+			}
 			if lm.map_lines.vertexCount > 0 {
 				bias := f32(LINE_DEPTH_BIAS)
 				rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
@@ -547,6 +572,7 @@ game_update :: proc(memory: rawptr) -> bool {
 		rl.EndMode3D()
 
 		// Draw order 5 and 6: routes, then the airship (only while flying).
+		globe_labels_draw(w)
 		nav_draw_routes(w)
 		others_draw(w)
 		if w.screen == .Navigate do airship_draw(w)
@@ -709,6 +735,7 @@ game_shutdown :: proc(memory: rawptr) {
 	node_stop(w)
 	fonts_unload(w)
 	line_meshes_unload(&w.line_meshes)
+	globe_unload(&w.globe)
 	buildings_unload(&w.buildings)
 	clouds_unload(&w.cloud_sprites)
 	tiles_unload(&w.nature)

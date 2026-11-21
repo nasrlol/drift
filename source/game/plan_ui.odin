@@ -729,7 +729,7 @@ layers_draw_ground :: proc(w: ^World) {
 						shade := u8(clamp(cloud_at(w, x, y, hour), 0, 1) * 60)
 						if shade > col.a do col = {0, 0, 0, shade}
 					}
-					col.a = u8(f32(col.a) * map_edge_fade(x, y))
+					col.a = u8(f32(col.a) * belgium_fade(w, x, y))
 					colors[(gy * (GROUND_W - 1) + gx) * 6 + k] = {col.r, col.g, col.b, col.a}
 				}
 			}

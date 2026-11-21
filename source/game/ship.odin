@@ -162,6 +162,7 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	layer := clamp(int(math.round((s.alt - layers[0]) / (layers[1] - layers[0]))), 0, WIND_LAYERS - 1)
 	wind := wind_at(w, s.pos.x, s.pos.y, layer, hour)
 	air := [2]f32{math.sin(s.heading) * s.speed, -math.cos(s.heading) * s.speed}
+	prev := s.pos
 	s.pos += (air + wind) * dt / 1000
 	// The ship never leaves the map (Lars, 2026-11-21): it slides along the edge, wind included.
 	s.pos = linalg.clamp(
@@ -169,6 +170,17 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 		[2]f32{SHIP_EDGE_KM, SHIP_EDGE_KM},
 		[2]f32{MAP_W_KM, MAP_H_KM} - SHIP_EDGE_KM,
 	)
+	// Nor Belgium (nasr, 2026-11-21): at the border it keeps the axis that stays inside, so it slides along.
+	// A ship that is already outside moves freely, so it can come back.
+	if belgium_inside(w, prev.x, prev.y) && !belgium_inside(w, s.pos.x, s.pos.y) {
+		if belgium_inside(w, s.pos.x, prev.y) {
+			s.pos.y = prev.y
+		} else if belgium_inside(w, prev.x, s.pos.y) {
+			s.pos.x = prev.x
+		} else {
+			s.pos = prev
+		}
+	}
 
 	alt0 := s.alt
 	s.alt += c.climb * SHIP_CLIMB_RATE * dt

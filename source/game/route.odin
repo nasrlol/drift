@@ -296,11 +296,14 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 						ground = max(ground, height_at(w, sample.x, sample.y))
 					}
 				}
-				// The spec closes the outer ring of cells, so no path runs along the edge of the data.
-				edge := x == 0 || y == 0 || x == GRID_W - 1 || y == GRID_H - 1
+				// The spec closes the outer ring of cells, so no path runs along the edge of the data. Routes stay
+				// over Belgium too (nasr, 2026-11-21): a cell whose centre is abroad is closed on every layer.
+				centre := ([2]f32{f32(x), f32(y)} + 0.5) * GRID_CELL_KM
+				closed := x == 0 || y == 0 || x == GRID_W - 1 || y == GRID_H - 1
+				closed ||= !belgium_inside(w, centre.x, centre.y)
 				for layer in 0 ..< GRID_LAYERS {
 					// Written as !(free) so a NaN height blocks the cell.
-					if edge || !(ground + TERRAIN_MARGIN_M <= alt[layer]) {
+					if closed || !(ground + TERRAIN_MARGIN_M <= alt[layer]) {
 						n := grid_node({x, y, layer})
 						g.terrain[n >> 6] |= 1 << (u32(n) & 63)
 						count[layer] += 1
