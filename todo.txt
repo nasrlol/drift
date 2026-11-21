@@ -2,7 +2,8 @@ DONE
 [x] World struct, perm / route / frame arenas, fixed 60 Hz timestep
 [x] hot reload: source/host loads build/game.so, reloads on rebuild
 [x] release: source/release, one static exe
-[x] stubs: height_at (flat), wind_at (zero), route (straight line)
+[x] stubs: height_at, wind_at, gust_at, cloud_at, route (signatures and units in notes.txt)
+[x] Windows: compile.bat / format.bat / check.bat, Windows CI job
 [x] AGENTS.md, README.md, check.sh, CODEOWNERS, pinned Odin dev-2026-11a in CI
 [x] build modes debug / profile / release, mold linker, build time
 [x] ols.json, odinfmt.json, .editorconfig, .gitignore, .gitattributes
@@ -13,7 +14,6 @@ DONE
 [x] bake geojson -> belgium.bin
 
 FIRST, TOGETHER (so everyone can work in parallel)
-[ ] agree on the stub signatures in source/game (height_at, wind_at, route), change them now or never
 [ ] weather arena in World (when the snapshot loader exists)
 [ ] in-app profiler: timed blocks per system, on-screen overlay in debug builds
     (frame ms, update / draw split, route ms, weather load ms, arena usage, last 120 frames graph)

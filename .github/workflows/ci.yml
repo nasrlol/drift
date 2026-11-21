@@ -59,3 +59,21 @@ jobs:
           if ls test/*.odin >/dev/null 2>&1; then
             odin run test -out:build/test
           fi
+
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: laytan/setup-odin@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release: dev-2026-11a
+
+      - name: Build debug
+        shell: cmd
+        run: compile.bat debug
+
+      - name: Build release
+        shell: cmd
+        run: compile.bat release

@@ -33,11 +33,15 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing
   map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
                   load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
-  terrain.odin    height_at(w, x, y) -> m. Stub: returns 0
-  weather.odin    wind_at(w, x, y, layer, hour) -> m/s. Stub: returns zero
-  route.odin      route(w, from, to, mode) -> path of [3]f32 (x km, y km, alt m). Stub: straight line,
-                  path lives in w.route_mem until the next call
-source/host/      debug host: loads build/game.so, checks its mtime every frame, copies it to
+  terrain.odin    height_at(w, x, y) -> ground height in m. Stub: 0
+  weather.odin    wind_at(w, x, y, layer, hour) -> [2]f32 m/s, direction the wind blows toward, x east, y south
+                  gust_at(w, x, y, layer, hour) -> 0..1, cloud_at(w, x, y, hour) -> 0..1. Stubs: 0
+                  3 layers = 975 / 950 / 925 hPa ~ LAYER_ALT 300 / 550 / 800 m, hours 0..8 from snapshot start
+  route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
+                  ok = false means no safe route with this wind. Hubs = map cities for now.
+                  Stub: straight line. Path lives in w.route_mem until the next call.
+Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
+source/host/      debug host: loads build/game.so (game.dll on Windows), checks its mtime every frame, copies it to
                   build/game_N.so and loads the copy, unloads the old one after. Compares memory_size,
                   refuses a reload if World changed (restart needed). Run from the repo root.
 source/release/   release main: calls the game package directly, one static exe
@@ -49,6 +53,9 @@ World memory
 
 BUILD
 compile.sh [debug|profile|release] [extra odin flags], build.sh wraps it with build-notify
+compile.bat same modes on Windows (no mold, raylib.dll copied to build\, random pdb name per build
+  so a loaded pdb never blocks the next build, host not rebuilt while drift.exe runs,
+  release uses -subsystem:windows). format.bat / check.bat run the .sh versions with Git for Windows sh.
   all modes: -vet -vet-cast -strict-style -warnings-as-errors -linker:mold, prints build time
   debug:   host + game.so, -debug -o:none -use-separate-modules (~900 ms for both)
            game.so uses raylib as a shared lib (RAYLIB_SHARED), copied to build/, rpath $ORIGIN,
@@ -62,11 +69,12 @@ PROJECT SETUP
 ols.json, odinfmt.json   Odin language server + formatter (tabs, 110 columns)
 .editorconfig            tabs, LF, final newline
 .gitattributes           LF everywhere, *.bin / *.pbf / *.pdf binary, geojson marked generated
-.githooks/pre-commit     format check (if odinfmt installed) + check.sh + debug build + test/.
+.githooks/pre-commit     format check (if odinfmt installed) + check.sh + debug build (compile.bat on Windows) + test/.
                          enable: git config core.hooksPath .githooks
-.github/workflows/ci.yml ubuntu 24.04, Odin dev-2026-11a, odinfmt check, check.sh (+ PR size),
+.github/workflows/ci.yml job build: ubuntu 24.04, Odin dev-2026-11a, odinfmt check, check.sh (+ PR size),
                          debug + release build, bake reproduces belgium.bin, test/
-.github/CODEOWNERS       protected files need review from @nasrlol
+                         job build-windows: windows 2022, compile.bat debug + release
+.github/CODEOWNERS       system files owned by their person + @nasrlol, protected files by @nasrlol
 check.sh                 allowed imports, no raylib in sim files, banned file names, one test file,
                          max 1 MB per file (assets excepted), --pr <base>: max 400 changed lines
 AGENTS.md                entry point for agents and new people, points to rules / notes / todo

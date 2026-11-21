@@ -27,6 +27,9 @@ If a test or budget fails, report it. Do not update the expected values to make 
 - `./compile.sh debug` builds build/drift (host) and build/game.so (hot reloaded).
   Run `./build/drift` from the repo root, rebuild while it runs, the game reloads.
 - `./compile.sh release` builds one static executable.
+- Windows: `compile.bat`, `format.bat`, `check.bat` (same arguments). Needs Visual Studio Build Tools
+  for Odin and Git for Windows (its sh runs the hook and the checks).
+- Units: horizontal km (map space, y down), altitude m, speed m/s, energy kWh. Shared signatures in notes.txt.
 - The Odin standard library source is in `$(odin root)/core`. Check real signatures there,
   do not guess APIs. Odin changes often.
 

@@ -11,6 +11,9 @@ Requires Odin dev-2026-11a and the mold linker.
     ./build/drift           # run from the repo root, rebuild while it runs
     ./compile.sh release    # one static executable
 
+On Windows use compile.bat with the same arguments. Requires Visual Studio Build Tools (for Odin)
+and Git for Windows. Run build\drift.exe from the repo root.
+
 ## Contributing
 
 Read AGENTS.md, rules.txt, notes.txt and todo.txt first.

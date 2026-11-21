@@ -1,10 +1,18 @@
+/source/game/route.odin    @LarsCowe @nasrlol
+/source/game/nav.odin      @LarsCowe @nasrlol
+/source/game/ship.odin     @DarioDML @nasrlol
+/source/game/weather.odin  @AndreiMikha @nasrlol
+
 /rules.txt     @nasrlol
 /AGENTS.md     @nasrlol
 /.github/      @nasrlol
 /.githooks/    @nasrlol
 /compile.sh    @nasrlol
+/compile.bat   @nasrlol
 /check.sh      @nasrlol
+/check.bat     @nasrlol
 /format.sh     @nasrlol
+/format.bat    @nasrlol
 /build.sh      @nasrlol
 /test/         @nasrlol
 /bench/        @nasrlol

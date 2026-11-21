@@ -5,7 +5,7 @@ import "core:fmt"
 import "core:os"
 import "core:time"
 
-GAME_LIB :: "build/game.so"
+GAME_LIB :: "build/game." + dynlib.LIBRARY_FILE_EXTENSION
 
 Game_API :: struct {
 	memory_size:     proc() -> int,
@@ -26,7 +26,7 @@ load_api :: proc(version: int) -> (api: Game_API, mod: time.Time, ok: bool) {
 		fmt.eprintln("[host] cannot stat", GAME_LIB, err)
 		return
 	}
-	path := fmt.tprintf("build/game_%d.so", version)
+	path := fmt.tprintf("build/game_%d.%s", version, dynlib.LIBRARY_FILE_EXTENSION)
 	if err = os.copy_file(path, GAME_LIB); err != nil {
 		fmt.eprintln("[host] cannot copy", GAME_LIB, "to", path, err)
 		return
@@ -81,6 +81,6 @@ main :: proc() {
 	api.shutdown_window()
 	dynlib.unload_library(api.__handle)
 	for i in 0 ..< version {
-		os.remove(fmt.tprintf("build/game_%d.so", i))
+		os.remove(fmt.tprintf("build/game_%d.%s", i, dynlib.LIBRARY_FILE_EXTENSION))
 	}
 }
