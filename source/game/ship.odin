@@ -74,12 +74,14 @@ ship_battery_kwh :: proc(s: ^Ship) -> f32 {
 	return clamp(BATTERY_START * BATTERY_KWH - s.used_kwh + s.solar_kwh, 0, BATTERY_KWH)
 }
 
-SHIP_MAX_SPEED :: 35.0
-SHIP_ACCEL :: 1.2
-SHIP_BRAKE :: 1.6
+// Flying is fast (Lars, 2026-11-21: "ik moet sneller kunnen vliegen en opstijgen"): 70 m/s is 252 km/h, the
+// same car as before reached 126 km/h. On the road it keeps the old limits (road_speed). Our values.
+SHIP_MAX_SPEED :: 70.0
+SHIP_ACCEL :: 3.0
+SHIP_BRAKE :: 4.0
 SHIP_MAX_TURN_RATE :: 0.6
 SHIP_TURN_SMOOTH_S :: 0.5
-SHIP_CLIMB_RATE :: 5.0
+SHIP_CLIMB_RATE :: 12.0
 // Climbing costs this much power per m/s of climb on top of P(v, g) (spec "Vermogen").
 SHIP_CLIMB_KW_PER_MS :: 4.3
 SHIP_CEILING :: 900.0

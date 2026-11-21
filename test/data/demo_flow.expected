@@ -17,9 +17,9 @@ plan Bruxelles - Brussel -> Gent hour 0
     52.354 km Arrive: Dock at Gent / Platform at 73 m / Leie
 fly greenest from Bruxelles - Brussel to Gent
   0.0 s: next Continue on Skyway 300 in 992 m
-  69.2 s: next Descend to the Gent tower in 49514 m
+  67.2 s: next Descend to the Gent tower in 49514 m
   300.0 s: gust reported (true)
-  300.0 s: reroute 1, 48.311 km left, no route false
-  300.0 s: next Descend to the Gent tower in 46604 m
-  3598.2 s: next Dock at Gent in 1722 m
-  3773.0 s: arrived, docked true, 10.253 kWh net, 5.407 kWh solar
+  300.0 s: reroute 1, 48.352 km left, no route false
+  300.0 s: next Descend to the Gent tower in 46625 m
+  3598.1 s: next Dock at Gent in 1742 m
+  3774.4 s: arrived, docked true, 10.270 kWh net, 5.409 kWh solar

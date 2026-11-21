@@ -95,17 +95,21 @@ road_next_edge :: proc(w: ^World, edge: int, heading: f32, turn: f32) -> int {
 // lowest flying height to the road, driving on meanwhile. Take-off: it climbs at least ROAD_LIFT_MS until the
 // lowest flying height, the floor does not snap it up. Our values, not from the spec or design.
 ROAD_DESCENT_MS :: 4.0
-ROAD_LIFT_MS :: 4.0
+ROAD_LIFT_MS :: 10.0
 ROAD_ALIGN_S :: 2.5
 
-// Throttle on the ground: the same acceleration and limits as flying.
+// Throttle on the ground: slower than flying, 126 km/h at most. Coming down faster than that, the car brakes.
+ROAD_MAX_SPEED :: 35.0
+ROAD_ACCEL :: 1.2
+ROAD_BRAKE :: 1.6
+
 road_speed :: proc(w: ^World, c: Controls, dt: f32) {
 	s := &w.ship
-	target := max(c.throttle, 0) * SHIP_MAX_SPEED / ship_jam_factor(w)
+	target := max(c.throttle, 0) * ROAD_MAX_SPEED / ship_jam_factor(w)
 	if target > s.speed {
-		s.speed = min(s.speed + SHIP_ACCEL * dt, target)
+		s.speed = min(s.speed + ROAD_ACCEL * dt, target)
 	} else {
-		s.speed = max(s.speed - SHIP_BRAKE * dt, target)
+		s.speed = max(s.speed - (s.speed > ROAD_MAX_SPEED ? SHIP_BRAKE : ROAD_BRAKE) * dt, target)
 	}
 }
 
