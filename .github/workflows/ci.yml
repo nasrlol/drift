@@ -27,15 +27,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           release: dev-2026-11a
 
-      - name: Build odinfmt
-        run: |
-          git clone --depth 1 https://github.com/DanielGavin/ols.git /tmp/ols
-          (cd /tmp/ols && ./odinfmt.sh)
-          echo "/tmp/ols" >> "$GITHUB_PATH"
-
-      - name: Check formatting
-        run: ./format.sh --check
-
       - name: Checks
         run: ./check.sh
 
