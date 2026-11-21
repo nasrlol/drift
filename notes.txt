@@ -142,10 +142,15 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   250 m = the heightmap spacing, 1.7M calls) and blocked = terrain + zones. route() builds terrain
                   on first use and after a hot reload, and rebuilds blocked when w.no_fly differs from the zones
                   it was built with. Nothing in it depends on the forecast hour, so changing hour costs nothing.
-                  Measured (cloud box): terrain build 29 ms debug, 0.06 ms -o:speed with the height_at stub
-                  (expect ~5 ms -o:speed with a bilinear heightmap). Zone rebuild 2 us -o:speed.
+                  A* skips blocked neighbours. With blocked also the free regions are labelled (flood fill over
+                  the A* steps, grid.region per node, the open heap is the stack): start and goal in different
+                  regions fail at once. Without it a walled-in hub expanded every reachable node (33 ms -o:speed).
+                  Measured (cloud box, -o:speed / debug): terrain + regions on first use 4 / 120 ms with the
+                  height_at stub, zones + regions after a zone change 4 / 42 ms, cached route unchanged
+                  (bench three modes avg 22 -> 26 us, mostly the two 11 x 11 free node searches).
                   Checked against a brute force over all 203k nodes (zones overlapping, at the grid edge,
-                  partly outside, smaller than a cell, NaN / Inf zones ignored) and a whole-grid closest free node.
+                  partly outside, smaller than a cell, NaN / Inf zones ignored), a whole-grid closest free node,
+                  and 135 routes with random zones against a Dijkstra on the blocked grid (same cost within 0.1 %).
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
                   Each case = snapshot + inputs through game.headless_run, output compared line by line to the
@@ -155,8 +160,9 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
                   calm.snap: zero wind / gust / cloud, start 1795176000. nan_wind.snap: same with
                   wind[3][1][20].x = NaN, must be rejected by weather_valid. routes.txt: one route per mode, hours 0 / 4 / 8,
                   a route to the same hub. calm_routes.expected: A* grid paths (unsmoothed, wind not used yet).
-                  no_fly.txt: Brussels inside an 8 km zone (no route from or to it), Liege under a 400 m zone
-                  (leaves from layer 1), Antwerpen in a 3 km zone (free node outside it).
+                  no_fly.txt: Brussels inside an 8 km zone (no route from or to it), a 12 km zone on the
+                  Oostende - Liege path (goes around), Liege under a 400 m zone (leaves from layer 1),
+                  Antwerpen in a 3 km zone (free node outside it).
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
                   (copy a cache/weather.snap), the calm one does not exercise the wind.
 bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.

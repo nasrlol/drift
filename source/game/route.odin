@@ -74,6 +74,8 @@ Grid :: struct {
 	terrain:       [GRID_BLOCKED_WORDS]u64,
 	blocked:       [GRID_BLOCKED_WORDS]u64,
 	blocked_zones: [MAX_NO_FLY]No_Fly_Zone,
+	// Connected free region of each node (A* steps), 0 for a blocked node. Built with blocked.
+	region:        [GRID_NODES]u32,
 	terrain_built: bool,
 	blocked_built: bool,
 }
@@ -231,12 +233,42 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 				}
 			}
 		}
+
+		// Label the connected free regions: a route between two regions fails at once, instead of
+		// expanding every node reachable from the start (a walled-in hub took 33 ms with -o:speed).
+		// The open heap is free between routes, so it serves as the flood fill stack.
+		g.region = {}
+		regions: u32 = 0
+		dirs := GRID_DIRS
+		for i in 0 ..< GRID_NODES {
+			first := Node(i)
+			if g.region[first] != 0 || grid_blocked(g, first) do continue
+			regions += 1
+			g.region[first] = regions
+			g.heap[0].n = first
+			top := 1
+			for top > 0 {
+				top -= 1
+				c := grid_cell(g.heap[top].n)
+				for d in dirs {
+					nc := c + d
+					if nc.x < 0 || nc.x >= GRID_W || nc.y < 0 || nc.y >= GRID_H do continue
+					if nc.z < 0 || nc.z >= GRID_LAYERS do continue
+					next := grid_node(nc)
+					if g.region[next] != 0 || grid_blocked(g, next) do continue
+					g.region[next] = regions
+					g.heap[top].n = next
+					top += 1
+				}
+			}
+		}
 		logf(
 			w,
 			"route",
-			"no-fly zones applied: %d zones block %d nodes beyond the terrain set",
+			"no-fly zones applied: %d zones block %d nodes beyond the terrain set, %d free regions",
 			zones,
 			added,
+			regions,
 		)
 	}
 
@@ -255,6 +287,10 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 		logf(w, "route", "goal %v: outside the grid or no free node within %d cells", to.xy, FREE_NODE_CELLS)
 	}
 	if !start_ok || !goal_ok do return nil, false
+	if g.region[start] != g.region[goal] {
+		logf(w, "route", "no path from %v to %v: blocked nodes separate them", from.xy, to.xy)
+		return nil, false
+	}
 	g.visit[start] = g.search
 	g.cost[start] = 0
 	g.parent[start] = start
