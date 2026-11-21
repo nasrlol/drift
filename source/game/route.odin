@@ -11,6 +11,13 @@ Route_Mode :: enum u8 {
 	Calmest,
 }
 
+// Cruise airspeed per mode in m/s (spec).
+MODE_AIRSPEED :: [Route_Mode]f32 {
+	.Fastest  = 18,
+	.Greenest = 11,
+	.Calmest  = 13,
+}
+
 // 1 km cells over every point in belgium.bin (x 0.6..285.2 km, y 1.0..236.5 km), one layer per wind layer.
 GRID_CELL_KM :: 1
 GRID_W :: 286
@@ -64,7 +71,7 @@ Grid :: struct {
 	search:        u32,
 	heap_len:      u32,
 	visit:         [GRID_NODES]u32,
-	cost:          [GRID_NODES]f32, // km from the start along the best path found so far
+	cost:          [GRID_NODES]f32, // from the start along the best path so far, unit of the mode
 	parent:        [GRID_NODES]Node,
 	slot:          [GRID_NODES]u32, // index in heap while open, HEAP_CLOSED once expanded
 	heap:          [GRID_NODES]Heap_Item, // binary min-heap on f, the open set of A*
@@ -76,6 +83,14 @@ Grid :: struct {
 	blocked_zones: [MAX_NO_FLY]No_Fly_Zone,
 	// Connected free region of each node (A* steps), 0 for a blocked node. Built with blocked.
 	region:        [GRID_NODES]u32,
+	// wind_at and gust_at at every node centre for weather_hour, shared by the three modes and by every
+	// route in that hour. Rebuilt when the hour or its forecast differs from the copy it was built from.
+	// Zero is a valid cache: a calm hour 0.
+	wind:          [GRID_NODES][2]f32,
+	gust:          [GRID_NODES]f32,
+	weather_hour:  int,
+	weather_wind:  [WIND_LAYERS][WEATHER_CELLS][2]f32,
+	weather_gust:  [WIND_LAYERS][WEATHER_CELLS]f32,
 	terrain_built: bool,
 	blocked_built: bool,
 }
@@ -291,12 +306,40 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 		logf(w, "route", "no path from %v to %v: blocked nodes separate them", from.xy, to.xy)
 		return nil, false
 	}
+
+	h := clamp(hour, 0, FORECAST_HOURS - 1)
+	if g.weather_hour != h || g.weather_wind != w.weather.wind[h] || g.weather_gust != w.weather.gust[h] {
+		g.weather_hour = h
+		g.weather_wind = w.weather.wind[h]
+		g.weather_gust = w.weather.gust[h]
+		for layer in 0 ..< GRID_LAYERS {
+			for y in 0 ..< GRID_H {
+				for x in 0 ..< GRID_W {
+					n := grid_node({x, y, layer})
+					p := grid_node_pos(n)
+					g.wind[n] = wind_at(w, p.x, p.y, layer, h)
+					g.gust[n] = gust_at(w, p.x, p.y, layer, h)
+				}
+			}
+		}
+	}
+
+	per_km, per_layer: f32
+	{
+		wind_max, gust_min: f32 = 0, 1
+		for &layer in g.weather_wind do for v in layer do wind_max = max(wind_max, linalg.length(v))
+		for &layer in g.weather_gust do for v in layer do gust_min = min(gust_min, v)
+		airspeed := MODE_AIRSPEED
+		per_km = mode_flight_cost(mode, airspeed[mode], airspeed[mode] + wind_max, gust_min, 1)
+		per_layer = math.inf_f32(1)
+		for l in 1 ..< GRID_LAYERS do per_layer = min(per_layer, mode_climb_cost(mode, abs(alt[l] - alt[l - 1])))
+	}
 	g.visit[start] = g.search
 	g.cost[start] = 0
 	g.parent[start] = start
 	g.slot[start] = 0
 	g.heap_len = 1
-	grid_heap_up(g, start, grid_estimate(start, goal) * ESTIMATE_TIE_BREAK)
+	grid_heap_up(g, start, grid_estimate(start, goal, per_km, per_layer) * ESTIMATE_TIE_BREAK)
 
 	dirs := GRID_DIRS
 	for g.heap_len > 0 {
@@ -339,8 +382,8 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 		for d in dirs {
 			next := grid_neighbor(n, d) or_continue
 			if grid_blocked(g, next) do continue
-			// For a single step the estimate is exact: 1 or sqrt 2 cells, or one layer of climb.
-			cost := g.cost[n] + grid_estimate(n, next)
+			step := edge_cost(g, n, next, mode) or_continue
+			cost := g.cost[n] + step
 			if g.visit[next] == g.search {
 				if g.slot[next] == HEAP_CLOSED || cost >= g.cost[next] do continue
 			} else {
@@ -350,7 +393,7 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 			}
 			g.cost[next] = cost
 			g.parent[next] = n
-			grid_heap_up(g, next, cost + grid_estimate(next, goal) * ESTIMATE_TIE_BREAK)
+			grid_heap_up(g, next, cost + grid_estimate(next, goal, per_km, per_layer) * ESTIMATE_TIE_BREAK)
 		}
 	}
 	logf(
@@ -363,17 +406,61 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 	return nil, false
 }
 
-// Cost in km of the cheapest path from a to b on an empty grid: octile distance over the cells plus
-// the altitude change. Never more than the real cost, and consistent, so A* finds the cheapest path
-// and never has to reopen an expanded node.
-grid_estimate :: proc(a, b: Node) -> f32 {
+// Lower bound on the cost from a to b: the octile distance in km (the shortest path on the 8-direction
+// grid) times the lowest cost per km, plus the layer changes times the cheapest one. Every edge costs
+// at least its share of this, so the estimate is consistent and an expanded node is never reopened.
+grid_estimate :: proc(a, b: Node, per_km, per_layer: f32) -> f32 {
 	ca := grid_cell(a)
 	cb := grid_cell(b)
 	dx := abs(ca.x - cb.x)
 	dy := abs(ca.y - cb.y)
-	alt := LAYER_ALT
 	flat := f32(max(dx, dy) - min(dx, dy)) + math.SQRT_TWO * f32(min(dx, dy))
-	return flat * GRID_CELL_KM + abs(alt[ca.z] - alt[cb.z]) / 1000
+	return flat * GRID_CELL_KM * per_km + f32(abs(ca.z - cb.z)) * per_layer
+}
+
+// Cost of the edge from node a to its neighbour b in the unit of the mode: seconds for Fastest and
+// Calmest, kWh for Greenest. Wind and gust are the mean of the two node centres, the weather grid is
+// 40 km so that is the value halfway. ok = false when the ship makes no headway.
+edge_cost :: proc(g: ^Grid, a, b: Node, mode: Route_Mode) -> (cost: f32, ok: bool) {
+	pa := grid_node_pos(a)
+	pb := grid_node_pos(b)
+	if pa.xy == pb.xy do return mode_climb_cost(mode, abs(pb.z - pa.z)), true
+
+	airspeed := MODE_AIRSPEED
+	v := airspeed[mode]
+	track := pb.xy - pa.xy
+	km := linalg.length(track)
+	wind := (g.wind[a] + g.wind[b]) * 0.5
+	// Placeholder until the ground speed item: airspeed plus the tailwind, crosswind ignored.
+	ground := v + linalg.dot(wind, track) / km
+	// Written as !(headway) so NaN blocks the edge.
+	if !(ground > 0) do return 0, false
+	return mode_flight_cost(mode, v, ground, (g.gust[a] + g.gust[b]) * 0.5, km), true
+}
+
+// Cost of km flown at airspeed v and ground speed ground (m/s) through gust index gust (spec, per mode).
+// Rises with gust and falls with ground speed, so the calmest gust and the strongest tailwind give the
+// lowest cost per km for the A* estimate.
+mode_flight_cost :: proc(mode: Route_Mode, v, ground, gust, km: f32) -> f32 {
+	dt := km * 1000 / ground
+	switch mode {
+	case .Fastest:
+		return dt
+	case .Calmest:
+		return dt * (1 + 7 * gust * gust)
+	case .Greenest:
+		// P(v, g) in kW. Solar yield comes with the energy item.
+		power := 3 + 0.0085 * v * v * v + 6 * gust
+		return power * dt / 3600 + 0.25 * gust * gust * km
+	}
+	return 0
+}
+
+// Cost of a vertical edge with climb_m metres of altitude change (spec). Greenest adds the climb and
+// descent energy with the energy item.
+mode_climb_cost :: proc(mode: Route_Mode, climb_m: f32) -> f32 {
+	if mode == .Greenest do return 0.02
+	return 0.2 * climb_m / 3
 }
 
 // Gives n priority f and moves it up from its slot to its place in the open heap.
