@@ -13,16 +13,22 @@ import rlgl "vendor:raylib/rlgl"
 // Street space: metres, x east, y up, z south, around origin (km, snapped to STREET_ORIGIN_KM so the f32 values
 // stay small and do not shake). The map meshes (x km, y km south, z km down) are drawn with street_place.
 // The ground is flat at y = 0: the car's height is its height above the local ground (alt - height_at), the way
-// the buildings stand on the map. The view ends at STREET_FAR_M, the haze closes before that.
+// the buildings stand on the map.
+//
+// How far the street view reaches (Lars, 2026-11-21: "kleinere wereld, want nu kan je te ver kijken waardoor het
+// heel zwaar wordt"): houses, roads, trees and the other cars are built and drawn within STREET_VIEW_KM; from
+// STREET_FADE share of it on, everything turns into the colour of the sky in its direction, so the end of the
+// world is never seen. The far plane sits just beyond.
+STREET_VIEW_KM :: 1.6
+STREET_FADE :: [2]f32{0.55, 0.95}
 STREET_ORIGIN_KM :: 0.25
 // raylib's own near plane of 0.05 m leaves one step of the 24 bit depth buffer ~0.3 m deep at 500 m and ~1.2 m at
 // 1 km, so walls a little apart z-fought in the distance. 0.25 m is five times sharper; the camera keeps
 // STREET_CAM_WALL_M from walls so the near plane never cuts one.
 STREET_NEAR_M :: 0.25
-STREET_FAR_M :: 4000.0
+STREET_FAR_M :: STREET_VIEW_KM * 1000 + 300
 STREET_CAM_WALL_M :: 0.6
-STREET_REACH_KM :: 3.6
-STREET_FOG_M :: [2]f32{220, 3500}
+STREET_REACH_KM :: STREET_VIEW_KM
 STREET_CAM_DIST_M :: 8.5
 STREET_CAM_MIN_M :: 4.0
 STREET_CAM_MAX_M :: 40.0
@@ -44,7 +50,7 @@ STREET_HINT_S :: 7.0 // the key hint shows this long after switching on
 // orthographic camera that moves in whole texels (in f64 world metres), so the edges do not crawl while flying.
 // Houses, trees and cars cast; houses and the ground receive; beyond the box there is no shadow (faded over its
 // edge). The light camera stands SHADOW_LIGHT_M up the sun direction, clip planes 1 .. 2 x that.
-SHADOW_SIZE :: 4096
+SHADOW_SIZE :: 2048
 SHADOW_BOX_M :: 420.0
 SHADOW_LIGHT_M :: 1500.0
 SHADOW_SLOT :: 14
@@ -97,7 +103,18 @@ Street :: struct {
 
 // Uniform locations of STREET_GLSL in one shader.
 Street_Light_Locs :: struct {
-	sun_dir, sun_col, sky_zen, sky_hor, amb_sky, amb_gnd, cam, haze, light_vp, shadow_map, shadow_on: i32,
+	sun_dir,
+	sun_col,
+	sky_zen,
+	sky_hor,
+	amb_sky,
+	amb_gnd,
+	cam,
+	haze,
+	fade,
+	light_vp,
+	shadow_map,
+	shadow_on: i32,
 }
 
 street_light_locs :: proc(sh: rl.Shader) -> Street_Light_Locs {
@@ -110,6 +127,7 @@ street_light_locs :: proc(sh: rl.Shader) -> Street_Light_Locs {
 		amb_gnd = rl.GetShaderLocation(sh, "amb_gnd"),
 		cam = rl.GetShaderLocation(sh, "cam"),
 		haze = rl.GetShaderLocation(sh, "haze"),
+		fade = rl.GetShaderLocation(sh, "fade"),
 		light_vp = rl.GetShaderLocation(sh, "light_vp"),
 		shadow_map = rl.GetShaderLocation(sh, "shadow_map"),
 		shadow_on = rl.GetShaderLocation(sh, "shadow_on"),
@@ -132,6 +150,8 @@ street_light_set :: proc(w: ^World, sh: rl.Shader, l: Street_Light_Locs, cam: [3
 	rl.SetShaderValue(sh, l.amb_gnd, &look.amb_down, .VEC3)
 	rl.SetShaderValue(sh, l.cam, &cam, .VEC3)
 	rl.SetShaderValue(sh, l.haze, &look.haze, .VEC2)
+	fade := STREET_FADE * STREET_VIEW_KM * 1000
+	rl.SetShaderValue(sh, l.fade, &fade, .VEC2)
 }
 
 // The light of every street view shader (STREET_GLSL is pasted into each): one sun, a sky gradient that also
@@ -147,6 +167,7 @@ uniform vec3 amb_sky;
 uniform vec3 amb_gnd;
 uniform vec3 cam;
 uniform vec2 haze;
+uniform vec2 fade; // metres: from fade.x to fade.y everything turns into the sky (the end of the view)
 uniform mat4 light_vp;
 uniform sampler2D shadow_map;
 uniform float shadow_on;
@@ -196,7 +217,7 @@ vec3 aerial(vec3 c, vec3 p) {
 	float dist = length(d);
 	vec3 r = d / max(dist, 0.001);
 	vec3 h = sky_col(normalize(vec3(r.x, 0.03 + max(r.y, 0.0) * 0.3, r.z)));
-	return mix(c, h, haze.y * (1.0 - exp(-dist * haze.x)));
+	return mix(c, h, max(haze.y * (1.0 - exp(-dist * haze.x)), smoothstep(fade.x, fade.y, dist)));
 }
 vec3 lin(vec3 c) { return c * c; }
 vec3 tonemap(vec3 c) {
@@ -686,7 +707,8 @@ void main() {
 	vec3 r = normalize(cam_fwd + cam_right * ndc.x * tan_half.x + cam_up * ndc.y * tan_half.y);
 	vec3 c = sky_col(r);
 	c += sun_col * 6.0 * smoothstep(0.99985, 0.99993, dot(r, sun_dir));
-	if (r.y < 0.0) c = mix(c, sky_hor * 0.9, smoothstep(0.0, -0.05, r.y));
+	// Below the horizon (past the far plane) the same colour as the faded ground (aerial).
+	if (r.y < 0.0) c = sky_col(normalize(vec3(r.x, 0.03, r.z)));
 	finalColor = vec4(tonemap(c), 1.0);
 }
 `
@@ -825,7 +847,7 @@ street_build :: proc(w: ^World) {
 	}
 	ground: {
 		// The land under everything: a quad of 9 x 9 km, drawn under the car in street space.
-		R :: 4500
+		R :: STREET_FAR_M + 200
 		pos := make([][3]f32, 6, context.temp_allocator)
 		copy(pos, [][3]f32{{-R, 0, -R}, {-R, 0, R}, {R, 0, R}, {-R, 0, -R}, {R, 0, R}, {R, 0, -R}})
 		st.ground = rl.Mesh {

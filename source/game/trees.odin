@@ -12,8 +12,8 @@ import rl "vendor:raylib"
 // road. Drawn instanced: the detailed meshes within TREES_NEAR_M, one lumpy blob (or cone) per tree beyond.
 // Sizes, densities and shapes are ours.
 TREES_TILE_KM :: 0.5
-TREES_REACH_KM :: 2.0
-TREES_NEAR_M :: 350.0
+TREES_REACH_KM :: STREET_VIEW_KM
+TREES_NEAR_M :: 250.0
 TREES_TILE_MAX :: 2048
 TREES_SLOTS :: 128
 TREES_PARK_PER_KM2 :: 700.0

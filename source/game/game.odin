@@ -6,6 +6,7 @@ import "core:fmt"
 import "core:math"
 import "core:math/linalg"
 import "core:mem/virtual"
+import "core:os"
 import "core:strings"
 import curl "vendor:curl"
 import rl "vendor:raylib"
@@ -112,6 +113,11 @@ game_memory_size :: proc() -> int {
 game_init_window :: proc() {
 	rl.SetConfigFlags({.WINDOW_RESIZABLE, .MSAA_4X_HINT})
 	rl.InitWindow(1440, 900, "drift")
+	if !rl.IsWindowReady() {
+		// Without a display (a sleeping or locked screen) the game went on and crashed with exit 139.
+		fmt.eprintln("[game] cannot open a window: no display available (screen asleep or locked?)")
+		os.exit(1)
+	}
 	rl.SetWindowMinSize(900, 600)
 	// Esc leaves navigation (design), it does not close the window.
 	rl.SetExitKey(.KEY_NULL)

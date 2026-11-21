@@ -13,7 +13,7 @@ import rl "vendor:raylib"
 // HOUSE_TILE_KM tile around the camera (tiles.odin), in km relative to the tile corner like the other tiles.
 // Styles are ours (Belgian row houses), from a hash of the building; footprint and height come from OSM.
 HOUSE_TILE_KM :: 0.5
-HOUSE_REACH_KM :: 3.4
+HOUSE_REACH_KM :: STREET_VIEW_KM
 HOUSE_OVERHANG_M :: 0.35
 HOUSE_PARAPET_INSET_M :: 0.25
 HOUSE_FASCIA_M :: 0.18
