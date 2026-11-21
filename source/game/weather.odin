@@ -23,16 +23,38 @@ Weather :: struct {
 
 // x, y in km, layer 0..WIND_LAYERS-1, hour 0..FORECAST_HOURS-1 counted from the snapshot start.
 // Returns the direction the wind blows toward, in m/s, in map axes (x east, y south).
+// Outside the grid the edge value holds, hours after the last one keep the last forecast.
 wind_at :: proc(w: ^World, x, y: f32, layer, hour: int) -> [2]f32 {
-	return {}
+	c, fx, fy := weather_cell(x, y)
+	g := &w.weather.wind[clamp(hour, 0, FORECAST_HOURS - 1)][clamp(layer, 0, WIND_LAYERS - 1)]
+	top := g[c] * (1 - fx) + g[c + 1] * fx
+	bottom := g[c + WEATHER_GRID_W] * (1 - fx) + g[c + WEATHER_GRID_W + 1] * fx
+	return top * (1 - fy) + bottom * fy
 }
 
 // Same arguments as wind_at. Returns 0 (calm) .. 1 (very gusty).
 gust_at :: proc(w: ^World, x, y: f32, layer, hour: int) -> f32 {
-	return 0
+	c, fx, fy := weather_cell(x, y)
+	g := &w.weather.gust[clamp(hour, 0, FORECAST_HOURS - 1)][clamp(layer, 0, WIND_LAYERS - 1)]
+	top := g[c] * (1 - fx) + g[c + 1] * fx
+	bottom := g[c + WEATHER_GRID_W] * (1 - fx) + g[c + WEATHER_GRID_W + 1] * fx
+	return top * (1 - fy) + bottom * fy
 }
 
 // x, y in km, hour as in wind_at. Returns cloud cover 0 (clear) .. 1 (overcast).
 cloud_at :: proc(w: ^World, x, y: f32, hour: int) -> f32 {
-	return 0
+	c, fx, fy := weather_cell(x, y)
+	g := &w.weather.cloud[clamp(hour, 0, FORECAST_HOURS - 1)]
+	top := g[c] * (1 - fx) + g[c + 1] * fx
+	bottom := g[c + WEATHER_GRID_W] * (1 - fx) + g[c + WEATHER_GRID_W + 1] * fx
+	return top * (1 - fy) + bottom * fy
+}
+
+// Top-left grid point of the square around (x, y) and the bilinear weights inside it.
+weather_cell :: proc(x, y: f32) -> (cell: int, fx, fy: f32) {
+	gx := clamp(x / WEATHER_CELL_KM, 0, WEATHER_GRID_W - 1)
+	gy := clamp(y / WEATHER_CELL_KM, 0, WEATHER_GRID_H - 1)
+	ix := min(int(gx), WEATHER_GRID_W - 2)
+	iy := min(int(gy), WEATHER_GRID_H - 2)
+	return iy * WEATHER_GRID_W + ix, gx - f32(ix), gy - f32(iy)
 }

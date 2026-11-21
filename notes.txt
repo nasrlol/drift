@@ -54,7 +54,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
   terrain.odin    height_at(w, x, y) -> ground height in m. Stub: 0
   weather.odin    wind_at(w, x, y, layer, hour) -> [2]f32 m/s, direction the wind blows toward, x east, y south
-                  gust_at(w, x, y, layer, hour) -> 0..1, cloud_at(w, x, y, hour) -> 0..1. Stubs: 0
+                  gust_at(w, x, y, layer, hour) -> 0..1, cloud_at(w, x, y, hour) -> 0..1. Bilinear on the 40 km grid
+                  from w.weather, no allocation. Outside the grid the edge value holds, layer and hour are
+                  clamped (hours after 8 keep hour 8). Until a snapshot is loaded w.weather is zero: calm, clear.
                   3 layers = 975 / 950 / 925 hPa ~ LAYER_ALT 300 / 550 / 800 m, hours 0..8 from snapshot start
                   Weather struct: start (unix s), wind [hour][layer][cell][2]f32, gust [hour][layer][cell] 0..1,
                   cloud [hour][cell] 0..1. Fixed size 22.7 KB, zero = calm and clear.
@@ -73,6 +75,7 @@ source/release/   release main: calls the game package directly, one static exe
 World memory
   World is bootstrapped inside its own perm arena (virtual memory), so it survives reloads.
   Arenas: perm (World, map, long lived), route_mem (reset per route), frame (temp_allocator, reset per frame).
+  w.weather is a fixed-size Weather inside World (22.7 KB), so it needs no weather arena.
   game_update sets context.allocator = perm and context.temp_allocator = frame.
 
 BUILD
