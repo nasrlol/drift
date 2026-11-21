@@ -60,6 +60,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   window, zoom = px per km, map centre on screen centre. Each Map_Line is one rl.DrawLineStrip
                   straight from w.m.points ([2]f32 km has the rl.Vector2 layout, no copy, no allocation).
                   Colors: border dark grey, rivers blue, motorways orange. 10872 strips, 36k points per frame.
+                  Measured 2026-11-21 (Asahi M2, 800 x 450): draw 8.7 ms debug, 7.3 ms profile, over the 4 ms budget.
+                  The cost is raylib pushing 36k vertices one by one through its batch every frame. Fix: the
+                  "static map meshes" todo (upload once at startup, one draw call per kind).
+                  Cities: after EndMode2D, each w.m.cities pos goes through GetWorldToScreen2D, black 3 px dot +
+                  name (default font, 10 px) right of it, so both keep their pixel size at every zoom. No overlap
+                  culling yet (labels todo). The default font covers Latin-1, "Liege" with e grave draws correctly.
   map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
                   load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
                   Hubs are copied into a fixed array w.m.hubs[:w.m.hub_count], hub id = index.
