@@ -48,6 +48,7 @@ World :: struct {
 	grid:         Grid,
 	controls:     Controls,
 	ship:         Ship,
+	free_camera:  bool, // zero = the camera follows the ship
 	replay:       Replay,
 	no_fly:       [MAX_NO_FLY]No_Fly_Zone,
 	tick:         u64,
@@ -158,12 +159,18 @@ game_update :: proc(memory: rawptr) -> bool {
 		fit := 0.95 * min(centre.x * 2 / MAP_W_KM, centre.y * 2 / MAP_H_KM)
 		z0 := fit * math.pow(f32(2), v.zoom)
 
-		if rl.IsMouseButtonDown(.LEFT) do v.pan -= rl.GetMouseDelta() / z0
+		if rl.IsMouseButtonDown(.LEFT) {
+			v.pan -= rl.GetMouseDelta() / z0
+			w.free_camera = true
+		}
 		zoom := rl.GetMouseWheelMove() * WHEEL_ZOOM_STEP
 		anchor := rl.GetMousePosition()
 		if rl.IsGamepadAvailable(0) {
 			stick := [2]f32{rl.GetGamepadAxisMovement(0, .RIGHT_X), rl.GetGamepadAxisMovement(0, .RIGHT_Y)}
-			if linalg.length(stick) > PAD_DEADZONE do v.pan += stick * PAD_PAN_PX_PER_S * dt / z0
+			if linalg.length(stick) > PAD_DEADZONE {
+				v.pan += stick * PAD_PAN_PX_PER_S * dt / z0
+				w.free_camera = true
+			}
 			// Triggers rest at -1 and read 0 before the first press, the difference is 0 in both cases.
 			pad_zoom :=
 				(rl.GetGamepadAxisMovement(0, .RIGHT_TRIGGER) -
@@ -178,6 +185,8 @@ game_update :: proc(memory: rawptr) -> bool {
 		z1 := fit * math.pow(f32(2), v.zoom)
 		v.pan += (anchor - centre) * (1 / z0 - 1 / z1)
 		half := [2]f32{MAP_W_KM, MAP_H_KM} / 2
+		if rl.IsKeyPressed(.C) || rl.IsGamepadButtonPressed(0, .RIGHT_THUMB) do w.free_camera = false
+		if !w.free_camera do v.pan = w.ship.pos - half
 		v.pan = linalg.clamp(v.pan, -half, half)
 
 		cam = {
@@ -201,6 +210,8 @@ game_update :: proc(memory: rawptr) -> bool {
 		for l in w.m.lines {
 			rl.DrawLineStrip(raw_data(w.m.points[l.start:]), i32(l.count), colors[Map_Kind(l.kind)])
 		}
+		// 8 px marker pointing along the heading, DrawPoly puts the first corner at the rotation angle.
+		rl.DrawPoly(w.ship.pos, 3, 8 / cam.zoom, math.to_degrees(w.ship.heading) - 90, rl.RED)
 		rl.EndMode2D()
 	}
 	prof_end(w, .Draw, t)
