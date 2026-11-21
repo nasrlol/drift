@@ -504,17 +504,18 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 				w.tick += 1
 				if s.hit_s < before do hits += 1
 				hag := s.alt - height_at(w, s.pos.x, s.pos.y)
-				if push, _ := collide_car(w, s.pos, hag - FREE_HOVER_M * 0.5, 0.01); push != {} do inside += 1
+				if push, _ := collide_car(w, s.pos, hag, 0.01); push != {} do inside += 1
 				top = max(top, s.speed)
 			}
 			fmt.sbprintfln(
 				out,
-				"%s: after %.2f s at %.5f %.5f, height %.2f m, %.1f km/h (top %.1f), heading %.1f deg, %d wall hits, inside %d steps",
+				"%s: after %.2f s at %.5f %.5f, height %.2f m%s, %.1f km/h (top %.1f), heading %.1f deg, %d wall hits, inside %d steps",
 				f[0],
 				secs,
 				s.pos.x,
 				s.pos.y,
 				s.alt - height_at(w, s.pos.x, s.pos.y),
+				s.driving ? " on its wheels" : "",
 				s.speed * 3.6,
 				top * 3.6,
 				s.heading * 180 / math.PI,

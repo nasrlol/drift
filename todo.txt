@@ -249,6 +249,9 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 [ ] shadows over the whole view (a second, coarser cascade beyond 420 m)
 [ ] trees with trunks near the camera, street trees, hedges, instanced; street furniture
 [ ] other cars (presence) tested in the street view with two nodes
+[x] land on the ground or a roof, wheels down, drive like a car; up takes off (test/ run_free_flight case 6)
+[ ] gamepad: a DualSense is paired but raylib saw no gamepad (it was not connected); GTA-style mapping
+[ ] collision with pitched roofs (now flat at the ridge height)
 
 TOGETHER, AT THE END
 [ ] demo run: plan Brussels -> Gent, pick greenest, Preview, Start, report gust, reroute, dock, Done

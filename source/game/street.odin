@@ -143,7 +143,8 @@ uniform vec2 haze;
 uniform mat4 light_vp;
 uniform sampler2D shadow_map;
 uniform float shadow_on;
-// 1 in sunlight, 0 in the shadow of what the shadow pass drew; 3 x 3 filtered, fading out at the box edge.
+// 1 in sunlight, 0 in the shadow of what the shadow pass drew: a 3 x 3 texel filter with bilinear weights (4 x 4
+// samples), so edges are soft instead of stair steps near the camera; it fades out at the box edge.
 float sun_shadow(vec3 p, vec3 n) {
 	if (shadow_on < 0.5) return 1.0;
 	vec4 lp = light_vp * vec4(p + n * 0.12, 1.0);
@@ -152,11 +153,15 @@ float sun_shadow(vec3 p, vec3 n) {
 	float fade = smoothstep(0.0, 0.08, min(edge.x, edge.y));
 	if (fade <= 0.0 || c.z >= 1.0) return 1.0;
 	float texel = 1.0 / float(textureSize(shadow_map, 0).x);
+	vec2 t = c.xy / texel - 0.5;
+	vec2 b = floor(t), f = t - b;
 	float lit = 0.0;
-	for (int i = -1; i <= 1; i++) {
-		for (int j = -1; j <= 1; j++) {
-			float d = texture(shadow_map, c.xy + vec2(float(i), float(j)) * texel * 1.25).r;
-			lit += c.z - 0.00003 > d ? 0.0 : 1.0;
+	for (int y = -1; y <= 2; y++) {
+		for (int x = -1; x <= 2; x++) {
+			float d = texture(shadow_map, (b + vec2(float(x), float(y)) + 0.5) * texel).r;
+			float wx = x == -1 ? 1.0 - f.x : (x == 2 ? f.x : 1.0);
+			float wy = y == -1 ? 1.0 - f.y : (y == 2 ? f.y : 1.0);
+			lit += (c.z - 0.00003 > d ? 0.0 : 1.0) * wx * wy;
 		}
 	}
 	return mix(1.0, lit / 9.0, fade);

@@ -30,6 +30,9 @@ load_api :: proc(version: int) -> (api: Game_API, mod: time.Time, ok: bool) {
 		return
 	}
 	path := fmt.tprintf("build/game_%d.%s", version, dynlib.LIBRARY_FILE_EXTENSION)
+	// A copy left by a run that was killed is replaced, not overwritten: macOS keeps the code signature of the old
+	// file and kills a process that loads the rewritten one (exit 137, no output).
+	os.remove(path)
 	if err = os.copy_file(path, GAME_LIB); err != nil {
 		fmt.eprintln("[host] cannot copy", GAME_LIB, "to", path, err)
 		return

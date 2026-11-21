@@ -261,7 +261,7 @@ car_anim_update :: proc(w: ^World, dt: f32) {
 	an := &w.car_anim
 	ground := height_at(w, f32(p.pos.x), f32(p.pos.y))
 	fly: f32 = 1
-	if s.on_road do fly = 0
+	if s.on_road || (s.free && s.driving) do fly = 0
 	else if s.landing || s.lifting do fly = clamp((p.alt - ground) / SHIP_MIN_CLEARANCE, 0, 1)
 	if !an.seeded {
 		an^ = {

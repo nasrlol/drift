@@ -323,8 +323,8 @@ run_carpool :: proc() -> bool {
 }
 
 // Free flight in the street view (ship_free_step) through the headless free command. Catches a car that flies
-// through a building, does not stay on a roof, misses its top speed (252 km/h), ignores a crosswind, or flies a
-// different path for the same inputs.
+// through a building, does not land on a roof or the ground, misses its top speed (252 km/h flying, 126 km/h on
+// its wheels), slides sideways on its wheels, ignores a crosswind, or flies a different path for the same inputs.
 run_free_flight :: proc() -> bool {
 	World_Run :: struct {
 		w:   ^game.World,
@@ -414,12 +414,7 @@ run_free_flight :: proc() -> bool {
 			out := [2]f32{-d.y, d.x}
 			if linalg.dot(out, mid - c) < 0 do out = -out
 			for s: f32 = 0; s <= 6; s += 1 {
-				push, roof := game.collide_car(
-					w,
-					mid + out * (9 - s) / 1000,
-					2 - game.FREE_HOVER_M / 2,
-					game.FREE_RADIUS_M,
-				)
+				push, roof := game.collide_car(w, mid + out * (9 - s) / 1000, 2, game.FREE_RADIUS_M)
 				if push != {} || roof > 0 do continue search
 			}
 			ring, height, centre = pts, co.b_height[bi], c
@@ -465,7 +460,7 @@ run_free_flight :: proc() -> bool {
 		}
 	}
 
-	// 2: down onto the roof, then hands off: it hovers FREE_HOVER_M over the roof and stays there.
+	// 2: down onto the roof, then hands off: it lands on its wheels on the roof and stays there.
 	{
 		r, ok := run(
 			"test/data/calm.snap",
@@ -484,12 +479,12 @@ run_free_flight :: proc() -> bool {
 		ok2 :=
 			ok &&
 			game.headless_run(r.w, "test/data/calm.snap", transmute([]u8)string("free_on 0 0 0 3\n"), &more)
-		if !ok2 || abs(hag - (height + game.FREE_HOVER_M)) > 0.25 || abs(s.alt - before) > 0.01 {
+		if !ok2 || !s.driving || abs(hag - height) > 0.25 || abs(s.alt - before) > 0.01 {
 			fmt.printfln(
 				"test free_flight: on the roof (%.1f m): %.2f m above the ground (want %.2f), then moved %.3f m\n  %s",
 				height,
 				hag,
-				height + game.FREE_HOVER_M,
+				height,
 				s.alt - before,
 				r.out,
 			)
@@ -541,6 +536,50 @@ run_free_flight :: proc() -> bool {
 				drift,
 				speed * 20,
 				strings.to_string(b),
+			)
+			return false
+		}
+	}
+
+	// 6: down onto open ground: it lands on its wheels and drives like a car: top speed ROAD_MAX_SPEED on the
+	// ground, it turns without sliding sideways, and up lifts it off again.
+	{
+		r, ok := run("test/data/calm.snap", "free 132.924 83.707 3 0 0 0 -1 2\nfree_on 1 0 0 40\n")
+		defer if r.w != nil do game.game_shutdown(r.w)
+		s := &r.w.ship
+		hag := s.alt - game.height_at(r.w, s.pos.x, s.pos.y)
+		top := s.speed
+		h0 := s.heading
+		b := strings.builder_make()
+		ok &&= game.headless_run(
+			r.w,
+			"test/data/calm.snap",
+			transmute([]u8)string("free_on 0.6 1 0 4\n"),
+			&b,
+		)
+		fwd := [2]f32{math.sin(s.heading), -math.cos(s.heading)}
+		side := abs(linalg.dot(s.vel.xy, [2]f32{-fwd.y, fwd.x}))
+		turned := abs(math.mod(s.heading - h0 + 3 * math.PI, 2 * math.PI) - math.PI)
+		driving := s.driving
+		ok &&= game.headless_run(r.w, "test/data/calm.snap", transmute([]u8)string("free_on 0 0 1 2\n"), &b)
+		lifted := !s.driving && s.alt - game.height_at(r.w, s.pos.x, s.pos.y) > 2
+		if !ok ||
+		   abs(hag) > 0.05 ||
+		   abs(top - game.ROAD_MAX_SPEED) > 1 ||
+		   !driving ||
+		   turned < 0.5 ||
+		   side > 1 ||
+		   !lifted {
+			fmt.printfln(
+				"test free_flight: driving: %.2f m up, top %.1f m/s (want %.0f), turned %.2f rad, sideways %.2f m/s, on wheels %v, lifted %v\n  %s",
+				hag,
+				top,
+				game.ROAD_MAX_SPEED,
+				turned,
+				side,
+				driving,
+				lifted,
+				r.out,
 			)
 			return false
 		}

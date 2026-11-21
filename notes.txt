@@ -699,7 +699,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   velocity with momentum, thrust 8 m/s^2, quadratic drag to 70 m/s, sideways grip 2.4/s against the
                   air (crabs in a crosswind), turn 1.4 rad/s hovering .. 0.55 at top speed, altitude hold (climbs
                   settle at ~12 m/s), wind of the car's layer weaker below 80 m, gust index as smooth turbulence,
-                  hovers 0.9 m over the ground or a roof, pushed out of walls losing the speed into them. pos_frac
+                  pushed out of walls losing the speed into them. Landing (Lars, 2026-11-21: "auto moet landen op
+                  grond, dan banden goed en dan rijden"): flying down onto the ground or a roof sets ship.driving,
+                  the car animation unfolds the wheels (fly -> 0) and it drives like a car: grip 9/s against
+                  sliding, 4 m/s^2 to ROAD_MAX_SPEED (126 km/h), brake 9, reverse to 6 m/s, steering over a 2.7 m
+                  wheelbase with less lock at speed and at most 0.7 g in a bend; up lifts it off (+3 m/s), a drop
+                  over 0.5 m (a roof edge) makes it fly. Entering free flight from the road graph starts on wheels. pos_frac
                   keeps the part of the position below the f32 resolution of pos. Leaving the street view hands the
                   forward speed back to ship_step. Not recorded in the replay yet (the free flag is not a control).
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
@@ -896,7 +901,9 @@ bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out
                   route (stub + grid snap) ~0.3 us. Snapshot load ~23 us: read 22.7 KB from the page cache,
                   sha256 (~10-15 us at ~2 GB/s), validation, copy; budget 5 ms. load_map ~0.2 us.
 source/host/      debug host: loads build/game.so (game.dll on Windows), checks its mtime every frame, copies it to
-                  build/game_N.so and loads the copy, unloads the old one after. Compares memory_size,
+                  build/game_N.so and loads the copy, unloads the old one after. The copy is removed first: a copy
+                  left by a killed run and rewritten in place got the next start killed by macOS (exit 137, no
+                  output; reproduced with kill -9 + rebuild + start). Compares memory_size,
                   refuses a reload if World changed (restart needed). Calls game_before_reload on the old
                   library right before unloading it (stops the weather thread). Run from the repo root.
 source/release/   release main: calls the game package directly, one static exe

@@ -73,6 +73,8 @@ Ship :: struct {
 	vel:       [3]f32,
 	pos_frac:  [2]f32,
 	hit_s:     f32, // seconds since the car last hit a wall, for the street view's shake and the HUD
+	// On its wheels on the ground or a roof in free flight (landed by flying down onto it), driving like a car.
+	driving:   bool,
 }
 
 // Where the ship is drawn, filled by game_update every frame: between its state before and after the last fixed
@@ -240,8 +242,8 @@ ship_jam_factor :: proc(w: ^World) -> f32 {
 // momentum. Thrust along the heading, quadratic air drag (top speed SHIP_MAX_SPEED), sideways grip of the fans
 // against the air, so the car crabs in a crosswind and slides a little in fast turns; vertical thrust with an
 // altitude hold. Wind is the forecast at the car's layer, weaker near the ground, with gusts as smooth
-// turbulence. It hovers FREE_HOVER_M above the ground or a roof and is pushed out of walls (collide_car), losing
-// the speed into the wall. Our values. Deterministic: same inputs, same path.
+// turbulence. Flying down onto the ground or a roof lands it on its wheels (DRIVE_*); it is pushed out of walls
+// (collide_car), losing the speed into the wall. Our values. Deterministic: same inputs, same path.
 FREE_ACCEL :: 8.0 // m/s^2 at full throttle, 0-100 km/h in ~3.6 s
 FREE_BRAKE :: 11.0
 FREE_REVERSE_MS :: 8.0
@@ -252,11 +254,26 @@ FREE_TURN_FAST :: 0.55 // rad/s at top speed
 FREE_TURN_SMOOTH_S :: 0.22
 FREE_CLIMB_ACCEL :: 14.0
 FREE_VZ_DAMP :: 1.15 // 1/s, the altitude hold: climbs settle at ~12 m/s
-FREE_HOVER_M :: 0.9
 FREE_RADIUS_M :: 2.2 // the car as a circle for the walls
 FREE_WALL_KEEP :: 0.35 // share of the speed along the wall kept in a hit
 FREE_GROUND_WIND_M :: 80.0 // the wind grows to its layer value over this height
 FREE_GUST_ACCEL :: 2.2 // m/s^2 of turbulence at gust index 1
+// On the wheels (Lars, 2026-11-21: "auto moet landen op grond, dan banden goed en dan rijden"): flying down onto
+// the ground or a roof lands the car, then it drives like a car: the wheels hold the velocity on the heading
+// (DRIVE_GRIP), the throttle drives to ROAD_MAX_SPEED and brakes, the steering turns by the speed over a 2.7 m
+// wheelbase (less lock at speed), up lifts it off, a drop of DRIVE_DROP_M (a roof edge) makes it fly. Our values.
+DRIVE_ACCEL :: 4.0
+DRIVE_BRAKE :: 9.0
+DRIVE_REVERSE_MS :: 6.0
+DRIVE_ROLL :: 0.04 // 1/s rolling loss
+DRIVE_AIR :: (DRIVE_ACCEL - DRIVE_ROLL * ROAD_MAX_SPEED) / (ROAD_MAX_SPEED * ROAD_MAX_SPEED) // top speed = ROAD_MAX_SPEED
+DRIVE_GRIP :: 9.0 // 1/s, how fast sideways speed dies out on the wheels
+DRIVE_WHEELBASE_M :: 2.7
+DRIVE_STEER :: 0.6 // rad of lock when slow
+DRIVE_STEER_SMOOTH_S :: 0.15
+DRIVE_LAT_ACCEL :: 7.0 // m/s^2, the most the tyres hold in a bend (0.7 g)
+DRIVE_LIFT_MS :: 3.0 // the jump off the ground on take-off
+DRIVE_DROP_M :: 0.5
 
 ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 	s := &w.ship
@@ -266,20 +283,33 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 		s.free = true
 		s.vel = {fwd.x * s.speed, fwd.y * s.speed, 0}
 		s.pos_frac = {}
+		s.driving = s.on_road
 		s.on_road, s.landing, s.lifting = false, false, false
 		s.moored, s.docked = false, false
 		s.turn_rate = 0
 		s.hit_s = 10
 	}
+	if s.driving && c.climb > 0.2 {
+		s.driving = false
+		s.vel.z = DRIVE_LIFT_MS
+	}
 	s.hit_s += dt
 	ground := height_at(w, s.pos.x, s.pos.y)
 	hag := s.alt - ground
 
-	// Turning: quick when hovering, wider at speed, eased in.
+	// Turning: in the air quick when hovering, wider at speed; on the wheels by the speed and the steering lock.
 	vh := s.vel.xy
 	speed := linalg.length(vh)
-	max_turn := FREE_TURN_SLOW + (FREE_TURN_FAST - FREE_TURN_SLOW) * clamp(speed / SHIP_MAX_SPEED, 0, 1)
-	s.turn_rate += (c.turn * max_turn - s.turn_rate) * min(dt / FREE_TURN_SMOOTH_S, 1)
+	if s.driving {
+		v := linalg.dot(vh, fwd)
+		steer := c.turn * DRIVE_STEER * (1 - 0.75 * clamp(abs(v) / ROAD_MAX_SPEED, 0, 1))
+		limit := DRIVE_LAT_ACCEL / max(abs(v), 1)
+		target := clamp(v * math.tan(steer) / DRIVE_WHEELBASE_M, -limit, limit)
+		s.turn_rate += (target - s.turn_rate) * min(dt / DRIVE_STEER_SMOOTH_S, 1)
+	} else {
+		max_turn := FREE_TURN_SLOW + (FREE_TURN_FAST - FREE_TURN_SLOW) * clamp(speed / SHIP_MAX_SPEED, 0, 1)
+		s.turn_rate += (c.turn * max_turn - s.turn_rate) * min(dt / FREE_TURN_SMOOTH_S, 1)
+	}
 	s.heading = math.mod(s.heading + s.turn_rate * dt + math.TAU, math.TAU)
 	fwd = {math.sin(s.heading), -math.cos(s.heading)}
 	right := [2]f32{-fwd.y, fwd.x}
@@ -315,8 +345,25 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 	acc_z := c.climb * FREE_CLIMB_ACCEL - FREE_VZ_DAMP * s.vel.z + turb.z
 	// In a traffic jam the car is held back like the router expects (traffic_factor).
 	jam := ship_jam_factor(w)
-	s.vel.xy += acc * dt
-	s.vel.z += acc_z * dt
+	if s.driving {
+		// The wheels: speed along the heading by throttle, brake and losses, the sideways part dies out.
+		v := linalg.dot(s.vel.xy, fwd)
+		side := linalg.dot(s.vel.xy, right)
+		drive: f32
+		if c.throttle > 0 {
+			drive = c.throttle * DRIVE_ACCEL
+		} else if c.throttle < 0 {
+			drive =
+				v > 0.3 ? c.throttle * DRIVE_BRAKE : (v > -DRIVE_REVERSE_MS ? c.throttle * DRIVE_ACCEL * 0.5 : 0)
+		}
+		v += (drive - DRIVE_ROLL * v - DRIVE_AIR * v * abs(v)) * dt
+		if c.throttle == 0 && abs(v) < 0.3 do v = 0
+		side *= max(1 - DRIVE_GRIP * dt, 0)
+		s.vel = {fwd.x * v + right.x * side, fwd.y * v + right.y * side, 0}
+	} else {
+		s.vel.xy += acc * dt
+		s.vel.z += acc_z * dt
+	}
 	if jam > 1 do s.vel.xy *= 1 - min(dt * (jam - 1), 1)
 
 	// Move. pos is f32 km (~1.5 cm steps at 150 km): the rest goes into pos_frac and is added on in f64.
@@ -332,7 +379,7 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 	// Walls: out of every footprint the car overlaps, the speed into the wall is lost.
 	ground = height_at(w, s.pos.x, s.pos.y)
 	hag = s.alt - ground
-	push, roof := collide_car(w, s.pos, hag - FREE_HOVER_M * 0.5, FREE_RADIUS_M)
+	push, roof := collide_car(w, s.pos, hag, FREE_RADIUS_M)
 	if push != {} {
 		x := f64(s.pos.x) + (f64(s.pos_frac.x) + f64(push.x)) / 1000
 		y := f64(s.pos.y) + (f64(s.pos_frac.y) + f64(push.y)) / 1000
@@ -347,10 +394,19 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 		}
 	}
 
-	// Ground and roofs carry the car, the ceiling stops it.
-	floor := ground + max(roof, 0) + FREE_HOVER_M
-	if s.alt < floor {
+	// Ground and roofs carry the car: flying down onto them lands it, driving it follows them, off a roof edge it
+	// flies on. The ceiling stops it.
+	floor := ground + max(roof, 0)
+	if s.driving {
+		if s.alt - floor > DRIVE_DROP_M {
+			s.driving = false
+		} else {
+			s.alt = floor
+			s.vel.z = 0
+		}
+	} else if s.alt <= floor + 0.02 {
 		s.alt = floor
+		s.driving = s.vel.z <= 0.5
 		s.vel.z = max(s.vel.z, 0)
 	}
 	if s.alt > SHIP_CEILING {
