@@ -26,7 +26,7 @@ FIRST, TOGETHER (so everyone can work in parallel)
 [x] test/ program: fixed snapshot + fixed inputs -> compare routes and maneuvers to stored results
 
 NASR: MAP + RENDERING + UI
-[ ] load belgium.bin and draw lines (km -> px: scale + offset)
+[x] load belgium.bin and draw lines (km -> px: scale + offset)
 [ ] camera: pan + zoom to cursor (mouse wheel / controller)
 [ ] draw cities + names
 [ ] "(c) OpenStreetMap contributors" on screen
