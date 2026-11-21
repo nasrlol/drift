@@ -5,6 +5,9 @@ MAP_VERSION :: 2
 MAX_HUBS :: 32
 // Docking towers, top = ground + HUB_TOWER_M (spec).
 HUB_TOWER_M :: 58
+// Every point in belgium.bin lies inside 0..MAP_W_KM x 0..MAP_H_KM (same extent as the routing grid).
+MAP_W_KM :: 286
+MAP_H_KM :: 237
 
 Map_Header :: struct {
 	magic, version:                      u32,
