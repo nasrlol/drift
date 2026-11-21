@@ -55,8 +55,9 @@ World :: struct {
 	sim_speed:    int, // index into SIM_SPEEDS, 0 = 1x
 	prof:         Profiler,
 	view:         View,
-	map_mesh:     Map_Mesh,
+	line_meshes:  Line_Meshes,
 	theme:        Theme, // zero = day, T toggles
+	wind:         Wind_Particles,
 }
 
 @(export)
@@ -114,7 +115,7 @@ game_hot_reloaded :: proc(memory: rawptr) {
 	w.m = m
 	w.grid.terrain_built = false
 	// The new library may change the shaders, so the mesh is rebuilt on the next frame.
-	map_mesh_unload(&w.map_mesh)
+	line_meshes_unload(&w.line_meshes)
 }
 
 @(export)
@@ -199,52 +200,36 @@ game_update :: proc(memory: rawptr) -> bool {
 	t = prof_begin()
 	rl.ClearBackground(pal.background)
 	{
-		mm := &w.map_mesh
-		if !mm.built {
+		lm := &w.line_meshes
+		if !lm.built {
 			segments := 0
 			for l in w.m.lines do segments += max(int(l.count) - 1, 0)
 			n := segments * 6
 			pos := make([][3]f32, n, context.temp_allocator)
 			other := make([][3]f32, n, context.temp_allocator)
-			kind := make([][4]u8, n, context.temp_allocator)
-			// Corners A-, B-, B+ and A-, B+, A+: counter-clockwise on screen whatever the direction of the
-			// segment, because the shader pushes them along the screen space normal. raylib culls back faces.
-			ENDS :: [6]bool{false, true, true, false, true, false}
-			SIDES :: [6]f32{-1, 1, -1, -1, -1, 1}
-			ends, sides := ENDS, SIDES
+			color := make([][4]u8, n, context.temp_allocator)
 			i := 0
 			for l in w.m.lines {
 				pts := w.m.points[l.start:][:l.count]
 				for s in 1 ..< len(pts) {
-					a, b := pts[s - 1], pts[s]
-					for k in 0 ..< 6 {
-						p, o := ends[k] ? b : a, ends[k] ? a : b
-						pos[i] = {p.x, p.y, 0}
-						other[i] = {o.x, o.y, sides[k]}
-						kind[i] = {u8(l.kind), 0, 0, 255}
-						i += 1
-					}
+					line_quad(pos, other, color, i, pts[s - 1], pts[s], {u8(l.kind), 0, 0, 255})
+					i += 6
 				}
 			}
-			if n > 0 {
-				mm.mesh = {
-					vertexCount   = i32(n),
-					triangleCount = i32(n / 3),
-					vertices      = ([^]f32)(raw_data(pos)),
-					normals       = ([^]f32)(raw_data(other)),
-					colors        = ([^]u8)(raw_data(kind)),
-				}
-				rl.UploadMesh(&mm.mesh, false)
-				// The arrays live in the frame arena, raylib must never free them.
-				mm.mesh.vertices, mm.mesh.normals, mm.mesh.colors = nil, nil, nil
-				shader := rl.LoadShaderFromMemory(MAP_VS, MAP_FS)
-				if !rl.IsShaderValid(shader) do logf(w, "render", "map shader did not compile, the map is not drawn")
-				mm.material = rl.LoadMaterialDefault()
-				mm.material.shader = shader
-				mm.loc_screen = rl.GetShaderLocation(shader, "screen")
-				mm.loc_colors = rl.GetShaderLocation(shader, "colors")
-			}
-			mm.built = true
+			if n > 0 do lm.map_lines = line_mesh_upload(pos, other, color, false)
+			lm.wind = line_mesh_upload(
+				make([][3]f32, WIND_VERTICES, context.temp_allocator),
+				make([][3]f32, WIND_VERTICES, context.temp_allocator),
+				make([][4]u8, WIND_VERTICES, context.temp_allocator),
+				true,
+			)
+			shader := rl.LoadShaderFromMemory(LINE_VS, LINE_FS)
+			if !rl.IsShaderValid(shader) do logf(w, "render", "line shader did not compile, map and wind are not drawn")
+			lm.material = rl.LoadMaterialDefault()
+			lm.material.shader = shader
+			lm.loc_screen = rl.GetShaderLocation(shader, "screen")
+			lm.loc_colors = rl.GetShaderLocation(shader, "colors")
+			lm.built = true
 			logf(
 				w,
 				"render",
@@ -255,14 +240,56 @@ game_update :: proc(memory: rawptr) -> bool {
 			)
 		}
 
+		// Wind particles: layer 0 (the lowest, until the layer toggles), forecast hour of the simulated time.
+		// Update loop over the SoA arrays, then one pass writes the trails into the wind mesh.
+		{
+			wp := &w.wind
+			dt := min(rl.GetFrameTime(), MAX_FRAME_DT)
+			lo := rl.GetScreenToWorld2D({0, 0}, cam)
+			hi := rl.GetScreenToWorld2D({f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}, cam)
+			hour := int(w.tick / (SIM_HZ * 3600))
+			km_per_ms := WIND_PX_PER_MS / cam.zoom
+			for i in 0 ..< WIND_PARTICLES {
+				wp.age[i] += dt
+				out := wp.x[i] < lo.x || wp.x[i] > hi.x || wp.y[i] < lo.y || wp.y[i] > hi.y
+				if !wp.seeded || out || wp.age[i] >= WIND_LIFE_S {
+					wp.x[i] = lo.x + wind_rand(wp) * (hi.x - lo.x)
+					wp.y[i] = lo.y + wind_rand(wp) * (hi.y - lo.y)
+					wp.age[i] = wp.seeded ? 0 : wind_rand(wp) * WIND_LIFE_S
+				}
+				v := wind_at(w, wp.x[i], wp.y[i], 0, hour)
+				wp.vx[i], wp.vy[i] = v.x, v.y
+				wp.x[i] += v.x * km_per_ms * dt
+				wp.y[i] += v.y * km_per_ms * dt
+			}
+			wp.seeded = true
+
+			pos := make([][3]f32, WIND_VERTICES, context.temp_allocator)
+			other := make([][3]f32, WIND_VERTICES, context.temp_allocator)
+			color := make([][4]u8, WIND_VERTICES, context.temp_allocator)
+			for i in 0 ..< WIND_PARTICLES {
+				v := [2]f32{wp.vx[i], wp.vy[i]}
+				if linalg.length(v) < WIND_CALM_MS do continue
+				p := [2]f32{wp.x[i], wp.y[i]}
+				fade := math.sin(math.PI * wp.age[i] / WIND_LIFE_S)
+				tail := p - v * km_per_ms * WIND_TRAIL_S
+				line_quad(pos, other, color, i * 6, p, tail, {WIND_COLOR, 0, 0, u8(fade * 255)})
+			}
+			rl.UpdateMeshBuffer(lm.wind, 0, raw_data(pos), i32(len(pos) * size_of(pos[0])), 0)
+			rl.UpdateMeshBuffer(lm.wind, 2, raw_data(other), i32(len(other) * size_of(other[0])), 0)
+			rl.UpdateMeshBuffer(lm.wind, 3, raw_data(color), i32(len(color) * size_of(color[0])), 0)
+		}
+
 		rl.BeginMode2D(cam)
-		if mm.mesh.vertexCount > 0 {
+		{
 			screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
-			uniform: [Map_Kind][4]f32
+			uniform: [LINE_COLORS][4]f32
 			for c, k in pal.lines do uniform[k] = rl.ColorNormalize(c)
-			rl.SetShaderValue(mm.material.shader, mm.loc_screen, &screen, .VEC2)
-			rl.SetShaderValueV(mm.material.shader, mm.loc_colors, &uniform, .VEC4, len(uniform))
-			rl.DrawMesh(mm.mesh, mm.material, rl.Matrix(1))
+			uniform[WIND_COLOR] = rl.ColorNormalize(pal.wind)
+			rl.SetShaderValue(lm.material.shader, lm.loc_screen, &screen, .VEC2)
+			rl.SetShaderValueV(lm.material.shader, lm.loc_colors, &uniform, .VEC4, LINE_COLORS)
+			if lm.map_lines.vertexCount > 0 do rl.DrawMesh(lm.map_lines, lm.material, rl.Matrix(1))
+			rl.DrawMesh(lm.wind, lm.material, rl.Matrix(1))
 		}
 		// 8 px marker pointing along the heading, DrawPoly puts the first corner at the rotation angle.
 		rl.DrawPoly(w.ship.pos, 3, 8 / cam.zoom, math.to_degrees(w.ship.heading) - 90, pal.ship)
@@ -367,7 +394,7 @@ game_before_reload :: proc(memory: rawptr) {
 game_shutdown :: proc(memory: rawptr) {
 	w := (^World)(memory)
 	weather_stop(w)
-	map_mesh_unload(&w.map_mesh)
+	line_meshes_unload(&w.line_meshes)
 	virtual.arena_destroy(&w.fetch.mem)
 	virtual.arena_destroy(&w.frame)
 	virtual.arena_destroy(&w.route_mem)

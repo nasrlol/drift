@@ -70,17 +70,29 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   into this library's constants would dangle after a hot reload. The map line colors go to the mesh
                   shader as a uniform, so switching the theme does not rebuild anything. The profiler overlay keeps
                   its own fixed colors.
-                  Map drawing (render.odin, built inline in game_update): the whole map is one static mesh, built on
-                  the first frame (needs the window, never in headless) and drawn with one rl.DrawMesh in Mode2D.
-                  Each segment is a quad of 6 vertices (2 triangles, no index buffer: raylib indices are u16 and
-                  153k vertices do not fit). vertexNormal = other end of the segment + the side to push to,
-                  vertexColor.r = Map_Kind. The vertex shader (MAP_VS, GLSL 330) widens each quad to 1 px along the
-                  screen space normal, so lines stay 1 px at every zoom; colors are a uniform per kind.
-                  25493 segments, 152958 vertices, 4.1 MB on the GPU, built in the frame arena and freed after the
-                  upload (mesh pointers set to nil so UnloadMesh only frees GPU buffers). Rebuilt after a hot reload
-                  (the shaders may have changed), unloaded in game_shutdown.
-                  Measured 2026-11-21 (Asahi M2, 800 x 450, debug): draw 8.6 ms with DrawLineStrip -> 0.55 ms with
-                  the mesh (the rest is city text and the overlay). The first frame takes ~34 ms (mesh build).
+                  Line meshes (Line_Meshes in render.odin, built inline in game_update): map lines and wind trails
+                  are meshes drawn by one shader (LINE_VS, GLSL 330), built on the first frame (needs the window,
+                  never in headless). Each segment is 6 vertices (2 triangles, no index buffer: raylib indices are
+                  u16). Every vertex carries both ends (vertexPosition = A, vertexNormal.xy = B); the shader picks
+                  the corner from gl_VertexID % 6 and pushes it along the screen space normal, so lines are 1 px at
+                  every zoom. vertexColor.r = index into a uniform color array (Map_Kind colors, then WIND_COLOR),
+                  vertexColor.a scales the alpha. The CPU arrays live in the frame arena; after UploadMesh the mesh
+                  pointers are set to nil, so UnloadMesh only frees GPU buffers. Rebuilt after a hot reload (the
+                  shader may have changed), unloaded in game_shutdown.
+                  Map: static, 25493 segments, 152958 vertices, 4.1 MB on the GPU, one DrawMesh.
+                  Wind: dynamic mesh, rewritten every frame with 3 UpdateMeshBuffer calls, one DrawMesh.
+                  Measured 2026-11-21 (Asahi M2, 800 x 450, debug): map draw 8.6 ms with DrawLineStrip -> 0.55 ms
+                  with the mesh. The first frame takes ~34 ms (mesh build).
+                  Wind particles (Wind_Particles in render.odin, w.wind): WIND_PARTICLES 600, SoA arrays x, y, vx, vy,
+                  age in World. Drawing only, never read by the simulation, so frame time is used. Spread over the
+                  visible part of the map, respawned there when they leave the view or reach WIND_LIFE_S 3 s; the
+                  first frame (seeded = false) gives them random ages. Seeded LCG (wind_rand), same picture every
+                  run. Velocity = wind_at of layer 0 (until the layer toggles) at the forecast hour of w.tick,
+                  shown at WIND_PX_PER_MS 4 px/s per m/s at every zoom. Trail = 0.4 s of travel, fades in and out
+                  (sin of age), not drawn under WIND_CALM_MS 0.5. No snapshot = calm = no particles.
+                  Measured (same machine, draw ms, map + wind + labels): debug 1.8, -o:speed 0.7. With 1500
+                  particles: DrawLineV per particle cost 0.5 ms (-o:speed); the mesh writes cost ~3.4 ms in debug,
+                  so the count went down to 600, which still shows the wind clearly.
                   Labels (Label in render.odin): after EndMode2D, each city goes through GetWorldToScreen2D into a
                   flat [dynamic]Label in the frame arena: dot, text rect (LABEL_GAP_PX 2 px bigger on every side),
                   text. Cities with dot and text off screen are dropped. A label whose rect overlaps an earlier shown

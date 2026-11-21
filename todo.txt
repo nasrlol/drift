@@ -39,7 +39,7 @@ NASR: MAP + RENDERING + UI
 [x] build static map meshes once at startup, never per frame
 [x] day / night theme: one palette struct, swap the pointer (an index: a pointer dangles after reload)
 [ ] routes as screen-width strips, built once per route, alternatives grey
-[ ] wind particles: SoA arrays (x[], y[], age[]), one update loop, one draw batch, fixed count
+[x] wind particles: SoA arrays (x[], y[], age[]), one update loop, one draw batch, fixed count
 [x] labels: collect into a flat array per frame (temp allocator), cull, draw in one pass
 [ ] immediate mode UI (raygui or our own), no retained widget tree
 [ ] plan screen: from/to hub, mode, departure +0..+8 h, route cards with time/kWh, start
