@@ -26,6 +26,8 @@ CASES :: [?]Case {
 		"test/data/windy_routes.txt",
 		"test/data/windy_routes.expected",
 	},
+	// A hub inside a no-fly zone gets no route, a zone above or next to a hub does not stop it.
+	{"no_fly", "test/data/calm.snap", "test/data/no_fly.txt", "test/data/no_fly.expected"},
 	// A NaN in the wind field must reject the snapshot, not reach the router.
 	{"nan_wind", "test/data/nan_wind.snap", "test/data/routes.txt", ""},
 }
