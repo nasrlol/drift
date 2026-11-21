@@ -322,15 +322,29 @@ game_update :: proc(memory: rawptr) -> bool {
 			pos := make([][3]f32, n, context.temp_allocator)
 			other := make([][3]f32, n, context.temp_allocator)
 			color := make([][4]u8, n, context.temp_allocator)
+			along := make([][2]f32, n, context.temp_allocator)
 			i := 0
+			sea_segments := 0
 			for l in w.m.lines {
 				pts := w.m.points[l.start:][:l.count]
+				km: f32 = 0
 				for s in 1 ..< len(pts) {
-					line_quad(pos, other, color, i, pts[s - 1], pts[s], {u8(l.kind), 0, 0, 255})
+					a, b := pts[s - 1], pts[s]
+					// The border round the territorial sea (OSM's country boundary runs 12 nm out) is dashed.
+					dash: u8 = 0
+					if Map_Kind(l.kind) == .Border && border_at_sea(w, (a + b) / 2) {
+						dash = 255
+						sea_segments += 1
+					}
+					line_quad(pos, other, color, i, a, b, {u8(l.kind), dash, 0, 255})
+					next := km + linalg.length(b - a)
+					for k in i ..< i + 6 do along[k] = {km, next}
+					km = next
 					i += 6
 				}
 			}
-			if n > 0 do lm.map_lines = line_mesh_upload(pos, other, color, false)
+			if n > 0 do lm.map_lines = line_mesh_upload(pos, other, color, false, along)
+			logf(w, "render", "%d border segments at sea, dashed", sea_segments)
 			{
 				// Ground layer grid (gust risk, solar): GROUND_CELL_KM quads, two triangles each, colors per
 				// vertex rewritten every frame, positions fixed.
@@ -374,6 +388,9 @@ game_update :: proc(memory: rawptr) -> bool {
 			lm.loc_fog_c = rl.GetShaderLocation(shader, "fog_color")
 			lm.loc_fog_r = rl.GetShaderLocation(shader, "fog_range")
 			lm.loc_bias = rl.GetShaderLocation(shader, "depth_bias")
+			dash_on, dash_off := f32(LINE_DASH_ON_PX), f32(LINE_DASH_OFF_PX)
+			rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "dash_on"), &dash_on, .FLOAT)
+			rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "dash_off"), &dash_off, .FLOAT)
 			lm.built = true
 			logf(
 				w,

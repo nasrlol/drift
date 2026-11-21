@@ -224,11 +224,16 @@ WIND_VERTICES :: WIND_PARTICLES * 6
 // camera works), the quad is pushed sideways by half the width in pixels and lengthened by half the width at
 // both ends, so thick lines meet without gaps at bends. A segment with an end behind the camera or a width of
 // 0 is dropped. vertexColor.r is the index into colors and widths, vertexColor.a scales the alpha. Far away
-// lines fade into the horizon color (fog_color, fog over the clip w range fog_range).
+// lines fade into the horizon color (fog_color, fog over the clip w range fog_range). vertexColor.g 255 draws
+// the segment dashed (LINE_DASH_ON_PX / LINE_DASH_OFF_PX on screen): vertexTexCoord is then the distance along
+// its line in km at A and at B, turned into screen pixels with the segment's own scale.
+LINE_DASH_ON_PX :: 7
+LINE_DASH_OFF_PX :: 5
 LINE_VS :: `#version 330
 in vec3 vertexPosition;
 in vec3 vertexNormal;
 in vec4 vertexColor;
+in vec2 vertexTexCoord;
 uniform mat4 mvp;
 uniform vec2 screen;
 uniform vec4 colors[11];
@@ -237,6 +242,8 @@ uniform vec3 fog_color;
 uniform vec2 fog_range;
 uniform float depth_bias;
 out vec4 fragColor;
+noperspective out float along_px;
+flat out int dashed;
 const float AT_B[6] = float[6](0.0, 1.0, 1.0, 0.0, 1.0, 0.0);
 const float SIDE[6] = float[6](-1.0, -1.0, 1.0, -1.0, 1.0, 1.0);
 void main() {
@@ -252,6 +259,9 @@ void main() {
 	}
 	vec2 d = (b.xy / b.w - a.xy / a.w) * screen;
 	vec2 dir = d / max(length(d), 1e-6);
+	dashed = vertexColor.g > 0.5 ? 1 : 0;
+	float km = length(vertexNormal.xy - vertexPosition.xy);
+	along_px = mix(vertexTexCoord.x, vertexTexCoord.y, AT_B[k]) * 0.5 * length(d) / max(km, 1e-6);
 	vec2 n = vec2(-dir.y, dir.x);
 	vec4 p = mix(a, b, AT_B[k]);
 	p.xy += (n * SIDE[k] + dir * (AT_B[k] * 2.0 - 1.0)) * width / screen * p.w;
@@ -266,11 +276,31 @@ void main() {
 
 LINE_FS :: `#version 330
 in vec4 fragColor;
+noperspective in float along_px;
+flat in int dashed;
+uniform float dash_on;
+uniform float dash_off;
 out vec4 finalColor;
 void main() {
+	if (dashed == 1 && mod(along_px, dash_on + dash_off) > dash_on) discard;
 	finalColor = fragColor;
 }
 `
+
+// A border point lies at sea when the surface model is 0 all round it (terrain.odin: sea is exactly 0), so
+// polders at sea level (De Moeren on the French border, a little below or above 0) stay land.
+// BORDER_SEA_PROBE_KM apart.
+BORDER_SEA_PROBE_KM :: 0.5
+BORDER_SEA_MAX_M :: 0.05
+border_at_sea :: proc(w: ^World, p: [2]f32) -> bool {
+	for dy in -1 ..= 1 {
+		for dx in -1 ..= 1 {
+			q := p + [2]f32{f32(dx), f32(dy)} * BORDER_SEA_PROBE_KM
+			if abs(height_at(w, q.x, q.y)) > BORDER_SEA_MAX_M do return false
+		}
+	}
+	return true
+}
 
 // The 6 vertices of segment a-b from index i, the shader places the corners (LINE_VS).
 line_quad :: proc(pos, other: [][3]f32, color: [][4]u8, i: int, a, b: [2]f32, c: [4]u8) {
@@ -283,16 +313,23 @@ line_quad :: proc(pos, other: [][3]f32, color: [][4]u8, i: int, a, b: [2]f32, c:
 
 // The arrays usually live in the frame arena: after the upload the mesh no longer points to them, so raylib
 // never frees them and UnloadMesh only releases the GPU buffers.
-line_mesh_upload :: proc(pos, other: [][3]f32, color: [][4]u8, is_dynamic: bool) -> rl.Mesh {
+// along: the km along the line at A and B per vertex, only read for dashed segments (LINE_VS).
+line_mesh_upload :: proc(
+	pos, other: [][3]f32,
+	color: [][4]u8,
+	is_dynamic: bool,
+	along: [][2]f32 = nil,
+) -> rl.Mesh {
 	m := rl.Mesh {
 		vertexCount   = i32(len(pos)),
 		triangleCount = i32(len(pos) / 3),
 		vertices      = ([^]f32)(raw_data(pos)),
 		normals       = ([^]f32)(raw_data(other)),
 		colors        = ([^]u8)(raw_data(color)),
+		texcoords     = ([^]f32)(raw_data(along)),
 	}
 	rl.UploadMesh(&m, is_dynamic)
-	m.vertices, m.normals, m.colors = nil, nil, nil
+	m.vertices, m.normals, m.colors, m.texcoords = nil, nil, nil, nil
 	return m
 }
 
