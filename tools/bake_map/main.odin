@@ -15,11 +15,16 @@ MAX_HUBS :: 32
 // Same as map.odin: every point in belgium.bin lies inside 0..MAP_W_KM x 0..MAP_H_KM.
 MAP_W_KM :: 286
 MAP_H_KM :: 237
+// Same as map.odin: the name index is a grid of NAME_CELL_KM cells over the map.
+NAME_CELL_KM :: 10
+NAME_GRID_W :: (MAP_W_KM + NAME_CELL_KM - 1) / NAME_CELL_KM
+NAME_GRID_H :: (MAP_H_KM + NAME_CELL_KM - 1) / NAME_CELL_KM
 
 Map_Header :: struct {
 	magic, version:                      u32,
 	line_count, point_count, city_count: u32,
 	hub_count, names_size:               u32,
+	name_cell_count, name_run_count:     u32,
 }
 // name, ref: offsets into the names blob, 0 = none.
 Map_Line :: struct {
@@ -33,6 +38,11 @@ Map_City :: struct {
 Map_Hub :: struct {
 	pos:  [2]f32,
 	name: [32]u8,
+}
+// Segments start ..< start + count of line (point indices of each segment's first point), all touching
+// one cell of the name index.
+Map_Name_Run :: struct {
+	line, start, count: u32,
 }
 // Lines are drawn in this order, so a bigger road lies on top of a smaller one where they cross.
 Kind :: enum u32 {
@@ -288,18 +298,61 @@ main :: proc() {
 		os.exit(1)
 	}
 
-	h := Map_Header {
-		MAP_MAGIC,
-		MAP_VERSION,
-		u32(len(lines)),
-		u32(len(points)),
-		u32(len(cities)),
-		u32(len(hubs)),
-		0,
+	// Name index for map_nearest_name: per cell the runs of labelled segments whose bounding box touches it.
+	// Baked rather than built at startup: the game would have to rebuild it into the perm arena after every
+	// hot reload, and belgium.bin slices are re-pointed for free.
+	name_cells := make([]u32, NAME_GRID_W * NAME_GRID_H + 1)
+	name_runs: [dynamic]Map_Name_Run
+	{
+		labelled :: proc(l: Map_Line) -> bool {
+			if Kind(l.kind) == .Border do return false
+			return l.name != 0 || (Kind(l.kind) == .Motorway && l.ref != 0)
+		}
+		// cell, line, segment: sorted so the runs come out in a fixed order.
+		hits: [dynamic][3]u32
+		for l, i in lines {
+			if !labelled(l) do continue
+			for k in l.start ..< l.start + l.count - 1 {
+				a, b := points[k], points[k + 1]
+				x0 := clamp(int(min(a.x, b.x) / NAME_CELL_KM), 0, NAME_GRID_W - 1)
+				x1 := clamp(int(max(a.x, b.x) / NAME_CELL_KM), 0, NAME_GRID_W - 1)
+				y0 := clamp(int(min(a.y, b.y) / NAME_CELL_KM), 0, NAME_GRID_H - 1)
+				y1 := clamp(int(max(a.y, b.y) / NAME_CELL_KM), 0, NAME_GRID_H - 1)
+				for y in y0 ..= y1 do for x in x0 ..= x1 do append(&hits, [3]u32{u32(y * NAME_GRID_W + x), u32(i), k})
+			}
+		}
+		slice.sort_by(hits[:], proc(a, b: [3]u32) -> bool {
+			if a[0] != b[0] do return a[0] < b[0]
+			if a[1] != b[1] do return a[1] < b[1]
+			return a[2] < b[2]
+		})
+		for hit, i in hits {
+			prev := i > 0 ? hits[i - 1] : {max(u32), 0, 0}
+			if prev[0] == hit[0] && prev[1] == hit[1] && prev[2] + 1 == hit[2] {
+				name_runs[len(name_runs) - 1].count += 1
+			} else {
+				append(&name_runs, Map_Name_Run{hit[1], hit[2], 1})
+				name_cells[hit[0] + 1] += 1
+			}
+		}
+		for i in 1 ..< len(name_cells) do name_cells[i] += name_cells[i - 1]
+		fmt.printfln("name index: %d segment hits, %d runs", len(hits), len(name_runs))
 	}
+
 	// Padded with zeros so the next block stays 4-byte aligned; the last byte is always 0.
 	for len(names) % 4 != 0 do append(&names, 0)
-	h.names_size = u32(len(names))
+
+	h := Map_Header {
+		magic           = MAP_MAGIC,
+		version         = MAP_VERSION,
+		line_count      = u32(len(lines)),
+		point_count     = u32(len(points)),
+		city_count      = u32(len(cities)),
+		hub_count       = u32(len(hubs)),
+		names_size      = u32(len(names)),
+		name_cell_count = u32(len(name_cells)),
+		name_run_count  = u32(len(name_runs)),
+	}
 
 	out: [dynamic]u8
 	append(&out, ..mem.ptr_to_bytes(&h))
@@ -308,6 +361,8 @@ main :: proc() {
 	append(&out, ..slice.to_bytes(cities[:]))
 	append(&out, ..slice.to_bytes(hubs[:]))
 	append(&out, ..names[:])
+	append(&out, ..slice.to_bytes(name_cells))
+	append(&out, ..slice.to_bytes(name_runs[:]))
 
 	if err := os.write_entire_file("assets/belgium.bin", out[:]); err != nil {
 		fmt.eprintln("can't write assets/belgium.bin", err)
