@@ -33,6 +33,7 @@ World :: struct {
 	grid:         Grid,
 	controls:     Controls,
 	ship:         Ship,
+	replay:       Replay,
 	no_fly:       [MAX_NO_FLY]No_Fly_Zone,
 	tick:         u64,
 	accum:        f64,
@@ -64,6 +65,7 @@ game_init :: proc() -> rawptr {
 	game_hot_reloaded(w)
 	weather_load_snapshot(w, SNAPSHOT_PATH)
 	identity_load_or_create(w)
+	w.replay.steps = make([]Control_Step, REPLAY_MAX_STEPS, virtual.arena_allocator(&w.perm))
 	logf(w, "game", "build %s", BUILD_MODE)
 	logf(
 		w,
@@ -112,7 +114,12 @@ game_update :: proc(memory: rawptr) -> bool {
 	speeds := SIM_SPEEDS
 	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT) * speeds[w.sim_speed]
 	for w.accum >= SIM_DT {
-		ship_step(w, w.controls, SIM_DT)
+		step := controls_pack(w.controls)
+		if w.replay.count < len(w.replay.steps) {
+			w.replay.steps[w.replay.count] = step
+			w.replay.count += 1
+		}
+		ship_step(w, controls_unpack(step), SIM_DT)
 		w.tick += 1
 		w.accum -= SIM_DT
 	}

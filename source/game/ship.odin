@@ -11,6 +11,30 @@ Controls :: struct {
 	climb:    f32,
 }
 
+// One recorded step: the three axes as i8, -127..127 of -1..1. The simulation steps with the quantized
+// value, so replaying the recording reproduces the ship path exactly.
+Control_Step :: [3]i8
+
+// 1 hour at 60 Hz, 3 bytes per step = 648 KB, allocated once from the perm arena. Recording stops when full.
+REPLAY_MAX_STEPS :: 60 * 3600
+
+Replay :: struct {
+	steps: []Control_Step,
+	count: int,
+}
+
+controls_pack :: proc(c: Controls) -> Control_Step {
+	return {
+		i8(math.round(clamp(c.throttle, -1, 1) * 127)),
+		i8(math.round(clamp(c.turn, -1, 1) * 127)),
+		i8(math.round(clamp(c.climb, -1, 1) * 127)),
+	}
+}
+
+controls_unpack :: proc(s: Control_Step) -> Controls {
+	return {f32(s[0]) / 127, f32(s[1]) / 127, f32(s[2]) / 127}
+}
+
 Ship_Warning :: enum {
 	Terrain,
 	No_Fly,
