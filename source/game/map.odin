@@ -17,6 +17,12 @@ MAP_H_KM :: 237
 NAME_CELL_KM :: 10
 NAME_GRID_W :: (MAP_W_KM + NAME_CELL_KM - 1) / NAME_CELL_KM
 NAME_GRID_H :: (MAP_H_KM + NAME_CELL_KM - 1) / NAME_CELL_KM
+// Heightmap and hillshade: one sample per HEIGHT_CELL_KM cell, at the cell centre ((x + 0.5) * 0.25 km,
+// (y + 0.5) * 0.25 km), row-major, y down. tools/bake_map has a copy.
+HEIGHT_CELL_KM :: 0.25
+HEIGHT_W :: MAP_W_KM * 4
+HEIGHT_H :: MAP_H_KM * 4
+#assert(HEIGHT_W * HEIGHT_CELL_KM == MAP_W_KM && HEIGHT_H * HEIGHT_CELL_KM == MAP_H_KM)
 
 Map_Header :: struct {
 	magic, version:                      u32,
@@ -24,6 +30,7 @@ Map_Header :: struct {
 	hub_count, names_size:               u32,
 	name_cell_count, name_run_count:     u32,
 	area_count, area_point_count:        u32,
+	height_w, height_h:                  u32,
 }
 // name, ref: offsets into Map.names (map_name), 0 = none. ref is the OSM road number, e.g. "E40;A10".
 Map_Line :: struct {
@@ -83,6 +90,11 @@ Map :: struct {
 	// Land use polygons sorted by kind (Area_Kind order), holes dropped (see tools/bake_map).
 	areas:       []Map_Area,
 	area_points: [][2]f32,
+	// Ground height in m (Copernicus GLO-90, cell average, sea 0), HEIGHT_W x HEIGHT_H. Read with height_at.
+	heights:     []i16,
+	// Hillshade of heights, light from the north-west at 45 degrees, 4x vertical exaggeration:
+	// 128 = flat, 255 = facing the light, 0 = facing away. Same grid as heights.
+	hillshade:   []u8,
 }
 
 // map_nearest_name ranks a line by distance x weight, so a bigger road wins over a smaller one that is a little
@@ -135,6 +147,9 @@ load_map :: proc() -> (m: Map, ok: bool) {
 	m.name_runs = take(data, &off, h.name_run_count, Map_Name_Run, &bad)
 	m.areas = take(data, &off, h.area_count, Map_Area, &bad)
 	m.area_points = take(data, &off, h.area_point_count, [2]f32, &bad)
+	if h.height_w != HEIGHT_W || h.height_h != HEIGHT_H do return {}, false
+	m.heights = take(data, &off, HEIGHT_W * HEIGHT_H, i16, &bad)
+	m.hillshade = take(data, &off, HEIGHT_W * HEIGHT_H, u8, &bad)
 	if bad || off != len(data) do return {}, false
 
 	if len(m.names) == 0 || m.names[0] != 0 || m.names[len(m.names) - 1] != 0 do return {}, false

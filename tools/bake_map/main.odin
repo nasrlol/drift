@@ -15,6 +15,16 @@ MAX_HUBS :: 32
 // Same as map.odin: every point in belgium.bin lies inside 0..MAP_W_KM x 0..MAP_H_KM.
 MAP_W_KM :: 286
 MAP_H_KM :: 237
+// Same as map.odin: one height sample per 250 m cell, at the cell centre.
+HEIGHT_CELL_KM :: 0.25
+HEIGHT_W :: MAP_W_KM * 4
+HEIGHT_H :: MAP_H_KM * 4
+#assert(HEIGHT_W * HEIGHT_CELL_KM == MAP_W_KM && HEIGHT_H * HEIGHT_CELL_KM == MAP_H_KM)
+// Hillshade: the vertical exaggeration that makes the Ardennes readable at 250 m cells (the valleys are
+// 100-200 m deep, Flanders stays near flat), and the light from the north-west, 45 degrees up.
+HILLSHADE_Z :: 4
+HILLSHADE_AZIMUTH_DEG :: 315
+HILLSHADE_ALTITUDE_DEG :: 45
 // Same as map.odin: the name index is a grid of NAME_CELL_KM cells over the map.
 NAME_CELL_KM :: 10
 NAME_GRID_W :: (MAP_W_KM + NAME_CELL_KM - 1) / NAME_CELL_KM
@@ -26,6 +36,7 @@ Map_Header :: struct {
 	hub_count, names_size:               u32,
 	name_cell_count, name_run_count:     u32,
 	area_count, area_point_count:        u32,
+	height_w, height_h:                  u32,
 }
 // Triangles area_points[start:][:count], 3 points each, of one land use polygon.
 Map_Area :: struct {
@@ -341,6 +352,65 @@ bake_areas :: proc(path: string) -> (areas: [dynamic]Map_Area, area_points: [dyn
 	return
 }
 
+// tools/warp_dem.sh writes the heights: i16 m, HEIGHT_W x HEIGHT_H, row-major, y down, little endian.
+// Hillshade from them: 128 = flat, 255 = facing the light, 0 = facing away by 90 degrees or more.
+bake_heights :: proc(path: string) -> (heights: []i16, hillshade: []u8) {
+	data, err := os.read_entire_file(path, context.allocator)
+	if err != nil {
+		fmt.eprintln("can't read", path, err)
+		os.exit(1)
+	}
+	raw: [dynamic]u8
+	if zerr := deflate.inflate_gzip(&raw, data); zerr != nil {
+		fmt.eprintln("can't gunzip", path, zerr)
+		os.exit(1)
+	}
+	if len(raw) != HEIGHT_W * HEIGHT_H * 2 {
+		fmt.eprintfln("%s: %d bytes, want %d x %d x 2", path, len(raw), HEIGHT_W, HEIGHT_H)
+		os.exit(1)
+	}
+	heights = make([]i16, HEIGHT_W * HEIGHT_H)
+	lo, hi: i16 = max(i16), min(i16)
+	for &h, i in heights {
+		h = i16(u16(raw[2 * i]) | u16(raw[2 * i + 1]) << 8)
+		lo, hi = min(lo, h), max(hi, h)
+	}
+	// Belgium is -10..700 m, open pit quarries go below sea level (-97 m near Tournai). Anything far outside
+	// is a broken warp, not terrain.
+	if lo < -500 || hi > 3000 {
+		fmt.eprintfln("%s: heights %d..%d m, outside -500..3000", path, lo, hi)
+		os.exit(1)
+	}
+
+	hillshade = make([]u8, HEIGHT_W * HEIGHT_H)
+	az := f32(HILLSHADE_AZIMUTH_DEG) * math.RAD_PER_DEG
+	alt := f32(HILLSHADE_ALTITUDE_DEG) * math.RAD_PER_DEG
+	light := [3]f32{math.cos(alt) * math.sin(az), math.cos(alt) * math.cos(az), math.sin(alt)} // east, north, up
+	flat := light.z
+	at :: proc(heights: []i16, x, y: int) -> f32 {
+		return f32(heights[clamp(y, 0, HEIGHT_H - 1) * HEIGHT_W + clamp(x, 0, HEIGHT_W - 1)])
+	}
+	for y in 0 ..< HEIGHT_H {
+		for x in 0 ..< HEIGHT_W {
+			// Horn's 3 x 3 gradient, the same as gdaldem hillshade. Row y - 1 is north.
+			nw, n, ne := at(heights, x - 1, y - 1), at(heights, x, y - 1), at(heights, x + 1, y - 1)
+			w, e := at(heights, x - 1, y), at(heights, x + 1, y)
+			sw, s, se := at(heights, x - 1, y + 1), at(heights, x, y + 1), at(heights, x + 1, y + 1)
+			cell_m := f32(HEIGHT_CELL_KM * 1000)
+			dzdx := ((ne + 2 * e + se) - (nw + 2 * w + sw)) / (8 * cell_m) * HILLSHADE_Z
+			dzdn := ((nw + 2 * n + ne) - (sw + 2 * s + se)) / (8 * cell_m) * HILLSHADE_Z
+			normal := [3]f32{-dzdx, -dzdn, 1}
+			lit :=
+				(normal.x * light.x + normal.y * light.y + normal.z * light.z) /
+				math.sqrt(normal.x * normal.x + normal.y * normal.y + 1)
+			v := lit <= flat ? 128 * max(lit, 0) / flat : 128 + 127 * (lit - flat) / (1 - flat)
+			hillshade[y * HEIGHT_W + x] = u8(math.round(clamp(v, 0, 255)))
+		}
+	}
+	fmt.printfln("heights: %d x %d, %d..%d m", HEIGHT_W, HEIGHT_H, lo, hi)
+	return
+}
+
 cross :: proc(a, b, c: [2]f32) -> f32 {
 	return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
 }
@@ -419,6 +489,7 @@ main :: proc() {
 	bake_layer("assets/geojson/roads.geojson.gz", .Motorway) // kind comes from each road's highway tag
 	bake_layer("assets/geojson/cities.geojson", .Border, is_cities = true)
 	areas, area_points := bake_areas("assets/geojson/areas.geojson.gz")
+	heights, hillshade := bake_heights("assets/geojson/heights.i16.gz")
 
 	// OSM cuts a road into a new way at every tag change, so most lines are a few points long and the line
 	// table outweighs the points. Join lines of one kind that meet end to end where no third line of that
@@ -555,6 +626,8 @@ main :: proc() {
 		name_run_count   = u32(len(name_runs)),
 		area_count       = u32(len(areas)),
 		area_point_count = u32(len(area_points)),
+		height_w         = HEIGHT_W,
+		height_h         = HEIGHT_H,
 	}
 
 	out: [dynamic]u8
@@ -568,6 +641,8 @@ main :: proc() {
 	append(&out, ..slice.to_bytes(name_runs[:]))
 	append(&out, ..slice.to_bytes(areas[:]))
 	append(&out, ..slice.to_bytes(area_points[:]))
+	append(&out, ..slice.to_bytes(heights))
+	append(&out, ..hillshade)
 
 	if err := os.write_entire_file("assets/belgium.bin", out[:]); err != nil {
 		fmt.eprintln("can't write assets/belgium.bin", err)
