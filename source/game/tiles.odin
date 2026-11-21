@@ -19,14 +19,35 @@ Tile_Cache :: struct {
 	tiles: [TILE_SLOTS]Tile,
 }
 
-// Builds the mesh for what is anchored inside lo ..< hi (km). An empty mesh is fine.
+// Builds the mesh for what is anchored inside lo ..< hi (km), its points relative to lo. An empty mesh is fine.
 Tile_Build :: #type proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh
+
+// Where a draw call puts map meshes (km, y south, z down): axes scales and turns them (no translation) and origin
+// (km) lands at zero. The map: identity around 0. The street view: metres, y up, around the street origin.
+// Meshes keep their points relative to an anchor (a tile corner, a city centre) and place_at takes the anchor
+// minus the origin in f64, so every number the GPU sees stays small. With the points in km (~150) times 1000
+// in f32 the 3D buildings z-fought in the street view: 1.7 % of the pixels jumped colour between two frames
+// of a 0.1 px pan from the tower (measured with --script, whole wall faces flipping).
+Placement :: struct {
+	axes:   rl.Matrix,
+	origin: [2]f32,
+}
+
+MAP_PLACEMENT :: Placement {
+	axes = 1,
+}
+
+place_at :: proc(p: Placement, anchor: [2]f32) -> rl.Matrix {
+	d := [2]f64{f64(anchor.x) - f64(p.origin.x), f64(anchor.y) - f64(p.origin.y)}
+	return p.axes * rl.Matrix(linalg.matrix4_translate_f32({f32(d.x), f32(d.y), 0}))
+}
 
 tile_centre :: proc(key: [2]i32, size: f32) -> [2]f32 {
 	return ([2]f32{f32(key.x), f32(key.y)} + 0.5) * size
 }
 
-// Updates the cache around target (km) and draws its tiles with material and transform (inside BeginMode3D).
+// Updates the cache around target (km) and draws its tiles with material where place puts them (inside
+// BeginMode3D).
 tiles_update_draw :: proc(
 	w: ^World,
 	cache: ^Tile_Cache,
@@ -34,7 +55,7 @@ tiles_update_draw :: proc(
 	build: Tile_Build,
 	material: rl.Material,
 	target: [2]f32,
-	transform: rl.Matrix,
+	place: Placement,
 ) {
 	keep := reach + 2 * size
 	for &t in cache.tiles {
@@ -73,7 +94,7 @@ tiles_update_draw :: proc(
 	for t in cache.tiles {
 		if !t.used || t.mesh.vertexCount == 0 do continue
 		if linalg.length(tile_centre(t.key, size) - target) > reach + size do continue
-		rl.DrawMesh(t.mesh, material, transform)
+		rl.DrawMesh(t.mesh, material, place_at(place, [2]f32{f32(t.key.x), f32(t.key.y)} * size))
 	}
 }
 

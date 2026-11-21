@@ -71,7 +71,7 @@ town_lot :: proc(
 	return ring, height, true
 }
 
-// The generated buildings whose lot centre lies in lo ..< hi (Tile_Build).
+// The generated buildings whose lot centre lies in lo ..< hi (Tile_Build), relative to lo.
 towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	b := &w.buildings
 	for o in b.origins[:b.count] {
@@ -108,6 +108,7 @@ towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 					ring, height, ok := town_lot(b.origins[:b.count], seed, ax, ay, i, j)
 					if !ok do continue
 					height *= BUILDINGS_HEIGHT_X
+					for &q in ring do q -= lo
 					for e in 0 ..< 4 {
 						p, q := ring[e], ring[(e + 1) % 4]
 						d := linalg.normalize(q - p)
@@ -135,8 +136,8 @@ towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 }
 
 // Inside BeginMode3D, right after buildings_draw (which sets the shader's uniforms), around target (km).
-towns_draw :: proc(w: ^World, target: [2]f32, reach: f32, transform: rl.Matrix) {
+towns_draw :: proc(w: ^World, target: [2]f32, reach: f32, place: Placement) {
 	b := &w.buildings
 	if !b.ready do return
-	tiles_update_draw(w, &w.towns, TOWN_TILE_KM, reach, towns_build_tile, b.material, target, transform)
+	tiles_update_draw(w, &w.towns, TOWN_TILE_KM, reach, towns_build_tile, b.material, target, place)
 }

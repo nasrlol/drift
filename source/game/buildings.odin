@@ -177,7 +177,7 @@ buildings_build :: proc(w: ^World) {
 			q: [2]i32
 			for k in 0 ..< n {
 				q += delta(planes, total_v, vi + k)
-				append(&ring, origin + [2]f32{f32(q.x), f32(q.y)} * BUILDINGS_POS_UNIT_M / 1000)
+				append(&ring, [2]f32{f32(q.x), f32(q.y)} * BUILDINGS_POS_UNIT_M / 1000)
 			}
 			vi += n
 			if n < 3 do continue
@@ -185,7 +185,7 @@ buildings_build :: proc(w: ^World) {
 			// in a wall.
 			mid: [2]f32
 			for p in ring do mid += p
-			edge := linalg.length(mid / f32(n) - origin) / BUILDINGS_RADIUS_KM
+			edge := linalg.length(mid / f32(n)) / BUILDINGS_RADIUS_KM
 			height *= 1 - 0.75 * math.smoothstep(f32(0.6), 1, edge)
 			height *= BUILDINGS_HEIGHT_X
 			for k in 0 ..< n {
@@ -238,8 +238,8 @@ buildings_build :: proc(w: ^World) {
 }
 
 // Inside BeginMode3D, after the roads. fog as the lines (game.odin passes the same range), height_scale squashes
-// the heights (1 / BUILDINGS_HEIGHT_X is real height), cities within reach (km) of target are drawn with
-// transform. look gives the roof, wall, tree and fog colors.
+// the heights (1 / BUILDINGS_HEIGHT_X is real height), cities within reach (km) of target are drawn where place
+// puts them (a city mesh is relative to its origin). look gives the roof, wall, tree and fog colors.
 Buildings_Look :: struct {
 	roof, wall, tree, fog: [3]f32,
 }
@@ -250,7 +250,7 @@ buildings_draw :: proc(
 	height_scale: f32,
 	target: [2]f32,
 	reach: f32,
-	transform: rl.Matrix,
+	place: Placement,
 	look: Buildings_Look,
 ) {
 	b := &w.buildings
@@ -268,7 +268,7 @@ buildings_draw :: proc(
 	for i in 0 ..< b.count {
 		d := b.origins[i] - target
 		if math.sqrt(d.x * d.x + d.y * d.y) > reach do continue
-		rl.DrawMesh(b.meshes[i], b.material, transform)
+		rl.DrawMesh(b.meshes[i], b.material, place_at(place, b.origins[i]))
 	}
 }
 

@@ -10,7 +10,7 @@ import rl "vendor:raylib"
 // car at real scale; the car flies with ship_free_step. The map stays as it was, V or Esc goes back.
 //
 // Street space: metres, x east, y up, z south, around origin (km, snapped to STREET_ORIGIN_KM so the f32 values
-// stay small and do not shake). The map meshes (x km, y km south, z km down) are drawn with street_transform.
+// stay small and do not shake). The map meshes (x km, y km south, z km down) are drawn with street_place.
 // The ground is flat at y = 0: the car's height is its height above the local ground (alt - height_at), the way
 // the buildings stand on the map. raylib's projection has near 0.05 and far 4000 units, so in metres the view
 // ends at 4 km; the haze closes before that.
@@ -60,7 +60,7 @@ Street :: struct {
 // Ground shader: vertex colors, land use colors swapped from the map design to natural ones (remap), a little
 // noise in world space so large surfaces are not flat paint, haze with distance.
 // The ground layers (land, land use, rivers, roads, markings) all lie on y = 0, so the depth buffer cannot order
-// them: the street_transform meshes (km x 1000 minus ~150 km) get a depth that is off by 1e-6..3e-6 in NDC
+// them: meshes in km drawn with km x 1000 minus ~150 km in f32 got a depth that is off by 1e-6..3e-6 in NDC
 // against the land quad (measured at 280 m), ten times any usable bias, so they lost the depth test at random.
 // Nothing can stand below the ground and the camera is always above it, so the ground never hides anything:
 // every ground fragment writes the far depth, minus a hair per layer (layer = layer uniform + the vertex alpha,
@@ -164,8 +164,8 @@ STREET_LOOK :: Street_Look {
 }
 
 // Map space (x km, y km south, z km down) to street space (m, y up) around origin.
-street_transform :: proc(origin: [2]f32) -> rl.Matrix {
-	return rl.Matrix{1000, 0, 0, -1000 * origin.x, 0, 0, -1000, 0, 0, 1000, 0, -1000 * origin.y, 0, 0, 0, 1}
+street_place :: proc(origin: [2]f32) -> Placement {
+	return {axes = rl.Matrix{1000, 0, 0, 0, 0, 0, -1000, 0, 0, 1000, 0, 0, 0, 0, 0, 1}, origin = origin}
 }
 
 // The ship in street space: f64 so pos_frac (below the f32 resolution of pos) counts.
@@ -269,7 +269,8 @@ street_unload :: proc(st: ^Street) {
 	st.ready = false
 }
 
-// Road ribbons of one tile at their real width, the river beds, and the lane markings (Tile_Build).
+// Road ribbons of one tile at their real width, the river beds, and the lane markings (Tile_Build), relative
+// to lo.
 street_road_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	st := &w.street
 	look := STREET_LOOK
@@ -304,6 +305,7 @@ street_road_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 		a, b := w.m.points[k], w.m.points[k + 1]
 		mid := (a + b) / 2
 		if mid.x < lo.x || mid.y < lo.y || mid.x >= hi.x || mid.y >= hi.y do continue
+		a, b = a - lo, b - lo
 		// Half widths in m: OSM draws a motorway carriageway, the others both directions on one line.
 		hw: f32
 		lanes := 0
@@ -446,7 +448,7 @@ street_draw :: proc(w: ^World) {
 	street_camera(w)
 	look := STREET_LOOK
 	screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
-	transform := street_transform(st.origin)
+	place := street_place(st.origin)
 	centre := w.ship.pos
 
 	// Sky: zenith to the horizon line of this camera, then haze below it (the ground covers that part).
@@ -505,7 +507,8 @@ street_draw :: proc(w: ^World) {
 			rl.SetShaderValue(sh, st.loc.remap, &remap, .FLOAT)
 			rl.SetShaderValueV(sh, st.loc.map_colors, &map_colors, .VEC3, 6)
 			rl.SetShaderValueV(sh, st.loc.real_colors, &real_colors, .VEC3, 6)
-			rl.DrawMesh(lm.areas, mat, transform)
+			// One mesh in km for the whole map: x and z land within ~1.5 cm, the depth is layered (see the shader).
+			rl.DrawMesh(lm.areas, mat, place_at(place, {}))
 		}
 
 		// 3: rivers, roads and markings (layers 2, 3, 4).
@@ -520,7 +523,7 @@ street_draw :: proc(w: ^World) {
 			street_road_tile,
 			mat,
 			centre,
-			transform,
+			place,
 		)
 	}
 
@@ -532,11 +535,11 @@ street_draw :: proc(w: ^World) {
 		1 / BUILDINGS_HEIGHT_X,
 		centre,
 		STREET_REACH_KM + BUILDINGS_RADIUS_KM,
-		transform,
+		place,
 		look.buildings,
 	)
-	towns_draw(w, centre, STREET_REACH_KM, transform)
-	nature_draw(w, centre, STREET_REACH_KM, transform)
+	towns_draw(w, centre, STREET_REACH_KM, place)
+	nature_draw(w, centre, STREET_REACH_KM, place)
 
 	// 5: the cars, each with a soft contact shadow.
 	car_anim_update(w, frame_time(w))

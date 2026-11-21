@@ -521,11 +521,11 @@ game_update :: proc(memory: rawptr) -> bool {
 					ease_in_out(grow),
 					target,
 					BUILDINGS_CULL_KM + view_km,
-					rl.Matrix(1),
+					MAP_PLACEMENT,
 					look,
 				)
-				towns_draw(w, target, TOWN_REACH_KM, rl.Matrix(1))
-				nature_draw(w, target, TREE_REACH_KM, rl.Matrix(1))
+				towns_draw(w, target, TOWN_REACH_KM, MAP_PLACEMENT)
+				nature_draw(w, target, TREE_REACH_KM, MAP_PLACEMENT)
 			}
 		}
 		rl.EndMode3D()
