@@ -82,6 +82,17 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     Present but wrong size or invalid: logged and left alone (it is the user's reputation),
                     w.identity stays zero and network features stay off. w.identity_pub = public key,
                     logged as the first 8 bytes in hex. Moves to the user data folder with the release item.
+                  Carpool messages: Message is 184 bytes, fixed size, little endian, no implicit padding
+                    (#assert). Header: magic "DRMS", version 1, kind (Offer / Request / Accept / Review),
+                    time (unix s, set by the author), author (ed25519 public key). Body is a raw union:
+                      Offer   from_hub, to_hub, seats 1..8, mode, depart, arrive, weather snapshot hash, energy_kwh
+                      Request offer id, from_hub, to_hub, seats 1..8
+                      Accept  offer id, request id
+                      Review  subject public key, accept id, stars 1..5
+                    sig = ed25519 over bytes 0..119. Message id = sha256 of all 184 bytes.
+                    msg_sign(w, m) fills magic, version, author, sig (start from a zeroed Message).
+                    msg_read(w, bytes) for anything from outside: size, header, field ranges, then signature.
+                    Measured (macOS arm64, -o:speed): sign ~33 us, read + verify ~44 us.
                   The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
   debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
                   Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =
