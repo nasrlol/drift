@@ -253,7 +253,8 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 [ ] shadows over the whole view (a second, coarser cascade beyond 420 m)
 [x] trees with trunks near the camera, street trees, instanced (trees.odin)
 [ ] hedges, street furniture (lampposts, benches, bike racks)
-[ ] frame over 4 ms in parks (4.1 ms profile): shadow pass every frame, tree instances built twice
+[ ] frame over 4 ms in parks: 3.1 ms now (profile, round world), worst 4.5 while tiles build after a jump
+[x] round world instead of fog: the end of the view lies behind a curved horizon (Abdellah via Lars)
 [ ] other cars (presence) tested in the street view with two nodes
 [x] land on the ground or a roof, wheels down, drive like a car; up takes off (test/ run_free_flight case 6)
 [~] gamepad: GTA-style mapping and a connect log line built; untested with a controller (the DualSense was not

@@ -54,7 +54,8 @@ Trees :: struct {
 
 // The tree vertex shader: the instance transform places a height-1 tree; v_lh is the tree's position (a hash for
 // its colour), v_uv world coordinates for the leaf clumps.
-STREET_TREE_VS :: `#version 330
+STREET_TREE_VS ::
+	`#version 330
 in vec3 vertexPosition;
 in vec3 vertexNormal;
 in vec4 vertexColor;
@@ -65,6 +66,9 @@ out vec3 v_normal;
 out vec2 v_uv;
 out vec2 v_lh;
 out vec4 v_color;
+` +
+	STREET_BEND_GLSL +
+	`
 void main() {
 	vec4 wp = instanceTransform * vec4(vertexPosition, 1.0);
 	v_world = wp.xyz;
@@ -72,7 +76,7 @@ void main() {
 	v_uv = wp.xz + vec2(wp.y * 0.7);
 	v_lh = instanceTransform[3].xz;
 	v_color = vertexColor;
-	gl_Position = mvp * wp;
+	gl_Position = bent(mvp * wp, wp.xyz);
 }
 `
 
