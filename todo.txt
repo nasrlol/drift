@@ -31,9 +31,9 @@ NASR: MAP + RENDERING + UI
 [x] draw cities + names
 [x] "(c) OpenStreetMap contributors" on screen (Roboto, assets/fonts/)
 [x] download Copernicus GLO-90 tiles N49-N51, E002-E006 (sea tiles 404, fine): tools/download_dem.sh
-[ ] gdalbuildvrt + gdalwarp to our projection, 250 m cells, raw i16
-    (eqc, lat_ts=50.5, lon_0=2.38, R=6378137 so it matches the bin)
-[ ] bake heightmap block into belgium.bin, MAP_VERSION 3
+[x] gdalbuildvrt + gdalwarp to our projection, 250 m cells, raw i16: tools/warp_dem.sh
+    (eqc, lat_ts=50.5, lon_0=2.38, R=6378166.175 = the 111.32 km per degree of the bin, see notes.txt)
+[x] bake heightmap block into belgium.bin, MAP_VERSION 4 (with a hillshade block)
 [ ] height_at(x, y) bilinear
 [ ] bake hillshade into a texture at build time, draw it as one quad
 [x] build static map meshes once at startup, never per frame
