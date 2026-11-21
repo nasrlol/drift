@@ -33,10 +33,6 @@ STREET_ROAD_CELL_KM :: 2.0
 STREET_ROAD_W :: int(MAP_W_KM) / int(STREET_ROAD_CELL_KM) + 1
 STREET_ROAD_H :: int(MAP_H_KM) / int(STREET_ROAD_CELL_KM) + 1
 STREET_HINT_S :: 7.0 // the key hint shows this long after switching on
-// One depth bias unit in NDC: a few steps of the 24 bit depth buffer, so the flat ground layers (land, land use,
-// rivers, roads, markings) draw in order without flicker, and pull through a wall's foot by only ~1 m at 1 km.
-STREET_DEPTH_UNIT :: 2.5e-7
-
 Street :: struct {
 	on:         bool,
 	yaw, pitch: f32, // the player's look-around on top of the chase direction, radians
@@ -56,27 +52,30 @@ Street :: struct {
 	ground:     rl.Mesh,
 	material:   rl.Material,
 	loc:        struct {
-		fog_c, fog_r, bias, remap, map_colors, real_colors, origin, tone: i32,
+		fog_c, fog_r, layer, remap, map_colors, real_colors, origin, tone: i32,
 	},
 	ready:      bool,
 }
 
 // Ground shader: vertex colors, land use colors swapped from the map design to natural ones (remap), a little
-// noise in world space so large surfaces are not flat paint, haze with distance. vertexColor.a = 1 - layer / 4
-// for the depth order within a mesh.
+// noise in world space so large surfaces are not flat paint, haze with distance.
+// The ground layers (land, land use, rivers, roads, markings) all lie on y = 0, so the depth buffer cannot order
+// them: the street_transform meshes (km x 1000 minus ~150 km) get a depth that is off by 1e-6..3e-6 in NDC
+// against the land quad (measured at 280 m), ten times any usable bias, so they lost the depth test at random.
+// Nothing can stand below the ground and the camera is always above it, so the ground never hides anything:
+// every ground fragment writes the far depth, minus a hair per layer (layer = layer uniform + the vertex alpha,
+// alpha = 1 - layer / 4). A later layer always wins over an earlier one, a tie goes to the draw order, and
+// everything 3D drawn after the ground is nearer than all of it.
 STREET_GROUND_VS :: `#version 330
 in vec3 vertexPosition;
 in vec4 vertexColor;
 uniform mat4 mvp;
 uniform mat4 matModel;
-uniform float depth_bias;
 out vec4 color;
 out vec3 world;
 out float depth;
 void main() {
 	vec4 p = mvp * vec4(vertexPosition, 1.0);
-	float layer = depth_bias + floor((1.0 - vertexColor.a) * 4.0 + 0.5);
-	p.z -= layer * 2.5e-7 * p.w;
 	gl_Position = p;
 	color = vertexColor;
 	world = (matModel * vec4(vertexPosition, 1.0)).xyz;
@@ -95,6 +94,7 @@ uniform vec3 map_colors[6];
 uniform vec3 real_colors[6];
 uniform vec2 origin;
 uniform vec3 tone;
+uniform float layer;
 out vec4 finalColor;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
@@ -116,6 +116,7 @@ void main() {
 	c *= tone;
 	float f = clamp((depth - fog_range.x) / max(fog_range.y - fog_range.x, 1e-3), 0.0, 1.0);
 	finalColor = vec4(mix(c, fog_color, f * (2.0 - f)), 1.0);
+	gl_FragDepth = 1.0 - (layer + floor((1.0 - color.a) * 4.0 + 0.5)) * 2e-7;
 }
 `
 
@@ -265,7 +266,7 @@ street_build :: proc(w: ^World) {
 	st.loc = {
 		fog_c       = rl.GetShaderLocation(sh, "fog_color"),
 		fog_r       = rl.GetShaderLocation(sh, "fog_range"),
-		bias        = rl.GetShaderLocation(sh, "depth_bias"),
+		layer       = rl.GetShaderLocation(sh, "layer"),
 		remap       = rl.GetShaderLocation(sh, "remap"),
 		map_colors  = rl.GetShaderLocation(sh, "map_colors"),
 		real_colors = rl.GetShaderLocation(sh, "real_colors"),
@@ -488,8 +489,8 @@ street_draw :: proc(w: ^World) {
 		rl.SetShaderValue(sh, st.loc.tone, &look.tone, .VEC3)
 
 		// 1: land, a quad kept under the car.
-		bias, remap: f32 = 0, 0
-		rl.SetShaderValue(sh, st.loc.bias, &bias, .FLOAT)
+		layer, remap: f32 = 0, 0
+		rl.SetShaderValue(sh, st.loc.layer, &layer, .FLOAT)
 		rl.SetShaderValue(sh, st.loc.remap, &remap, .FLOAT)
 		mat := st.material
 		{
@@ -514,8 +515,8 @@ street_draw :: proc(w: ^World) {
 			}
 			real_colors: [6][3]f32
 			for k in Area_Kind do real_colors[int(k)] = rl.ColorNormalize(look.areas[k]).rgb
-			bias, remap = 1, 1
-			rl.SetShaderValue(sh, st.loc.bias, &bias, .FLOAT)
+			layer, remap = 1, 1
+			rl.SetShaderValue(sh, st.loc.layer, &layer, .FLOAT)
 			rl.SetShaderValue(sh, st.loc.remap, &remap, .FLOAT)
 			rl.SetShaderValueV(sh, st.loc.map_colors, &map_colors, .VEC3, 6)
 			rl.SetShaderValueV(sh, st.loc.real_colors, &real_colors, .VEC3, 6)
@@ -532,9 +533,9 @@ street_draw :: proc(w: ^World) {
 			rl.DrawMesh(lm.areas, mat, transform)
 		}
 
-		// 3: rivers, roads and markings.
-		bias, remap = 2, 0
-		rl.SetShaderValue(sh, st.loc.bias, &bias, .FLOAT)
+		// 3: rivers, roads and markings (layers 2, 3, 4).
+		layer, remap = 1, 0
+		rl.SetShaderValue(sh, st.loc.layer, &layer, .FLOAT)
 		rl.SetShaderValue(sh, st.loc.remap, &remap, .FLOAT)
 		tiles_update_draw(
 			w,

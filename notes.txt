@@ -603,8 +603,15 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   shader remaps the palette colors), road ribbons per 1 km tile at real width with lane markings,
                   buildings at real height (height_scale 1 / BUILDINGS_HEIGHT_X), towns, trees, the cars at real size
                   (car_draw_street: no bob, no glow) with a contact shadow, then a HUD (speed, height, heading).
-                  KNOWN BUG: the land use triangles and the road ribbons do not show (the land quad and the buildings
-                  do, with the same transform and material); see todo STREET VIEW.
+                  Ground layers: land, land use, rivers, roads and markings all lie on y = 0. The depth buffer cannot
+                  order them: the street_transform meshes (km x 1000 minus ~150 km in f32) got a depth off by 1.6e-6
+                  .. 2.6e-6 NDC against the land quad at 280 m (measured), 6-10x the old 2.5e-7 layer bias, so land
+                  use and roads lost the depth test at random and only bits of road showed (the old KNOWN BUG,
+                  found with --script and a magenta background). Nothing stands below the ground and the camera is
+                  always above it, so the ground shader writes the far depth minus 2e-7 per layer (gl_FragDepth):
+                  later layers win, ties go to the draw order, everything 3D drawn after is nearer.
+                  Data gap: belgium.bin has roads down to tertiary only and no land use in most of the old centres,
+                  so between the real buildings of Brussels the residential streets and squares are bare land.
   collide.odin    (Lars, simulation, no raylib) collide_car(w, pos, hag, radius_m) -> (push m, roof m): the car as a
                   circle against the building footprints the street view draws. Real buildings from BUILDINGS_DATA
                   with a 100 m cell list per city (2.4 km square), generated town buildings made again from the City

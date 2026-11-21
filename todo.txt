@@ -231,9 +231,12 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 [x] free flight with momentum, wind and gusts, hover over ground and roofs (ship_free_step)
 [x] building collision against real and generated buildings (collide.odin)
 [x] buildings at real height, towns, trees, the car at real size, HUD
-[ ] BUG: land use and road ribbons do not show in the street view (land quad and buildings do)
+[x] BUG: land use and road ribbons did not show in the street view: f32 depth of the km meshes, fixed with
+    layered far depth in the ground shader (notes.txt street.odin)
+[ ] residential streets, squares and sidewalks between the houses (not in belgium.bin: below tertiary)
 [ ] always day in the street view, natural greens (no dark mode there)
-[ ] scripted run mode with screenshots (--script: keys per frame, shot, quit) for visual checks
+[x] scripted run mode with screenshots (--script: keys per frame, shot, quit) for visual checks
+    test/data/street_standard.txt: tower, street, main road, park, countryside
 [ ] headless test cases for free flight: wall stop, roof landing, top speed, crosswind drift, same output twice
 [ ] sun lighting with normals, sky with sun, haze, ambient occlusion at wall feet, sun shadows (shadow map)
 [ ] facades in the shader: floors, windows, doors, shop fronts, brick / plaster / stone per building

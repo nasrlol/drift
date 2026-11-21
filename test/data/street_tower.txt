@@ -1,8 +1,0 @@
-# Street view from the Brussels tower (the start), the car hovering at the tower top, looking north.
-snapshot test/data/calm.snap
-press 2 V
-shot 150 build/shots/tower.png
-# look around to the south-east
-mouse 160 400 60
-shot 200 build/shots/tower_se.png
-quit 201
