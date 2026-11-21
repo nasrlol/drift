@@ -38,14 +38,27 @@ NASR: MAP + RENDERING + UI
 [ ] bake hillshade into a texture at build time, draw it as one quad
 [x] build static map meshes once at startup, never per frame
 [x] day / night theme: one palette struct, swap the pointer (an index: a pointer dangles after reload)
-[ ] routes as screen-width strips, built once per route, alternatives grey
 [x] wind particles: SoA arrays (x[], y[], age[]), one update loop, one draw batch, fixed count
 [x] labels: collect into a flat array per frame (temp allocator), cull, draw in one pass
 [x] immediate mode UI (our own, raygui needs a system lib on Linux), no retained widget tree
-[ ] plan screen: from/to hub, mode, departure +0..+8 h, route cards with time/kWh, start
-[ ] navigate screen: banner, then-card, speed, battery, used, solar, height, sim speed
-[ ] layers toggles: wind, gusts, no-fly, solar, altitude layer
 [ ] A* scan animation: replay the expanded-node order Lars records, no extra work in the router
+design (docs/drift-design.pdf). The doc is look and feel only: names, values and logic come from the code on
+main (real Belgian names from belgium.bin, LAYER_ALT, ZOOM_MIN / MAX, the NOT DOING list).
+Moved to the design split: plan screen + layers -> ANDREI,
+navigate screen -> LARS (banner, sheet) + DARIO (buttons, pad), route strips -> LARS.
+Shared signatures for all of this: notes.txt "DESIGN INTERFACES". nasr builds the base everyone uses:
+[ ] tokens: Palette fields = the design token table (surface .. pill), night + day values, night is zero
+[ ] map colors: land, city, park, farmland, marsh, beach, water, buildings, roads, sky per theme
+[ ] fonts: embed Figtree + Roboto Mono like Roboto (#47), ui_text(w, pos, text, Font, px, color)
+[ ] icons: one embedded icon atlas, ui_icon(w, Icon, centre, px, color)
+[ ] ui kit: card + shadow, round button 48 / 64, zoom pill, pill buttons, chip, toggle, segment, tile
+[ ] ui kit: input field, stat chip (with meter), toast 1.6 s, hover = surface-2, 2 px focus ring, 44 px hits
+[ ] screen state: w.screen (Plan / Navigate) + draw order in game.odin (see notes.txt), Esc -> Plan
+[ ] bake land use, road classes (motorway / main / street / track) and buildings from the same OSM extract
+[ ] map draw: road casings then fills, widths constant on screen (10 / 8 / 6 / 4 px + 2 px casing)
+[ ] map labels: city + river names, motorway shields (OSM ref, e.g. E40), hub markers, start ring, dest pin
+[ ] names: only the real names in belgium.bin (cities, hubs, rivers, motorways), never the doc's examples
+[ ] loading screen: night sky, 38 px cyan ring (0.9 s per turn), fades out in 0.4 s
 later:
 [ ] bake 3 detail levels + 10 km cell grid, draw only visible cells
 [ ] 3D terrain view
@@ -67,6 +80,22 @@ LARS: ROUTING + NAVIGATION
 [ ] autopilot: follow route (lookahead point), outputs Controls struct
 [ ] switch manual <-> autopilot
 [ ] bench: one route < 10 ms, three modes < 30 ms
+design (route.odin, nav.odin = simulation; nav_ui.odin = drawing):
+[ ] three routes at once: plan_routes(w, from, to, hour) fills w.routes[mode] for all modes
+[ ] route summary per mode: minutes, km, km/h, net kWh, mean wind, tag, one-line "why" (after metrics)
+[ ] route_sample(w, mode, t) -> pos + heading along the path, t 0..1 (Dario's preview camera)
+[ ] maneuver kinds: straight, slight / normal / sharp left + right, climb, descend, depart, arrive
+[ ] maneuver text: instruction + subline + road name = nearest real motorway / river / hub in belgium.bin
+[ ] nav: then-tab only when the maneuver after next is within 700 m
+[ ] nav: banner state flying / rerouting (1.6 s) / arrived ("Docked at <hub>" + kWh used)
+[ ] nav: warning ahead from w.no_fly / gust zones ("No-fly zone ahead, climb above <ceiling> m")
+[ ] nav: manual flag, nav_set_manual(w, on) (Dario's keys and button call it)
+[ ] nav_ui: route strips, chosen cyan 14 px, others grey 11 px, 2 px casing, part behind the ship hidden
+[ ] nav_ui: time bubbles on the part of each route furthest from the others, chosen on top, leaf on greenest
+[ ] nav_ui: banner (teal, 96 px icon column, 34 px text) + "Then" tab + rerouting / arrived colors
+[ ] nav_ui: road sign (real name) at the next maneuver, pill 26 px under the ship with the layer (LAYER_ALT)
+[ ] nav_ui: yellow warning pill 170 px from the top
+[ ] nav_ui: sheet: ETA (green + leaf), "km, arrive hh:mm", stat chips (speed, battery, used, solar, height)
 
 DARIO: SHIP + CONTROLS
 [x] Windows smoke test: compile.bat debug, run build\drift.exe from the repo root, rebuild once while it runs
@@ -92,6 +121,21 @@ extra:
 [ ] test case with the real baked no-fly zones (after the item above), e.g. a route past Brussels Airport
     at x 149.0, y 73.4 km. The zones in test/data/no_fly.txt are made-up (#52). Expected files change only
     with the owner's approval.
+design (airship.odin = model + drawing, camera.odin = camera, pilot_ui.odin = flying controls on screen):
+[ ] airship model: low-poly mesh built once at startup, sizes and colors from the design doc
+[ ] airship draw: heading + crab angle into the wind, bank in turns, props spin with speed, nav lights
+[ ] airship on the flat map: 70-90 px long, low above the ground, soft shadow ellipse
+[ ] camera.odin: move View + map / drive camera out of game.odin (after #57), Camera3D, zero = whole map
+[ ] camera: ease-out glide on zoom (0.6 s) within ZOOM_MIN / ZOOM_MAX, compass button resets north
+[ ] cam_fit(w, min, max, screen rect): fit routes beside the plan panel in 0.8 s ease-out
+[ ] chase camera: 53 deg tilt behind the ship, turns with heading, small lag; Start dives in 1.2 s
+[ ] preview: camera flies the chosen route in 9 s, ease in + out (uses Lars's route_sample)
+[ ] cam_to_screen(w, pos) -> px, visible: everyone projects with this (labels, bubbles, pills)
+[ ] keys: arrows = WASD, PgUp / PgDn = R / F; any of them in navigation calls nav_set_manual(w, true)
+[ ] pilot_ui: button column (compass, overview, sound, wind, report gust), 64 px, right middle
+[ ] pilot_ui: speed circle 74 px, Re-centre pill after a map drag, self-fly 66 px + red Exit / Done pill
+[ ] pilot_ui: sim speed chips 1x 5x 15x 40x in the sheet (replaces the toolbar buttons of #57)
+[ ] pilot_ui: 3 x 3 control pad (52 px) + key card, only in self-fly, pressed = accent
 
 ANDREI: WEATHER + NETWORK
 [x] Open-Meteo hourly forecast, next 9 hours, grid over Belgium, pressure levels 975/950/925 hPa
@@ -117,6 +161,20 @@ The central relay (#18, #22, #25) was dropped; reuse its code from those branche
 [x] accept handshake, live position encrypted between matched users (x25519 + chacha20poly1305),
     through peers, reuse the crypto from #25 (#43)
 [ ] signed reviews for reputation
+design (plan_ui.odin = plan screen + layers panel; weather.odin for the wind text):
+[ ] plan panel: 404 px on the left, card A (brand, from / to, modes, departure) + card B (routes, actions)
+[ ] brand bar: logo, "DRIFT", round day / night button (sets w.theme)
+[ ] from / to fields with hub search list (max 320 px), swap button, writes w.plan.from / to
+[ ] hub menu on the map: click a hub -> "Fly from here" / "Fly to here"
+[ ] mode chips: icon + travel time + label for fastest / greenest / calmest, chosen = accent
+[ ] departure list "Leave now" .. "+8 h" -> w.plan.hour (forecast hour index)
+[ ] route rows: 4 px bar, time (green + leaf for greenest), km + speed, why, tag, net kWh + wind in mono
+[ ] wind note: wind_note(w, mode, out) -> one sentence from wind_at along the route ("Wind from the east...")
+[ ] action bar: Preview (Dario's camera) + Start (w.screen = Navigate, Lars's nav_start)
+[ ] layers panel 300 px: toggles wind, gusts, no-fly, solar + wind layer segment (LAYER_ALT labels)
+[ ] ground layers: gust risk (soft orange -> red from gust_at), no-fly hatching of w.no_fly (red)
+[ ] wind particles colored by speed (white < 6, mint < 10, yellow < 14 m/s, coral), 40% in plan, off in nav
+[ ] legend card: wind gradient 120 x 6 px, no-fly hatch, gust color
 
 EXTRA (future, not now: C API so the core can be ported to Swift / Kotlin apps)
 [ ] split repo: core/ (all logic, no raylib, C API) and app/ (desktop raylib frontend)
@@ -136,6 +194,10 @@ RELEASE (single executable)
 [ ] Linux: build on an old glibc (CI, ubuntu 22.04) so it runs on most distros
 [ ] Windows: static CRT, single .exe
 [ ] macOS: universal binary (arm64 + x86_64), signed
+
+TOGETHER, AT THE END
+[ ] demo run: plan Brussels -> Gent, pick greenest, Preview, Start, report gust, reroute, dock, Done
+[ ] headless test case for that flow, plus a screenshot of both screens in night and day
 
 NOT DOING
 film, procedural world, web stack, touch / responsive layout, speech, extruded buildings, shadows
