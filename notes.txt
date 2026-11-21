@@ -63,6 +63,10 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   3 layers = 975 / 950 / 925 hPa ~ LAYER_ALT 300 / 550 / 800 m, hours 0..8 from snapshot start
                   Weather struct: start (unix s), wind [hour][layer][cell][2]f32, gust [hour][layer][cell] 0..1,
                   cloud [hour][cell] 0..1. Fixed size 22.7 KB, zero = calm and clear.
+                  Snapshot file: 16 byte header (magic "DWTH", version 1, size_of(Weather) = 22688, pad, 4 x u32)
+                  then the Weather bytes, 22704 bytes total. weather_from_snapshot(data) checks size, header,
+                  start (whole hour, 2020..2100) and every value (wind |x|,|y| <= 100, gust / cloud 0..1, no NaN).
+                  Loading is a 22.7 KB copy plus one pass, ~0.02-0.03 ms in debug. Saving: todo (andrei).
   net.odin        fetch_weather(out, scratch) -> ok: blocking Open-Meteo request with curl (15 s timeout,
                   max 1 MB), converts the json into a Weather. Writes out only if every value is valid.
                   Run it on a thread, never in the frame loop. Not called yet (snapshot + refresh todo).
@@ -72,6 +76,14 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   update / draw split, worst of the last 120 frames, route and weather load ms, perm / route
                   arena used / reserved, frame arena use, 120 frame graph (yellow line = 4 ms budget, red bars
                   over it). Frame ms excludes EndDrawing (vsync wait) and the overlay itself.
+                  Headless: ./build/drift --headless --snapshot <file> --inputs <file> runs without a window,
+                  prints the result to stdout (deterministic text, no timings) and timings / errors to stderr,
+                  exit code 0 or 1. game_headless (exported, called by host and release main) reads the files,
+                  headless_run(w, snapshot, inputs, out) does the work and is what test/ calls.
+                  Inputs: one command per line, # comment. "route <from hub> <to hub> <mode> <hour>",
+                  hub = index into w.m.hubs, mode fastest / greenest / calmest, hour 0..8.
+                  Output per route: "route 6 -> 11 fastest hour 0: 2 points, 104.812 km", then x y alt per point.
+                  Windows release is -subsystem:windows and has no console: use the debug or profile exe there.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   Stub: straight line. Path lives in w.route_mem until the next call.

@@ -44,8 +44,8 @@ game_init :: proc() -> rawptr {
 		return nil
 	}
 	game_hot_reloaded(w)
-	fmt.println("[game] build:", BUILD_MODE)
-	fmt.printfln(
+	fmt.eprintln("[game] build:", BUILD_MODE)
+	fmt.eprintfln(
 		"[map] %d lines, %d points, %d cities, %d hubs",
 		len(w.m.lines),
 		len(w.m.points),

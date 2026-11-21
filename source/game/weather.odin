@@ -1,5 +1,9 @@
 package game
 
+import "core:fmt"
+import "core:math"
+import "core:mem"
+
 WIND_LAYERS :: 3
 FORECAST_HOURS :: 9
 
@@ -57,4 +61,72 @@ weather_cell :: proc(x, y: f32) -> (cell: int, fx, fy: f32) {
 	ix := min(int(gx), WEATHER_GRID_W - 2)
 	iy := min(int(gy), WEATHER_GRID_H - 2)
 	return iy * WEATHER_GRID_W + ix, gx - f32(ix), gy - f32(iy)
+}
+
+// Snapshot file: Weather_Header, then the Weather struct as raw bytes (little endian).
+// size is size_of(Weather) when written, so a file from an older layout is rejected instead of misread.
+WEATHER_MAGIC :: 0x48545744 // "DWTH"
+WEATHER_VERSION :: 1
+
+Weather_Header :: struct {
+	magic, version, size, _: u32,
+}
+
+// The file is untrusted: wrong size, NaN or out of range values reject the whole snapshot.
+weather_from_snapshot :: proc(data: []u8) -> (out: Weather, ok: bool) {
+	if len(data) != size_of(Weather_Header) + size_of(Weather) {
+		fmt.eprintfln(
+			"[weather] snapshot is %d bytes, want %d",
+			len(data),
+			size_of(Weather_Header) + size_of(Weather),
+		)
+		return
+	}
+	h: Weather_Header
+	mem.copy(&h, raw_data(data), size_of(h))
+	if h.magic != WEATHER_MAGIC || h.version != WEATHER_VERSION || h.size != size_of(Weather) {
+		fmt.eprintfln(
+			"[weather] snapshot header: magic %x version %d size %d, want %x %d %d",
+			h.magic,
+			h.version,
+			h.size,
+			WEATHER_MAGIC,
+			WEATHER_VERSION,
+			size_of(Weather),
+		)
+		return
+	}
+	mem.copy(&out, raw_data(data[size_of(h):]), size_of(out))
+
+	if out.start < TIME_MIN || out.start > TIME_MAX || out.start % 3600 != 0 {
+		fmt.eprintfln("[weather] snapshot start %d is not a whole hour in 2020..2100", out.start)
+		return
+	}
+	// Written as !(in range) so NaN fails too.
+	for hour in 0 ..< FORECAST_HOURS {
+		for layer in 0 ..< WIND_LAYERS {
+			for cell in 0 ..< WEATHER_CELLS {
+				v := out.wind[hour][layer][cell]
+				g := out.gust[hour][layer][cell]
+				if !(math.abs(v.x) <= WIND_MAX && math.abs(v.y) <= WIND_MAX && g >= 0 && g <= 1) {
+					fmt.eprintfln(
+						"[weather] snapshot hour %d layer %d cell %d: wind %v gust %v out of range",
+						hour,
+						layer,
+						cell,
+						v,
+						g,
+					)
+					return
+				}
+			}
+		}
+		for c, cell in out.cloud[hour] {
+			if !(c >= 0 && c <= 1) {
+				fmt.eprintfln("[weather] snapshot hour %d cell %d: cloud %v outside 0..1", hour, cell, c)
+				return
+			}
+		}
+	}
+	return out, true
 }
