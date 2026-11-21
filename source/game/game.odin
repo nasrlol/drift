@@ -9,6 +9,11 @@ SIM_HZ :: 60
 SIM_DT :: 1.0 / SIM_HZ
 MAX_FRAME_DT :: 0.25
 
+// Set by compile.sh with -define: debug builds get DRIFT_DEBUG, profile builds DRIFT_PROFILE, release neither.
+DRIFT_DEBUG :: #config(DRIFT_DEBUG, false)
+DRIFT_PROFILE :: #config(DRIFT_PROFILE, false)
+BUILD_MODE :: "debug" when DRIFT_DEBUG else "profile" when DRIFT_PROFILE else "release"
+
 World :: struct {
 	perm:      virtual.Arena,
 	route_mem: virtual.Arena,
@@ -38,6 +43,7 @@ game_init :: proc() -> rawptr {
 		return nil
 	}
 	game_hot_reloaded(w)
+	fmt.println("[game] build:", BUILD_MODE)
 	fmt.printfln("[map] %d lines, %d points, %d cities", len(w.m.lines), len(w.m.points), len(w.m.cities))
 	return w
 }

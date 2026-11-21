@@ -90,6 +90,9 @@ compile.bat same modes on Windows (no mold, raylib.dll copied to build\, random 
   profile: source/release, -debug -o:speed, single exe (~2 s)
   release: source/release, -o:speed -disable-assert, single exe (~1.7 s)
   ASAN=1 adds -sanitize:address
+  build flags in code: DRIFT_DEBUG / DRIFT_PROFILE (#config in game.odin), set with -define by compile.sh / .bat
+           (debug game.so: DRIFT_DEBUG, profile: DRIFT_PROFILE, release: neither). Odin rejects a -define
+           nobody reads, so the host gets none. BUILD_MODE is printed at startup ("[game] build: debug").
 release exe links raylib statically, map is embedded, only depends on libc, libm and X11
 
 PROJECT SETUP
