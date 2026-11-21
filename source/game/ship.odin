@@ -105,8 +105,9 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	s.docked = false
 	for i in 0 ..< w.m.hub_count {
 		hub := w.m.hubs[i].pos
+		if linalg.length(s.pos - hub) > DOCK_HORIZONTAL_KM do continue
 		top := height_at(w, hub.x, hub.y) + HUB_TOWER_M
-		if linalg.length(s.pos - hub) <= DOCK_HORIZONTAL_KM && abs(s.alt - top) <= DOCK_VERTICAL_M {
+		if abs(s.alt - top) <= DOCK_VERTICAL_M {
 			s.docked = true
 			s.dock_hub = i
 			break
