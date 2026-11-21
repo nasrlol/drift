@@ -1,0 +1,17 @@
+# Flicker check of the street view (see notes.txt): fast flights with uneven frame times like a real screen, the
+# share of pixels that jump away and back between frames (A-B-A) must stay small. Before the render
+# interpolation (w.pose) the tower flight flickered 1.6 %, before the anchored meshes walls z-fought.
+snapshot test/data/calm.snap
+frame_ms 15.2 18.1 16.0 17.4 15.9 17.4
+press 2 V
+# over the roofs from the tower, accelerating to ~140 km/h
+ship 300 139.6685 79.4001 40 0
+down 305 W
+up 700 W
+flicker 500 560 0.1
+# low along a street in Brussels
+ship 720 140.315 79.543 3 198
+down 725 W
+up 900 W
+flicker 820 880 0.1
+quit 900

@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:math"
 import "core:math/linalg"
 import rl "vendor:raylib"
+import rlgl "vendor:raylib/rlgl"
 
 // Street view (Lars, 2026-11-21: "een 3d game waar je tussen huizen kan vliegen, zoals gta in third person, zo
 // realistisch mogelijk, niet cartoonachtig"). V on the navigation screen puts a third-person camera behind the
@@ -12,9 +13,14 @@ import rl "vendor:raylib"
 // Street space: metres, x east, y up, z south, around origin (km, snapped to STREET_ORIGIN_KM so the f32 values
 // stay small and do not shake). The map meshes (x km, y km south, z km down) are drawn with street_place.
 // The ground is flat at y = 0: the car's height is its height above the local ground (alt - height_at), the way
-// the buildings stand on the map. raylib's projection has near 0.05 and far 4000 units, so in metres the view
-// ends at 4 km; the haze closes before that.
+// the buildings stand on the map. The view ends at STREET_FAR_M, the haze closes before that.
 STREET_ORIGIN_KM :: 0.25
+// raylib's own near plane of 0.05 m leaves one step of the 24 bit depth buffer ~0.3 m deep at 500 m and ~1.2 m at
+// 1 km, so walls a little apart z-fought in the distance. 0.25 m is five times sharper; the camera keeps
+// STREET_CAM_WALL_M from walls so the near plane never cuts one.
+STREET_NEAR_M :: 0.25
+STREET_FAR_M :: 4000.0
+STREET_CAM_WALL_M :: 0.6
 STREET_REACH_KM :: 3.6
 STREET_FOG_M :: [2]f32{220, 3500}
 STREET_CAM_DIST_M :: 8.5
@@ -168,13 +174,14 @@ street_place :: proc(origin: [2]f32) -> Placement {
 	return {axes = rl.Matrix{1000, 0, 0, 0, 0, 0, -1000, 0, 0, 1000, 0, 0, 0, 0, 0, 1}, origin = origin}
 }
 
-// The ship in street space: f64 so pos_frac (below the f32 resolution of pos) counts.
+// The drawn ship (w.pose) in street space, in f64 so the part below the f32 resolution of pos counts.
 street_ship_pos :: proc(w: ^World) -> [3]f32 {
-	s := &w.ship
+	p := w.pose
 	o := w.street.origin
-	x := (f64(s.pos.x) - f64(o.x)) * 1000 + f64(s.pos_frac.x)
-	z := (f64(s.pos.y) - f64(o.y)) * 1000 + f64(s.pos_frac.y)
-	return {f32(x), max(s.alt - height_at(w, s.pos.x, s.pos.y), 0), f32(z)}
+	km := [2]f32{f32(p.pos.x), f32(p.pos.y)}
+	x := (p.pos.x - f64(o.x)) * 1000
+	z := (p.pos.y - f64(o.y)) * 1000
+	return {f32(x), max(p.alt - height_at(w, km.x, km.y), 0), f32(z)}
 }
 
 // V: on from the navigation screen (and from the plan screen, which first goes to free flight like M).
@@ -364,7 +371,8 @@ street_camera :: proc(w: ^World) {
 	s := &w.ship
 
 	// The origin follows the car in steps; the eased camera moves with it.
-	origin := linalg.floor(s.pos / STREET_ORIGIN_KM) * STREET_ORIGIN_KM
+	origin :=
+		linalg.floor([2]f32{f32(w.pose.pos.x), f32(w.pose.pos.y)} / STREET_ORIGIN_KM) * STREET_ORIGIN_KM
 	if origin != st.origin {
 		shift := (st.origin - origin) * 1000
 		st.eye += {shift.x, 0, shift.y}
@@ -415,7 +423,7 @@ street_camera :: proc(w: ^World) {
 		for i in 1 ..= steps {
 			p := target + off * (f32(i) / f32(steps))
 			km := st.origin + {p.x, p.z} / 1000
-			push, _ := collide_car(w, km, p.y, 0.4)
+			push, _ := collide_car(w, km, p.y, STREET_CAM_WALL_M)
 			if push != {} {
 				st.eye = target + off * (f32(max(i - 1, 0)) / f32(steps))
 				break
@@ -449,7 +457,7 @@ street_draw :: proc(w: ^World) {
 	look := STREET_LOOK
 	screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 	place := street_place(st.origin)
-	centre := w.ship.pos
+	centre := [2]f32{f32(w.pose.pos.x), f32(w.pose.pos.y)}
 
 	// Sky: zenith to the horizon line of this camera, then haze below it (the ground covers that part).
 	{
@@ -464,6 +472,9 @@ street_draw :: proc(w: ^World) {
 		}
 	}
 
+	near, far := rlgl.GetCullDistanceNear(), rlgl.GetCullDistanceFar()
+	rlgl.SetClipPlanes(STREET_NEAR_M, STREET_FAR_M)
+	defer rlgl.SetClipPlanes(near, far)
 	rl.BeginMode3D(st.view)
 	{
 		sh := st.material.shader

@@ -524,11 +524,16 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   screenshots. Every frame is exactly SIM_DT and steps the simulation once (frame_time(w)), keys
                   and the street view's mouse look come only from the script (key_down / key_pressed /
                   mouse_delta / mouse_wheel in input.odin, real input is ignored), no weather fetch, no network
-                  node, weather from "snapshot <file>" or the embedded fallback, the cursor is not locked,
-                  SetTargetFPS(0): as fast as the machine draws. Commands: ship <frame> <x km> <y km> <height m>
+                  node, weather from "snapshot <file>" or the embedded fallback, the cursor is not locked, 60 fps
+                  like the game (unlimited fps tore the window and looked like flicker). Commands: ship <frame> <x km> <y km> <height m>
                   <heading deg>, down / up / press <frame> <raylib key name>, mouse <frame> <dx> <dy>,
                   wheel <frame> <notches>, shot <frame> <png> (LoadImageFromScreen + ExportImage after the frame
-                  is drawn: TakeScreenshot drops the directory), quit <frame>. The loading screen covers frames
+                  is drawn: TakeScreenshot drops the directory), quit <frame>. frame_ms <ms> ... repeats uneven frame
+                  times instead of SIM_DT (a frame then steps 0, 1 or 2 times, as on a real screen). flicker <from>
+                  <to> <max %> counts the pixels that jump away and back between three frames (A-B-A, > 60 summed
+                  over r, g, b), which smooth motion never does, and logs FAILED above max %.
+                  test/data/street_flicker.txt flies fast with uneven frames (max 0.1 %): 0.054 % over the roofs,
+                  0.008 % in a street (2026-11-21); without the render interpolation 0.96 % and 0.44 %. The loading screen covers frames
                   0..~80. The window stays 1440 x 900: SetWindowSize on a macOS Retina screen leaves raylib
                   drawing into a quarter of the framebuffer. Shots go to build/shots/ (not in git), the
                   standard scripts are test/data/street_*.txt.
@@ -597,13 +602,19 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   cloudy where the noise is under 0.1 + 0.9 x cover, 650-1100 m up, drifting with the top layer
                   wind. Soft sprites in screen space (far first) with a ground shadow, fading in from zoom 2 to 3.5
                   and out when one fills the screen. Our values.
+  render pose     (ship.odin Ship_Pose, game.odin) w.pose is where the ship is drawn: between w.pose_prev (the state
+                  before the last fixed step) and now by accum / SIM_DT, in f64 km with pos_frac. The street view,
+                  the car, its animation and the map's chase camera read it. Drawing the raw state jumped 0, 1 or 2
+                  steps per frame with uneven frame times while the cameras eased per frame: buildings and roads
+                  shook (Lars: "het flikkert"). A jump of > 200 m or no stepping (plan screen) draws the state as is.
   street.odin     (Lars) the street view (Lars, 2026-11-21: "een 3d game waar je tussen huizen kan vliegen, zoals
                   gta in third person, zo realistisch mogelijk"). V on the navigation screen (or the plan screen, which
                   goes to free flight first) switches it on, V or Esc back to the map; the cursor is locked while on.
                   Street space: metres, x east, y up, z south, around w.street.origin (km, snapped to 0.25 km so the
                   f32 values stay small). street_place puts the map meshes (km, y south, z down) there (tiles.odin). The
-                  ground is flat: the car is drawn at alt - height_at, like the buildings stand on the map. raylib's
-                  projection is near 0.05 / far 4000 units, so the view ends at 4 km; haze closes at 3.5 km.
+                  ground is flat: the car is drawn at alt - height_at, like the buildings stand on the map. Clip
+                  planes 0.25 / 4000 m (rlgl.SetClipPlanes, restored after): raylib's own 0.05 m near plane made
+                  one depth step ~0.3 m deep at 500 m. The camera keeps 0.6 m from walls. Haze closes at 3.5 km.
                   Camera: chase behind the car (8.5 m, wheel 4..40 m), mouse / right stick looks around and swings
                   back after 1.6 s, never inside a wall (collide_car along the line), FOV 62 + 10 at top speed, a
                   short shake after a hit. Draws: sky gradient, land quad, land use with natural colors (ground

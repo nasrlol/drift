@@ -91,6 +91,8 @@ World :: struct {
 	presence_send_s: f32,
 	presence_copy_s: f32,
 	street:          Street, // the third-person street view, street.odin
+	pose_prev:       Ship_Pose, // the ship before the last fixed step
+	pose:            Ship_Pose, // where the ship is drawn this frame (ship.odin)
 	collide:         Collide, // building footprints for free flight, collide.odin
 	script:          Script, // --script: keys, mouse and screenshots per frame, debug.odin
 }
@@ -225,10 +227,11 @@ game_update :: proc(memory: rawptr) -> bool {
 		plan_refresh(w)
 	}
 
-	// A scripted run steps exactly once per frame.
-	w.accum += w.script.on ? SIM_DT : f64(frame_time(w))
+	// A scripted run steps exactly once per frame, unless it gives frame times (frame_ms).
+	w.accum += w.script.on && w.script.frame_n == 0 ? SIM_DT : f64(frame_time(w))
 	for w.accum >= SIM_DT {
 		if w.screen == .Navigate {
+			w.pose_prev = ship_pose(&w.ship)
 			c := w.controls
 			autopilot := w.nav.active && !w.nav.manual
 			// Street view by hand: free flight with momentum, the throttle is the thrust (no cruise control).
@@ -253,6 +256,19 @@ game_update :: proc(memory: rawptr) -> bool {
 		}
 		w.tick += 1
 		w.accum -= SIM_DT
+	}
+	{
+		// Between the last two steps; a jump (a teleport, a new start) or no stepping at all draws the state as is.
+		now := ship_pose(&w.ship)
+		p := w.pose_prev
+		jump := abs(now.pos.x - p.pos.x) + abs(now.pos.y - p.pos.y) > 0.2
+		if w.screen != .Navigate || jump do p = now
+		t := f32(clamp(w.accum / SIM_DT, 0, 1))
+		w.pose = {
+			pos     = p.pos + (now.pos - p.pos) * f64(t),
+			alt     = p.alt + (now.alt - p.alt) * t,
+			heading = angle_lerp(p.heading, now.heading, t),
+		}
 	}
 	if !w.script.on {
 		carpool_frame(w, frame_time(w))
@@ -675,7 +691,7 @@ game_update :: proc(memory: rawptr) -> bool {
 // Seconds this frame stands for, for drawing and animation: the real frame time, or exactly one step in a
 // scripted run so its screenshots do not depend on the machine.
 frame_time :: proc(w: ^World) -> f32 {
-	if w.script.on do return SIM_DT
+	if sc := &w.script; sc.on do return sc.frame_n > 0 ? sc.frame_ms[sc.frame % sc.frame_n] / 1000 : SIM_DT
 	return min(rl.GetFrameTime(), MAX_FRAME_DT)
 }
 

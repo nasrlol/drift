@@ -252,34 +252,36 @@ Car_Anim :: struct {
 	seeded:   bool,
 }
 
-// Eases w.car_anim towards the ship state: fly from the height above the road (landing and take-off show as the
-// arms swinging and the wheels tucking), bank from the turn rate, pitch from the climb, the heading without jumps.
+// Eases w.car_anim towards the drawn ship (w.pose and the ship state): fly from the height above the road (landing
+// and take-off show as the arms swinging and the wheels tucking), bank from the turn rate, pitch from the climb,
+// the heading without jumps.
 car_anim_update :: proc(w: ^World, dt: f32) {
 	s := &w.ship
+	p := w.pose
 	an := &w.car_anim
-	ground := height_at(w, s.pos.x, s.pos.y)
+	ground := height_at(w, f32(p.pos.x), f32(p.pos.y))
 	fly: f32 = 1
 	if s.on_road do fly = 0
-	else if s.landing || s.lifting do fly = clamp((s.alt - ground) / SHIP_MIN_CLEARANCE, 0, 1)
+	else if s.landing || s.lifting do fly = clamp((p.alt - ground) / SHIP_MIN_CLEARANCE, 0, 1)
 	if !an.seeded {
 		an^ = {
 			fly      = fly,
-			heading  = s.heading,
-			last_alt = s.alt,
+			heading  = p.heading,
+			last_alt = p.alt,
 			seeded   = true,
 		}
 	}
 	k := 1 - math.exp(-dt * CAR_ANIM_RATE)
 	an.fly += (fly - an.fly) * k
 	if dt > 0 {
-		an.climb_ms += ((s.alt - an.last_alt) / dt - an.climb_ms) * k
+		an.climb_ms += ((p.alt - an.last_alt) / dt - an.climb_ms) * k
 	}
-	an.last_alt = s.alt
+	an.last_alt = p.alt
 	bank := clamp(s.turn_rate / SHIP_MAX_TURN_RATE, -1, 1) * CAR_BANK * an.fly
 	pitch := clamp(an.climb_ms / SHIP_CLIMB_RATE, -1, 1) * CAR_PITCH * an.fly
 	an.bank += (bank - an.bank) * k
 	an.pitch += (pitch - an.pitch) * k
-	an.heading = angle_lerp(an.heading, s.heading, 1 - math.exp(-dt * CAR_HEADING_RATE))
+	an.heading = angle_lerp(an.heading, p.heading, 1 - math.exp(-dt * CAR_HEADING_RATE))
 	an.roll -= dt * s.speed / CAR_WHEEL_R * (1 - an.fly)
 	an.time += dt
 }
@@ -399,7 +401,7 @@ car_draw_street :: proc(w: ^World, pos: [3]f32, an: Car_Anim, tint: rl.Color, lo
 airship_draw :: proc(w: ^World) {
 	car_anim_update(w, frame_time(w))
 	an := w.car_anim
-	car_draw(w, w.ship.pos, w.ship.alt, an.heading, an, CAR_PX, rl.WHITE)
+	car_draw(w, {f32(w.pose.pos.x), f32(w.pose.pos.y)}, w.pose.alt, an.heading, an, CAR_PX, rl.WHITE)
 }
 
 // Other cars from the presence gossip, a bit smaller and tinted so the own car stands out. Cars in a traffic
