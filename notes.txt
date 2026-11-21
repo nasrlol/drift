@@ -41,6 +41,10 @@ Grid: 9 x 7 points every 40 km from the map origin (lon 2.38, lat 51.56), covers
   lat = 51.56 - y / 111.32, lon = 2.38 + x / (111.32 cos 50.5), same projection as the bake tool.
 Gust index: Open-Meteo has gusts only at 10 m. index = clamp((gust_10m - wind_10m) / 10 m/s, 0, 1)
   x (1.08 - LAYER_ALT / 1600), the height factor from the spec. Cloud = cloud_cover % / 100 (total cover).
+Validation (reject the whole response, keep the old snapshot): 63 locations, 9 values per series, no null,
+  wind speeds and gusts 0..100 m/s, directions 0..360, cloud 0..100 %, times 2020..2100 on whole hours,
+  hour h = start + h x 3600 in every cell. The range test also rejects NaN and +-Inf.
+  Checked by feeding edited responses (null, out of range, shifted time, short series, 62 locations, Inf, html).
 Measured (2026-11-21, macOS arm64): one fetch ~400 ms, ~1.2 MB scratch (json values).
 
 CODE LAYOUT
@@ -55,7 +59,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Weather struct: start (unix s), wind [hour][layer][cell][2]f32, gust [hour][layer][cell] 0..1,
                   cloud [hour][cell] 0..1. Fixed size 22.7 KB, zero = calm and clear.
   net.odin        fetch_weather(out, scratch) -> ok: blocking Open-Meteo request with curl (15 s timeout,
-                  max 1 MB), converts the json into a Weather. Writes out only if every value is present.
+                  max 1 MB), converts the json into a Weather. Writes out only if every value is valid.
                   Run it on a thread, never in the frame loop. Not called yet (snapshot + refresh todo).
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hubs = map cities for now.
