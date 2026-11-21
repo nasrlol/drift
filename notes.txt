@@ -118,17 +118,34 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   w.grid holds the search state as fixed arrays in World (no arena, allocated with World):
                   visit stamp, cost, parent, heap slot and heap item per node. A node's cost and parent only
                   count when visit[n] == grid.search, so a route starts with search += 1, not a 4.9 MB clear.
-                  A*: cost = km flown (1 or sqrt 2 per cell, layer change = altitude difference / 1000).
-                  mode and hour are not used yet (cost per mode and wind are the next todo items).
-                  Estimate (grid_estimate) = octile distance + altitude difference: exact on an empty grid,
-                  never too high, consistent, so an expanded node is never reopened. Weighted x 1.001 to
-                  break the many near-ties of an open grid (paths at most 0.1 % longer than the cheapest).
+                  Cost per mode (spec), edge_cost(g, a, b, mode) for neighbour nodes:
+                    fastest  18 m/s  seconds          dt                                vertical 0.2 x climb m / 3
+                    calmest  13 m/s  seconds          dt x (1 + 7 g^2)                  vertical 0.2 x climb m / 3
+                    greenest 11 m/s  kWh              P(v, g) dt / 3600 + 0.25 g^2 km   vertical 0.02
+                  dt = km x 1000 / ground speed, g = gust index, P = 3 + 0.0085 v^3 + 6 g kW. Wind and gust =
+                  mean of the two node centres. Placeholders the next items replace: ground speed = airspeed +
+                  tailwind (no crosswind, no +6 m/s retry, edge skipped only when <= 0); greenest has no solar
+                  yield and no climb energy yet.
+                  Wind cache: grid.wind / grid.gust hold wind_at / gust_at at every node centre for one hour
+                  (12 B x 203k = 2.4 MB in World), rebuilt when the hour or that hour's forecast changes
+                  (compared to a 2.3 KB copy, so a new snapshot is picked up without a flag). The three modes
+                  and every route in the same hour share it. Build ~2.6 ms -o:speed (406k bilinear samples).
+                  Estimate (grid_estimate) = octile km x lowest cost per km + layer changes x cheapest climb.
+                  Lowest cost per km = the mode's cost at airspeed + the strongest wind of the hour (as a pure
+                  tailwind) and its calmest gust; bilinear sampling never leaves the range of the grid points,
+                  so it never overestimates with any snapshot. Consistent, so an expanded node is never reopened.
+                  Weighted x 1.001 to break the many near-ties of an open grid (at most 0.1 % above the cheapest).
+                  Checked: cost equals a plain Dijkstra (estimate 0) within 1e-6 on 126 routes x 3 modes, windy
+                  and random wind snapshots.
                   Open set: binary min-heap on f in grid.heap (fixed array, 8 B x 203k) with grid.slot
                   (index in the heap, HEAP_CLOSED once expanded) for decrease-key. No allocation during
                   the search, the path is the only allocation (route arena). Search state 24 B x 203k = 4.9 MB.
-                  Measured (cloud box, -o:speed): 2025 routes between all city pairs x 3 x 3 layers,
-                  avg 14 us, worst 0.19 ms; corner to corner expands 286 nodes (35k without the weight).
-                  Debug build: avg 0.14 ms, worst 0.6 ms. With test walls the cost matched a plain Dijkstra.
+                  Measured before the wind costs (cloud box, -o:speed): 2025 routes between all city pairs
+                  x 3 x 3 layers, avg 14 us, worst 0.19 ms; corner to corner expands 286 nodes.
+                  With wind costs (bench, random wind up to 21 m/s, 4-core cloud box, profile): route avg 6.2 ms
+                  incl. the cache build when the hour changes (max 23 ms), three modes avg 14.8 ms (max 89 ms).
+                  The estimate assumes the strongest wind as tailwind everywhere, so strong wind means a weak
+                  estimate: ~19k expanded nodes per route, ~320 ns each. Without the cache: three modes 33 ms.
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
                   Each case = snapshot + inputs through game.headless_run, output compared line by line to the
@@ -137,9 +154,13 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
   test/data/      snapshots in the cache/weather.snap format (valid sha256, fetched_at 1795176600).
                   calm.snap: zero wind / gust / cloud, start 1795176000. nan_wind.snap: same with
                   wind[3][1][20].x = NaN, must be rejected by weather_valid. routes.txt: one route per mode, hours 0 / 4 / 8,
-                  a route to the same hub. calm_routes.expected: A* grid paths (unsmoothed, wind not used yet).
+                  a route to the same hub. calm_routes.expected: A* grid paths (unsmoothed).
+                  windy.snap: same start, every hour: 300 m wind (-4, 0), 550 m calm, 800 m (12, 0) m/s; gust 0.1,
+                  0.8 on 800 m at weather grid columns x > 120 km; cloud 0.3. windy_routes.txt: 6 -> 10 in each
+                  mode and 10 -> 6 fastest. Expected: fastest stays on 800 m, calmest leaves it at x 136 km,
+                  greenest at x 158 km (both where the gust ramp makes 550 m cheaper), westbound stays on 300 m.
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
-                  (copy a cache/weather.snap), the calm one does not exercise the wind.
+                  (copy a cache/weather.snap), the synthetic ones have uniform wind per layer.
 bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.
                   200 rounds; wind_at / gust_at / cloud_at / height_at over 4096 fixed-seed points per round,
                   route, three modes, snapshot load, load_map one call per round. Prints min / avg / max per

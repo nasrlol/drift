@@ -19,6 +19,13 @@ Case :: struct {
 CASES :: [?]Case {
 	// All modes, first and last hour, a route to the same hub.
 	{"calm_routes", "test/data/calm.snap", "test/data/routes.txt", "test/data/calm_routes.expected"},
+	// Wind and gusts differ per layer, so the three modes must fly different layers.
+	{
+		"windy_routes",
+		"test/data/windy.snap",
+		"test/data/windy_routes.txt",
+		"test/data/windy_routes.expected",
+	},
 	// A NaN in the wind field must reject the snapshot, not reach the router.
 	{"nan_wind", "test/data/nan_wind.snap", "test/data/routes.txt", ""},
 }
