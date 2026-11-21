@@ -71,6 +71,7 @@ World :: struct {
 	// GPU texture and glyph tables owned by raylib, zero until the first frame with a window.
 	fonts:        Fonts,
 	line_meshes:  Line_Meshes,
+	labels:       Map_Labels,
 	theme:        Theme, // zero = night (the design default), T toggles
 	palette:      Palette, // PALETTES[theme], copied every frame, read through palette(w)
 	wind:         Wind_Particles,
@@ -148,6 +149,7 @@ game_hot_reloaded :: proc(memory: rawptr) {
 		)
 	}
 	w.m = m
+	w.labels.built = false
 	w.grid.terrain_built = false
 	// The new library may change the shaders, so the mesh is rebuilt on the next frame.
 	line_meshes_unload(&w.line_meshes)
@@ -494,6 +496,7 @@ game_update :: proc(memory: rawptr) -> bool {
 				}
 				ui_text(w, {rect.x, rect.y}, name, .Figtree_600, 13, pal.area_label)
 			}
+			labels_draw(w, &labels)
 		}
 		nav_draw_trip_markers(w)
 
