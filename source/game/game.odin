@@ -77,6 +77,7 @@ World :: struct {
 	palette:      Palette, // PALETTES[theme], copied every frame, read through palette(w)
 	wind:         Wind_Particles,
 	airship:      Airship,
+	car_anim:     Car_Anim,
 }
 
 @(export)

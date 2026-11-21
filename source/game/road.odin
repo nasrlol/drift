@@ -4,9 +4,9 @@ package game
 import "core:math"
 import "core:math/linalg"
 
-// Landing snaps to a road this close: wide enough to hit by hand from the lowest flying height (28 m up), where a
-// road is a few pixels wide. Not from the spec or design, see the PR assumptions.
-ROAD_LAND_KM :: 0.25
+// Landing picks a road this close. The road graph holds the secondary roads and up, so in a city centre the
+// nearest one can be 700 m away (Brussels hub: 660 m). Not from the spec or design, see the PR assumptions.
+ROAD_LAND_KM :: 1.0
 
 // The airship as a flying car (#67 part 2, #68 option B): on the ground it is locked to the road graph of
 // belgium.bin. Its place is an edge and a distance along it, never a free x, y. It lands on a road by descending
@@ -96,7 +96,7 @@ road_next_edge :: proc(w: ^World, edge: int, heading: f32, turn: f32) -> int {
 // lowest flying height, the floor does not snap it up. Our values, not from the spec or design.
 ROAD_DESCENT_MS :: 4.0
 ROAD_LIFT_MS :: 4.0
-ROAD_ALIGN_S :: 1.5
+ROAD_ALIGN_S :: 2.5
 
 // Throttle on the ground: the same acceleration and limits as flying.
 road_speed :: proc(s: ^Ship, c: Controls, dt: f32) {
