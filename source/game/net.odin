@@ -618,21 +618,32 @@ store_remove :: proc(s: ^Store, i: int) {
 
 // Once at start, on the network thread: ~4k messages are too slow for the first frame.
 // The file is messages back to back. It only ever gets messages that passed msg_read, so loading checks
-// header and fields, not signatures. A file that is not whole messages is reported and left alone, and the
-// store stays memory only, so nothing is appended to a file we do not understand.
+// header and fields, not signatures. A file that is not whole messages (a node killed while appending)
+// is not guessed at: it moves to <path>.bad and the store starts empty, peers send the messages again.
+// A file that cannot be read is left alone and the store stays memory only this run.
 // Then the file is rewritten without expired and dropped messages. All allocations go to scratch.
 store_load :: proc(s: ^Store, path: string, now: i64, scratch: mem.Allocator) {
 	if os.exists(path) {
 		data, err := os.read_entire_file(path, scratch)
-		if err != nil || len(data) % size_of(Message) != 0 {
+		if err != nil {
+			fmt.eprintfln("[net] cannot read %s: %v, store not saved this run", path, err)
+			return
+		}
+		if len(data) % size_of(Message) != 0 {
+			bad_buf: [256]u8
+			bad_path := fmt.bprintf(bad_buf[:], "%s.bad", path)
 			fmt.eprintfln(
-				"[net] %s: %v, %d bytes is not a multiple of %d, store not saved this run",
+				"[net] %s: %d bytes is not a multiple of %d, moved to %s, starting empty",
 				path,
-				err,
 				len(data),
 				size_of(Message),
+				bad_path,
 			)
-			return
+			if rerr := os.rename(path, bad_path); rerr != nil {
+				fmt.eprintfln("[net] cannot rename %s: %v, store not saved this run", path, rerr)
+				return
+			}
+			data = nil
 		}
 		added, bad, dropped := 0, 0, 0
 		for at := 0; at < len(data); at += size_of(Message) {
@@ -1325,4 +1336,39 @@ net_send :: proc(s: net.TCP_Socket, buf: []u8) -> bool {
 		sent += n
 	}
 	return true
+}
+
+// drift --headless --node: the same store and sync as in the game, without a window or the frame loop.
+// Anyone can run one on a machine that stays online, so games that come and go find each other and the
+// messages outlive them. Runs until the process is killed. Prints a status line every NODE_STATUS_S.
+// A node that cannot listen is useless to others, so that is an error here (the game just dials out).
+NODE_STATUS_S :: 300
+
+node_run :: proc(port: int) -> bool {
+	w := (^World)(game_init())
+	if w == nil do return false
+	defer game_shutdown(w)
+	w.node.port = port
+	node_poll(w)
+	if !w.node.listening {
+		logf(w, "node", "a node others cannot reach is no use to them, exiting (try another --port)")
+		return false
+	}
+	for {
+		time.sleep(NODE_STATUS_S * time.Second)
+		now := time.time_to_unix(time.now())
+		ok := 0
+		{
+			n := &w.node
+			sync.mutex_lock(&n.peers_lock)
+			defer sync.mutex_unlock(&n.peers_lock)
+			for p in n.peers[:n.peer_count] {
+				if now - p.last_ok < 2 * SYNC_S do ok += 1
+			}
+		}
+		sync.mutex_lock(&w.store.lock)
+		count := w.store.count
+		sync.mutex_unlock(&w.store.lock)
+		fmt.eprintfln("[node] %d messages, %d peers, %d reachable", count, w.node.peer_count, ok)
+	}
 }

@@ -130,9 +130,10 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     store_load(s, path, now, scratch) at start: header + field check per message (no
                     signatures: only verified messages are ever written), then store_rewrite writes it again without
                     expired / dropped ones (temp file + rename). Also rewritten when it reaches 2 x STORE_MAX
-                    messages. A size that is not a multiple of 184 is logged and left alone, nothing is
-                    appended to it that run. Load of a full file ~12 ms (linear dedupe, 4k x 4k id compares),
-                    so it runs on the network thread, not in game_init.
+                    messages. A size that is not a multiple of 184 (killed mid-append) moves to
+                    messages.log.bad and the store starts empty; peers send the messages again.
+                    Load of a full file ~12 ms (linear dedupe, 4k x 4k id compares), so it runs on the
+                    network thread, not in game_init.
                   Peer to peer node: every game is one, there is no server. w.node (Net_Node) holds the peers,
                     the threads and per-thread buffers (2 x 128 KB id lists). node_poll(w) each frame starts it
                     after start and after every reload, node_stop(w) in game_before_reload / game_shutdown.
@@ -165,6 +166,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     address is never added again this run.
                     Measured (localhost): two nodes with 120 + 80 messages both end with 200 in one sync.
                     Three nodes where B and C only know A: after one round each knows the other two.
+                  Headless node: drift --headless --node [--port <n>] (debug host and release exe). game_init,
+                    then node_poll, no window and no frame loop, runs until killed. Same store, sync, peer
+                    files and cache/ as the game, so run it in its own directory. Exits 1 when it cannot
+                    listen (a node nobody can reach helps nobody). "[node] 120 messages, 3 peers,
+                    2 reachable" every 5 min. Killed mid-append the store file can end in a partial
+                    message: the next start moves it to messages.log.bad and starts empty, peers resend.
                   The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
   debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
                   Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =
