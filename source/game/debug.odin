@@ -21,13 +21,13 @@ Prof_Block :: enum u8 {
 	Weather_Load,
 }
 
-// Zero is valid: nothing measured yet, overlay shown.
+// Zero is valid: nothing measured yet, overlay hidden (F3 or the layers panel shows it).
 Profiler :: struct {
 	ms:         [Prof_Block]f32, // last measurement of each block
 	frame_ms:   [PROF_FRAMES]f32, // update + draw, ring buffer, head is the oldest
 	head:       int,
 	frame_used: uint, // frame arena bytes used by the previous frame
-	hidden:     bool,
+	shown:      bool,
 }
 
 prof_begin :: proc() -> time.Tick {
@@ -296,7 +296,7 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 			}
 			s.on_road = false
 			road_try_land(w, {climb = -1})
-			if !s.on_road {
+			if !s.landing {
 				near, near_s, near_ok := road_nearest_edge(w, {x, y}, 5)
 				p: [2]f32
 				if near_ok do p, _ = road_at(w, near, near_s)
@@ -314,15 +314,26 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 			}
 			fmt.sbprintfln(
 				out,
-				"drive from %.3f %.3f, landed on edge %d %v",
+				"drive from %.3f %.3f, landing on edge %d %v",
 				x,
 				y,
 				s.road_edge,
 				Map_Kind(w.m.road_edges[s.road_edge].kind),
 			)
 			last := s.road_edge
-			for _ in 0 ..< int(secs / SIM_DT) {
+			landed := false
+			for k in 0 ..< int(secs / SIM_DT) {
 				ship_step(w, {throttle = 1, turn = turn}, SIM_DT)
+				if s.on_road && !landed {
+					landed = true
+					fmt.sbprintfln(
+						out,
+						"  on the road after %.1f s at %.3f %.3f",
+						f32(k + 1) * SIM_DT,
+						s.pos.x,
+						s.pos.y,
+					)
+				}
 				if s.road_edge != last {
 					last = s.road_edge
 					e := w.m.road_edges[last]
@@ -367,7 +378,6 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 				)
 				return false
 			}
-			w.sim_speed = 0
 			if !nav_start(w, mode) {
 				fmt.sbprintfln(out, "fly %s: no route to fly", f[1])
 				continue

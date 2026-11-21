@@ -13,8 +13,7 @@ import rl "vendor:raylib"
 SIM_HZ :: 60
 SIM_DT :: 1.0 / SIM_HZ
 MAX_FRAME_DT :: 0.25
-// Keys 1..4. More simulated time per frame means more fixed steps, dt stays SIM_DT.
-SIM_SPEEDS :: [4]f64{1, 5, 15, 40}
+// Simulated time runs at real time (Lars, 2026-11-21: no sim speed buttons, the speed is shown in km/h).
 
 // Screens of the design: plan (zero, the start screen) and navigate. Esc goes back to plan.
 Screen :: enum u8 {
@@ -65,7 +64,6 @@ World :: struct {
 	gust_zones:   [MAX_GUST_ZONES]Gust_Zone, // reported in flight, route() goes around them
 	tick:         u64,
 	accum:        f64,
-	sim_speed:    int, // index into SIM_SPEEDS, 0 = 1x
 	prof:         Profiler,
 	cam:          Cam,
 	ui:           Ui,
@@ -180,9 +178,6 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	if !typing {
 		if rl.IsKeyPressed(.T) do w.theme = w.theme == .Night ? .Day : .Night
-		for key, i in ([?]rl.KeyboardKey{.ONE, .TWO, .THREE, .FOUR}) {
-			if rl.IsKeyPressed(key) do w.sim_speed = i
-		}
 		// M: free flight without a route (the old drive mode), or back to the plan screen.
 		if rl.IsKeyPressed(.M) {
 			if w.screen == .Plan {
@@ -202,8 +197,7 @@ game_update :: proc(memory: rawptr) -> bool {
 		plan_refresh(w)
 	}
 
-	speeds := SIM_SPEEDS
-	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT) * speeds[w.sim_speed]
+	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT)
 	for w.accum >= SIM_DT {
 		if w.screen == .Navigate {
 			c := w.controls
@@ -348,14 +342,14 @@ game_update :: proc(memory: rawptr) -> bool {
 			pos := make([][3]f32, WIND_VERTICES, context.temp_allocator)
 			other := make([][3]f32, WIND_VERTICES, context.temp_allocator)
 			color := make([][4]u8, WIND_VERTICES, context.temp_allocator)
-			// Plan screen: 40 % opacity (design).
-			alpha: f32 = w.screen == .Plan ? 0.4 : 0.8
+			// Plan screen 40 % opacity in the design, raised: Lars wants the wind clearer (2026-11-21).
+			alpha: f32 = w.screen == .Plan ? 0.75 : 0.9
 			for i in 0 ..< WIND_PARTICLES {
 				v := [2]f32{wp.vx[i], wp.vy[i]}
 				speed := linalg.length(v)
 				if speed < WIND_CALM_MS do continue
 				p := [2]f32{wp.x[i], wp.y[i]}
-				fade := math.sin(math.PI * wp.age[i] / WIND_LIFE_S) * alpha
+				fade := math.sin(math.PI * wp.age[i] / WIND_LIFE_S) * alpha * map_edge_fade(p.x, p.y)
 				tail := p - v * km_per_ms * WIND_TRAIL_S
 				k := speed < 6 ? 0 : speed < 10 ? 1 : speed < 14 ? 2 : 3
 				line_quad(pos, other, color, i * 6, p, tail, {u8(WIND_COLOR + k), 0, 0, u8(fade * 255)})
@@ -428,7 +422,7 @@ game_update :: proc(memory: rawptr) -> bool {
 			for k in ([?]Map_Kind{.Motorway, .Trunk, .Primary, .Secondary, .Tertiary}) {
 				if fill[k] > 0 do casing[k] = fill[k] + 4 * t
 			}
-			for k in 0 ..< WIND_COLOR_COUNT do fill[WIND_COLOR + k] = 1.5
+			for k in 0 ..< WIND_COLOR_COUNT do fill[WIND_COLOR + k] = WIND_WIDTH_PX
 			colors, casing_colors: [LINE_COLORS][4]f32
 			colors[Map_Kind.Border] = rl.ColorNormalize(pal.text_2)
 			colors[Map_Kind.River] = rl.ColorNormalize(pal.water)
@@ -546,11 +540,11 @@ game_update :: proc(memory: rawptr) -> bool {
 	}
 	prof_end(w, .Draw, t)
 
-	// Profiler overlay, F3 toggles it. It shows the previous frame and is not counted in draw ms.
+	// Profiler overlay, F3 or the Profiler toggle in the layers panel shows it. It shows the previous frame and is not counted in draw ms.
 	when PROFILING {
 		p := &w.prof
-		if rl.IsKeyPressed(.F3) do p.hidden = !p.hidden
-		if !p.hidden {
+		if rl.IsKeyPressed(.F3) do p.shown = !p.shown
+		if p.shown {
 			worst: f32
 			for ms in p.frame_ms do worst = max(worst, ms)
 			MB :: f32(1 << 20)

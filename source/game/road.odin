@@ -10,7 +10,7 @@ ROAD_LAND_KM :: 0.25
 
 // The airship as a flying car (#67 part 2, #68 option B): on the ground it is locked to the road graph of
 // belgium.bin. Its place is an edge and a distance along it, never a free x, y. It lands on a road by descending
-// to its lowest height within ROAD_LAND_KM of an edge, and takes off again by climbing.
+// to its lowest height within ROAD_LAND_KM of an edge, and takes off again by climbing (both gradual, see below).
 // Throttle drives along the edge (same speed limits as flying), turn picks the next edge at a junction, a
 // one-way road is only ever driven its own way. No wind on the ground.
 
@@ -90,19 +90,27 @@ road_next_edge :: proc(w: ^World, edge: int, heading: f32, turn: f32) -> int {
 	return best >= 0 ? best : back
 }
 
-// One fixed step on the road. Returns false when the ship took off (climb > 0): ship_step then flies on.
-road_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
-	s := &w.ship
-	if c.climb > 0 {
-		s.on_road = false
-		return false
-	}
+// Landing and take-off are gradual (Lars, 2026-11-21: a transition between driving and flying). Landing: the
+// ship slides onto the road and turns to its heading over ROAD_ALIGN_S while it sinks ROAD_DESCENT_MS from the
+// lowest flying height to the road, driving on meanwhile. Take-off: it climbs at least ROAD_LIFT_MS until the
+// lowest flying height, the floor does not snap it up. Our values, not from the spec or design.
+ROAD_DESCENT_MS :: 4.0
+ROAD_LIFT_MS :: 4.0
+ROAD_ALIGN_S :: 1.5
+
+// Throttle on the ground: the same acceleration and limits as flying.
+road_speed :: proc(s: ^Ship, c: Controls, dt: f32) {
 	target := max(c.throttle, 0) * SHIP_MAX_SPEED
 	if target > s.speed {
 		s.speed = min(s.speed + SHIP_ACCEL * dt, target)
 	} else {
 		s.speed = max(s.speed - SHIP_BRAKE * dt, target)
 	}
+}
+
+// Moves road_s on by the speed, onto the next edge at a junction (turn picks it), stops at a dead end.
+road_advance :: proc(w: ^World, c: Controls, dt: f32) {
+	s := &w.ship
 	s.road_s += s.speed * dt / 1000
 	for s.road_s > road_edge_km(w, s.road_edge) {
 		over := s.road_s - road_edge_km(w, s.road_edge)
@@ -116,6 +124,18 @@ road_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
 		}
 		s.road_edge, s.road_s = next, over
 	}
+}
+
+// One fixed step on the road. Returns false when the ship took off (climb > 0): ship_step then flies on.
+road_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
+	s := &w.ship
+	if c.climb > 0 {
+		s.on_road = false
+		s.lifting = true
+		return false
+	}
+	road_speed(s, c, dt)
+	road_advance(w, c, dt)
 	s.pos, s.heading = road_at(w, s.road_edge, s.road_s)
 	s.alt = height_at(w, s.pos.x, s.pos.y)
 	s.turn_rate = 0
@@ -126,21 +146,50 @@ road_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
 	return true
 }
 
-// Landing: at the lowest flying height, descending, within ROAD_LAND_KM of a road.
+// One fixed step of a landing. Returns false when the pilot climbs again: the landing is called off and
+// ship_step flies on.
+road_landing_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
+	s := &w.ship
+	if c.climb > 0 {
+		s.landing = false
+		return false
+	}
+	road_speed(s, c, dt)
+	road_advance(w, c, dt)
+	goal, h := road_at(w, s.road_edge, s.road_s)
+	k := min(dt / ROAD_ALIGN_S, 1)
+	s.pos += (goal - s.pos) * k
+	diff := math.mod(h - s.heading + 3 * math.PI, math.TAU) - math.PI
+	s.heading = math.mod(s.heading + diff * k + math.TAU, math.TAU)
+	s.turn_rate = diff * k / dt
+	ground := height_at(w, goal.x, goal.y)
+	s.alt = max(s.alt - ROAD_DESCENT_MS * dt, ground)
+	s.used_kwh += power_kw(s.speed, 0) * dt / 3600
+	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, sim_hour(w))) * dt / 3600
+	s.warnings = {}
+	s.docked = false
+	if s.alt <= ground {
+		s.landing = false
+		s.on_road = true
+		s.pos, s.heading = goal, h
+		s.turn_rate = 0
+	}
+	return true
+}
+
+// Landing starts: at the lowest flying height, descending, within ROAD_LAND_KM of a road.
 road_try_land :: proc(w: ^World, c: Controls) {
 	s := &w.ship
 	floor := height_at(w, s.pos.x, s.pos.y) + SHIP_MIN_CLEARANCE
-	if c.climb >= 0 || s.alt > floor + 0.5 || len(w.m.road_edges) == 0 do return
+	if s.lifting || c.climb >= 0 || s.alt > floor + 0.5 || len(w.m.road_edges) == 0 do return
 	edge, along, ok := road_nearest_edge(w, s.pos, ROAD_LAND_KM)
 	if !ok do return
-	s.on_road = true
+	s.landing = true
 	s.road_edge, s.road_s = edge, along
-	s.pos, s.heading = road_at(w, edge, along)
-	s.alt = height_at(w, s.pos.x, s.pos.y)
 	logf(
 		w,
 		"ship",
-		"landed on road edge %d (%v), %.3f km along",
+		"landing on road edge %d (%v), %.3f km along",
 		edge,
 		Map_Kind(w.m.road_edges[edge].kind),
 		along,

@@ -249,30 +249,12 @@ plan_ui :: proc(w: ^World) {
 	panel := plan_panel_rect(w)
 	buf: [96]u8
 
-	// Card A: brand, from / to, mode chips, departure.
-	a := rl.Rectangle{panel.x, panel.y, panel.width, 296}
+	// Card A: from / to, mode chips, departure. No brand row (Lars, 2026-11-21: the logo goes), the day / night
+	// button moved to the map buttons.
+	a := rl.Rectangle{panel.x, panel.y, panel.width, 252}
 	ui_card(w, a)
 	x := a.x + 16
-	y := a.y + 14
-	ui_icon(w, .Logo, {x + 15, y + 15}, 30, pal.text)
-	brand := "DRIFT"
-	bx := x + 40
-	for c in transmute([]u8)brand {
-		// Letter spacing 0.2 em.
-		s := string([]u8{c})
-		ui_text(w, {bx, y - 1}, s, .Figtree_800, 18, pal.text)
-		bx += ui_text_size(w, s, .Figtree_800, 18).x + 18 * 0.2
-	}
-	ui_text(w, {x + 40, y + 19}, "Sky routing for Belgium", .Roboto_400, 12, pal.text_2)
-	if ui_round_button(
-		w,
-		{a.x + a.width - 16 - 40, y - 5, 40, 40},
-		w.theme == .Night ? .Moon : .Sun,
-		false,
-	) {
-		w.theme = w.theme == .Night ? .Day : .Night
-	}
-	y += 30 + 14
+	y := a.y + 16
 
 	// From / To with the rail (ring, three dots, red pin) and the swap button.
 	field_x := x + 30
@@ -611,9 +593,20 @@ plan_map_controls :: proc(w: ^World) {
 	if compass_button(w, compass) do cam_north(w)
 	layers := rl.Rectangle{x, compass.y - MAP_BUTTON_GAP - MAP_BUTTON, MAP_BUTTON, MAP_BUTTON}
 	if ui_round_button(w, layers, .Layers, p.layers_open) do p.layers_open = !p.layers_open
+	theme := rl.Rectangle{x, layers.y - MAP_BUTTON_GAP - MAP_BUTTON, MAP_BUTTON, MAP_BUTTON}
+	if ui_round_button(w, theme, w.theme == .Night ? .Moon : .Sun, false) {
+		w.theme = w.theme == .Night ? .Day : .Night
+	}
 
 	if p.layers_open {
-		r := rl.Rectangle{layers.x - 12 - LAYERS_PANEL_W, layers.y - 250, LAYERS_PANEL_W, 380}
+		// Profile and debug builds get one more row: the profiler overlay.
+		extra: f32 = PROFILING ? 32 : 0
+		r := rl.Rectangle {
+			layers.x - 12 - LAYERS_PANEL_W,
+			layers.y - 250 - extra,
+			LAYERS_PANEL_W,
+			380 + extra,
+		}
 		ui_card(w, r)
 		y := r.y + 16
 		heading :: proc(w: ^World, pos: [2]f32, text: string) {
@@ -640,6 +633,11 @@ plan_map_controls :: proc(w: ^World) {
 			ui_text(w, {r.x + 16, y + 2}, t.label, .Roboto_400, 14, pal.text)
 			on := !t.hide^
 			if ui_toggle(w, {r.x + r.width - 16 - 36, y, 36, 20}, &on) do t.hide^ = !on
+			y += 32
+		}
+		when PROFILING {
+			ui_text(w, {r.x + 16, y + 2}, "Profiler", .Roboto_400, 14, pal.text)
+			ui_toggle(w, {r.x + r.width - 16 - 36, y, 36, 20}, &w.prof.shown)
 			y += 32
 		}
 		heading(w, {r.x + 16, y + 4}, "WIND LAYER")
@@ -735,6 +733,7 @@ layers_draw_ground :: proc(w: ^World) {
 						shade := u8(clamp(cloud_at(w, x, y, hour), 0, 1) * 60)
 						if shade > col.a do col = {0, 0, 0, shade}
 					}
+					col.a = u8(f32(col.a) * map_edge_fade(x, y))
 					colors[(gy * (GROUND_W - 1) + gx) * 6 + k] = {col.r, col.g, col.b, col.a}
 				}
 			}

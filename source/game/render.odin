@@ -3,11 +3,20 @@ package game
 
 import rl "vendor:raylib"
 
-WIND_PARTICLES :: 600
+WIND_PARTICLES :: 900
 WIND_LIFE_S :: 3.0
 // Screen speed per m/s of wind, the same at every zoom: a 10 m/s wind moves a particle 40 px/s.
 WIND_PX_PER_MS :: 4.0
-WIND_TRAIL_S :: 0.4 // trail length = the distance covered in this time
+WIND_TRAIL_S :: 0.8 // trail length = the distance covered in this time
+WIND_WIDTH_PX :: 2.0
+// Ground layers and wind fade out over this distance to the map edge, so the edge of the data is no hard square.
+EDGE_FADE_KM :: 15.0
+
+// 1 inside the map, falling to 0 at its edge over EDGE_FADE_KM.
+map_edge_fade :: proc(x, y: f32) -> f32 {
+	d := min(min(x, MAP_W_KM - x), min(y, MAP_H_KM - y))
+	return clamp(d / EDGE_FADE_KM, 0, 1)
+}
 WIND_CALM_MS :: 0.5 // slower particles are not drawn
 
 // Drawing only, never read by the simulation, so frame time is fine here. Positions in km, spread over the

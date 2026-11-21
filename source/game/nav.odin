@@ -35,7 +35,7 @@ ROAD_NAME_KM :: 2 // road name of a maneuver: the nearest named road or river th
 BANNER_AHEAD_KM :: 0.015
 THEN_KM :: 0.7
 CALLOUT_KM :: 1.6
-// Rerouting: more than OFF_PATH_KM beside the path for OFF_PATH_S (scaled by the sim speed).
+// Rerouting: more than OFF_PATH_KM beside the path for OFF_PATH_S.
 OFF_PATH_KM :: 0.19
 OFF_PATH_S :: 1.2
 REROUTE_BANNER_S :: 1.6
@@ -694,11 +694,10 @@ nav_update :: proc(w: ^World, dt: f32) {
 	}
 	last := len(path) - 1
 
-	// Rerouting (spec): more than OFF_PATH_KM beside the path for OFF_PATH_S, scaled by the sim speed.
-	speeds := SIM_SPEEDS
+	// Rerouting (spec): more than OFF_PATH_KM beside the path for OFF_PATH_S.
 	if best_d > OFF_PATH_KM {
 		n.off_path_s += dt
-		if n.off_path_s > OFF_PATH_S * f32(speeds[w.sim_speed]) {
+		if n.off_path_s > OFF_PATH_S {
 			n.off_path_s = 0
 			nav_reroute(w)
 			return

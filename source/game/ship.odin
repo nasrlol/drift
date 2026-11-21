@@ -59,8 +59,11 @@ Ship :: struct {
 	// the solar film. The battery holds BATTERY_START x BATTERY_KWH - used + solar (ship_battery_kwh).
 	used_kwh:  f32,
 	solar_kwh: f32,
-	// On the ground as a flying car (road.odin): locked to road_edges[road_edge], road_s km along it.
+	// On the ground as a flying car (road.odin): locked to road_edges[road_edge], road_s km along it. landing:
+	// sinking onto that edge, lifting: climbing off the road up to the lowest flying height.
 	on_road:   bool,
+	landing:   bool,
+	lifting:   bool,
 	road_edge: int,
 	road_s:    f32,
 }
@@ -83,6 +86,8 @@ SHIP_MIN_CLEARANCE :: 28.0
 SHIP_TERRAIN_WARN_M :: 60.0
 DOCK_HORIZONTAL_KM :: 0.030
 DOCK_VERTICAL_M :: 25.0
+// Closest the ship gets to the map edge, km. The route grid keeps its edge cells blocked anyway.
+SHIP_EDGE_KM :: 1.0
 
 // Runs once per fixed step on w.ship. Reads only the ship, the controls, the terrain and the weather.
 ship_step :: proc(w: ^World, c: Controls, dt: f32) {
@@ -100,6 +105,7 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 		}
 		s.moored = false
 	}
+	if s.landing && road_landing_step(w, c, dt) do return
 	if s.on_road && road_step(w, c, dt) do return
 
 	target_turn := c.turn * SHIP_MAX_TURN_RATE
@@ -119,10 +125,23 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	wind := wind_at(w, s.pos.x, s.pos.y, layer, hour)
 	air := [2]f32{math.sin(s.heading) * s.speed, -math.cos(s.heading) * s.speed}
 	s.pos += (air + wind) * dt / 1000
+	// The ship never leaves the map (Lars, 2026-11-21): it slides along the edge, wind included.
+	s.pos = linalg.clamp(
+		s.pos,
+		[2]f32{SHIP_EDGE_KM, SHIP_EDGE_KM},
+		[2]f32{MAP_W_KM, MAP_H_KM} - SHIP_EDGE_KM,
+	)
 
 	alt0 := s.alt
 	s.alt += c.climb * SHIP_CLIMB_RATE * dt
-	floor := height_at(w, s.pos.x, s.pos.y) + SHIP_MIN_CLEARANCE
+	ground := height_at(w, s.pos.x, s.pos.y)
+	floor := ground + SHIP_MIN_CLEARANCE
+	if s.lifting {
+		// Taking off from a road: up at ROAD_LIFT_MS or more until the lowest flying height.
+		s.alt = max(s.alt, alt0 + ROAD_LIFT_MS * dt)
+		if s.alt >= floor do s.lifting = false
+		else do floor = ground
+	}
 	s.alt = min(max(s.alt, floor), SHIP_CEILING)
 
 	// Energy (spec): P(airspeed, gust) + climbing power, solar from the cloud cover of this hour.
@@ -132,7 +151,7 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, hour)) * dt / 3600
 
 	s.warnings = {}
-	if s.alt - (floor - SHIP_MIN_CLEARANCE) < SHIP_TERRAIN_WARN_M do s.warnings += {.Terrain}
+	if s.alt - ground < SHIP_TERRAIN_WARN_M do s.warnings += {.Terrain}
 	for z in w.no_fly {
 		if z.radius > 0 && s.alt < z.ceiling && linalg.length(s.pos - z.center) < z.radius {
 			s.warnings += {.No_Fly}
@@ -140,7 +159,7 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	}
 
 	road_try_land(w, c)
-	if s.on_road do return
+	if s.landing do return
 
 	s.docked = false
 	for i in 0 ..< w.m.hub_count {

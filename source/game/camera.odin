@@ -5,7 +5,9 @@ import "core:math"
 import "core:math/linalg"
 import rl "vendor:raylib"
 
-// Camera: zoom is log2 relative to the fitted view, so zero is the whole map.
+// Camera: zoom is log2 relative to the fitted view, so zero is the whole map. The lowest zoom is not a constant:
+// cam_min_zoom fits Belgium into the free part of the screen, never further out (Lars, 2026-11-21: no looking
+// past the country). ZOOM_MIN only bounds glides before that is known.
 ZOOM_MIN :: -1
 ZOOM_MAX :: 7
 WHEEL_ZOOM_STEP :: 0.25
@@ -205,7 +207,7 @@ cam_preview :: proc(w: ^World, mode: Route_Mode) {
 cam_zoom_by :: proc(w: ^World, steps: f32, anchor: [2]f32) {
 	c := &w.cam
 	if !c.zooming do c.zoom_goal = c.pose.zoom
-	c.zoom_goal = clamp(c.zoom_goal + steps, ZOOM_MIN, ZOOM_MAX)
+	c.zoom_goal = clamp(c.zoom_goal + steps, cam_min_zoom(w), ZOOM_MAX)
 	c.zoom_anchor = anchor
 	c.zooming = true
 }
@@ -306,10 +308,34 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 		if c.glide_t >= c.glide_dur do c.glide_dur = 0
 	}
 
-	half := [2]f32{MAP_W_KM, MAP_H_KM} / 2
-	c.pose.zoom = clamp(c.pose.zoom, ZOOM_MIN, ZOOM_MAX)
-	c.pose.pan = linalg.clamp(c.pose.pan, -half, half)
+	c.pose.zoom = clamp(c.pose.zoom, cam_min_zoom(w), ZOOM_MAX)
+	c.zoom_goal = max(c.zoom_goal, cam_min_zoom(w))
 	c.view, c.px_per_km = cam_build(c.pose, c.screen)
+	c.pose.pan = cam_clamp_pan(w, c.pose)
+	c.view, c.px_per_km = cam_build(c.pose, c.screen)
+}
+
+// The zoom that fits the whole map into the part of the screen the map uses (right of the plan panel on the
+// plan screen), from above. Nothing further out is allowed.
+cam_min_zoom :: proc(w: ^World) -> f32 {
+	screen := w.cam.screen
+	if screen.x <= 0 || screen.y <= 0 do return ZOOM_MIN
+	r := w.screen == .Plan ? plan_map_rect(w) : rl.Rectangle{0, 0, screen.x, screen.y}
+	ppk := min(r.width / MAP_W_KM, r.height / MAP_H_KM)
+	return clamp(math.log2(ppk / cam_fit_scale(screen)), ZOOM_MIN, 0)
+}
+
+// Keeps the map on the screen: per axis, a view smaller than the map stays inside it, a view larger than the map
+// keeps the whole map in view. The view is the screen rect turned by the yaw, measured at the screen centre.
+cam_clamp_pan :: proc(w: ^World, p: Cam_Pose) -> [2]f32 {
+	c := &w.cam
+	if c.px_per_km <= 0 do return p.pan
+	half_view := c.screen / 2 / c.px_per_km
+	s, co := abs(math.sin(p.yaw)), abs(math.cos(p.yaw))
+	view := [2]f32{half_view.x * co + half_view.y * s, half_view.x * s + half_view.y * co}
+	half_map := [2]f32{MAP_W_KM, MAP_H_KM} / 2
+	room := linalg.abs(half_map - view)
+	return linalg.clamp(p.pan, -room, room)
 }
 
 // Smallest box around a path (km).

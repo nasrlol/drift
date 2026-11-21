@@ -5,7 +5,7 @@ import "core:fmt"
 import rl "vendor:raylib"
 
 // Flying controls on the navigation screen (docs/drift-design.pdf "Scherm 2", zones 7, 8, 9, 11, 12): the button
-// column, the speed circle, Re-centre, self-fly and Exit in the sheet, the sim speed chips and the 3 x 3 control
+// column, the speed circle, Re-centre, self-fly and Exit in the sheet and the 3 x 3 control
 // pad with its key card. The ship itself only reads Controls; the pad presses feed them like the keyboard.
 NAV_BUTTON :: 64
 NAV_BUTTON_GAP :: 14
@@ -153,33 +153,6 @@ pilot_ui :: proc(w: ^World) {
 		ui_icon(w, .Steer, c, 32, on ? pal.sheet : pal.accent)
 		ui_focus_ring(w, id, fly, SELF_FLY_BUTTON / 2)
 		if fired && n.active do nav_set_manual(w, !n.manual)
-	}
-
-	// Sim speed chips 1x 5x 15x 40x under the stat chips.
-	{
-		speeds := SIM_SPEEDS
-		x := sheet.x + 24
-		y := sheet.y + 172
-		for v, i in speeds {
-			label := fmt.tprintf("%.0fx", v)
-			r := rl.Rectangle{x, y, 44, 22}
-			id, hot, fired := ui_widget(w, r)
-			chosen := w.sim_speed == i
-			round_rect(r, 8, chosen ? pal.accent : hot ? pal.surface_3 : pal.chip)
-			size := ui_text_size(w, label, .Mono_400, 13)
-			ui_text(
-				w,
-				{r.x + (r.width - size.x) / 2, r.y + 3},
-				label,
-				.Mono_400,
-				13,
-				chosen ? pal.sheet : pal.text,
-			)
-			ui_focus_ring(w, id, r, 8)
-			if fired do w.sim_speed = i
-			x += 50
-		}
-		ui_text(w, {x + 8, y + 3}, "Sim speed", .Roboto_400, 13, pal.text_2)
 	}
 
 	// Control pad (only in self-fly) and the key card above it.

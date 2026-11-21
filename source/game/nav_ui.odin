@@ -17,7 +17,7 @@ BANNER_MAX_W :: 560
 BANNER_MIN_H :: 120
 BANNER_ICON_COL :: 96
 SHEET_MAX_W :: 720
-SHEET_H :: 196
+SHEET_H :: 172
 WARNING_TOP :: 170
 PILL_BELOW_SHIP :: 26
 
@@ -36,9 +36,23 @@ MANEUVER_ICONS :: [Maneuver_Kind]Icon {
 }
 
 // Projects a path to the screen; points behind the camera are dropped (the polyline is split there).
-// from: first path index to draw (navigation hides the part behind the ship).
-draw_path_strip :: proc(w: ^World, path: [][3]f32, from: int, px: f32, color: rl.Color) {
-	pts := make([dynamic][2]f32, 0, len(path), context.temp_allocator)
+// from: first path index to draw (navigation hides the part behind the ship). head: where the strip starts
+// instead of path[from] (the ship's point on the path), so the start glides with the ship instead of jumping
+// from one 250 m path point to the next. Segments longer than ROUTE_SMOOTH_PX on the screen get Catmull-Rom
+// points in between, so curves stay round when zoomed in (drawing only, the path itself is unchanged).
+ROUTE_SMOOTH_PX :: 10
+ROUTE_SMOOTH_MAX :: 12
+
+draw_path_strip :: proc(
+	w: ^World,
+	path: [][3]f32,
+	from: int,
+	px: f32,
+	color: rl.Color,
+	head: [2]f32 = {},
+	has_head := false,
+) {
+	pts := make([dynamic][2]f32, 0, 2 * len(path), context.temp_allocator)
 	flush :: proc(pts: ^[dynamic][2]f32, px: f32, color: rl.Color) {
 		if len(pts) >= 2 {
 			rl.DrawSplineLinear(raw_data(pts[:]), i32(len(pts)), px, color)
@@ -47,19 +61,47 @@ draw_path_strip :: proc(w: ^World, path: [][3]f32, from: int, px: f32, color: rl
 		}
 		clear(pts)
 	}
-	for p in path[clamp(from, 0, len(path)):] {
-		s, visible := cam_to_screen(w, {p.x, p.y, 0})
-		in_front := s.x > -1e5
-		if !in_front {
-			flush(&pts, px, color)
-			continue
+	add :: proc(w: ^World, pts: ^[dynamic][2]f32, p: [2]f32, px: f32, color: rl.Color) {
+		s, _ := cam_to_screen(w, {p.x, p.y, 0})
+		if s.x <= -1e5 {
+			flush(pts, px, color)
+			return
 		}
-		_ = visible
 		// Skip points closer than 2 px to the last one: fewer segments, same picture.
-		if len(pts) > 0 && linalg.length2(s - pts[len(pts) - 1]) < 4 do continue
-		append(&pts, s)
+		if len(pts) > 0 && linalg.length2(s - pts[len(pts) - 1]) < 4 do return
+		append(pts, s)
+	}
+	first := clamp(from, 0, len(path))
+	if first >= len(path) do return
+	if has_head do add(w, &pts, head, px, color)
+	else do add(w, &pts, path[first].xy, px, color)
+	for i in first ..< len(path) - 1 {
+		a, b := path[i].xy, path[i + 1].xy
+		sa, _ := cam_to_screen(w, {a.x, a.y, 0})
+		sb, _ := cam_to_screen(w, {b.x, b.y, 0})
+		n := 1
+		if sa.x > -1e5 && sb.x > -1e5 {
+			n = clamp(int(linalg.length(sb - sa) / ROUTE_SMOOTH_PX), 1, ROUTE_SMOOTH_MAX)
+		}
+		p0 := path[max(i - 1, 0)].xy
+		p3 := path[min(i + 2, len(path) - 1)].xy
+		for k in 1 ..= n {
+			t := f32(k) / f32(n)
+			if i == first && has_head {
+				// The first segment starts at the head: only the part after it.
+				if linalg.length(b - a) > 0 && linalg.dot(catmull_rom(p0, a, b, p3, t) - head, b - a) <= 0 do continue
+			}
+			add(w, &pts, catmull_rom(p0, a, b, p3, t), px, color)
+		}
 	}
 	flush(&pts, px, color)
+}
+
+// Uniform Catmull-Rom between b and c, t 0..1.
+catmull_rom :: proc(a, b, c, d: [2]f32, t: f32) -> [2]f32 {
+	t2 := t * t
+	t3 := t2 * t
+	return 0.5 * (2 * b + (c - a) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (3 * b - a - 3 * c + d) * t3)
 }
 
 // Draw order 5: the alternatives first (grey, 11 px), then the chosen one (cyan, 14 px), each with a 2 px darker
@@ -69,9 +111,15 @@ nav_draw_routes :: proc(w: ^World) {
 	if w.screen == .Navigate {
 		r := nav_route(w)
 		if r == nil do return
-		from := w.nav.path_index
-		draw_path_strip(w, r.path, from, ROUTE_PX + 2 * ROUTE_CASING_PX, pal.route_casing)
-		draw_path_strip(w, r.path, from, ROUTE_PX, pal.route)
+		from := clamp(w.nav.path_index, 0, len(r.path) - 1)
+		head := r.path[from].xy
+		if from + 1 < len(r.path) {
+			seg := r.dist[from + 1] - r.dist[from]
+			f := seg > 0 ? clamp((w.nav.s_km - r.dist[from]) / seg, 0, 1) : 0
+			head = linalg.lerp(r.path[from].xy, r.path[from + 1].xy, f)
+		}
+		draw_path_strip(w, r.path, from, ROUTE_PX + 2 * ROUTE_CASING_PX, pal.route_casing, head, true)
+		draw_path_strip(w, r.path, from, ROUTE_PX, pal.route, head, true)
 		return
 	}
 	for mode in MODE_ORDER {
@@ -183,7 +231,7 @@ nav_draw_trip_markers :: proc(w: ^World) {
 	}
 }
 
-// The bottom sheet rect: Dario places Exit, self-fly and the sim speed chips from it.
+// The bottom sheet rect: Dario places Exit and self-fly from it.
 nav_sheet_rect :: proc(w: ^World) -> rl.Rectangle {
 	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
 	width := min(SHEET_MAX_W, sw - 32)
@@ -344,8 +392,8 @@ nav_ui :: proc(w: ^World) {
 		ui_text(w, {box.x + 36, box.y + 8}, warning, .Figtree_600, 15, dark)
 	}
 
-	// Bottom sheet: remaining time (green + leaf), "km, arrive hh:mm", stat chips. Dario adds the buttons and the
-	// sim speed chips (pilot_ui).
+	// Bottom sheet: remaining time (green + leaf), "km, arrive hh:mm", stat chips. Dario adds the buttons
+	// (pilot_ui).
 	sheet := nav_sheet_rect(w)
 	round_rect({sheet.x, sheet.y, sheet.width, sheet.height + 22}, 22, pal.sheet)
 	ui_block(w, sheet)
