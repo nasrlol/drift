@@ -75,7 +75,7 @@ DARIO: SHIP + CONTROLS
 [x] Controls struct: throttle, turn, climb (-1..1)
 [x] keyboard WASD + R/F, controller sticks (deadzone)
 [x] ship_step(dt, controls), fixed timestep 60 Hz (accumulator), pure function of state + controls + world
-[ ] limits: accel +1.2 / -1.6 m/s^2, smoothed turn rate, ceiling 900 m, min 28 m above terrain
+[x] limits: accel +1.2 / -1.6 m/s^2, smoothed turn rate, ceiling 900 m, min 28 m above terrain
 [ ] ship drifts with wind_at, battery drain from Lars's energy model, solar charging
 [ ] warnings as flags in the ship state (terrain, no-fly), UI only reads them
 [ ] docking: within 30 m horizontal, 25 m vertical of the hub tower
