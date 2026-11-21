@@ -189,17 +189,31 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 
 // Called by the host and the release main with the command line after the program name:
 //   --headless --snapshot <file> --inputs <file> [--dump]
+//   --headless --node [--port <n>]   (peer to peer node only, runs until killed, see node_run)
 // Prints the result (and with --dump the World after the last command) to stdout and timings to stderr. No window is opened.
 @(export)
 game_headless :: proc(args: []string) -> bool {
-	USAGE :: "usage: drift --headless --snapshot <file> --inputs <file> [--dump]"
+	USAGE ::
+		"usage: drift --headless --snapshot <file> --inputs <file> [--dump]\n" +
+		"       drift --headless --node [--port <n>]"
 	snapshot_path, inputs_path: string
-	dump: bool
+	dump, node: bool
+	port := 0
 	for i := 0; i < len(args); i += 1 {
 		switch args[i] {
 		case "--headless":
 		case "--dump":
 			dump = true
+		case "--node":
+			node = true
+		case "--port":
+			ok: bool
+			if i + 1 < len(args) do port, ok = strconv.parse_int(args[i + 1])
+			if !ok || port < 1 || port > 65535 {
+				fmt.eprintfln("[headless] --port needs a number in 1..65535\n%s", USAGE)
+				return false
+			}
+			i += 1
 		case "--snapshot", "--inputs":
 			if i + 1 == len(args) {
 				fmt.eprintfln("[headless] %s needs a file name\n%s", args[i], USAGE)
@@ -213,6 +227,7 @@ game_headless :: proc(args: []string) -> bool {
 			return false
 		}
 	}
+	if node do return node_run(port)
 	if snapshot_path == "" || inputs_path == "" {
 		fmt.eprintln("[headless] missing --snapshot or --inputs\n" + USAGE)
 		return false
