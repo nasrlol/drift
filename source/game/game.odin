@@ -18,9 +18,8 @@ MAX_FRAME_DT :: 0.25
 ZOOM_MIN :: -1
 ZOOM_MAX :: 7
 WHEEL_ZOOM_STEP :: 0.25
-PAD_ZOOM_PER_S :: 2
-PAD_PAN_PX_PER_S :: 600
-PAD_DEADZONE :: 0.15
+ZOOM_PER_S :: 2
+PAN_PX_PER_S :: 600
 
 View :: struct {
 	pan:  [2]f32, // km from the map centre to the screen centre
@@ -44,6 +43,7 @@ World :: struct {
 	identity:     ed25519.Private_Key, // zero until identity_load_or_create succeeds
 	identity_pub: [32]u8,
 	grid:         Grid,
+	controls:     Controls,
 	no_fly:       [MAX_NO_FLY]No_Fly_Zone,
 	tick:         u64,
 	accum:        f64,
@@ -115,6 +115,7 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	t := prof_begin()
 	weather_poll(w)
+	w.controls = read_controls()
 
 	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT)
 	for w.accum >= SIM_DT {
@@ -130,31 +131,25 @@ game_update :: proc(memory: rawptr) -> bool {
 	}
 
 	// km -> px: Camera2D zoom is px per km, w.view.pan is where the screen centre looks.
-	// Drag with the left mouse button or the right stick to pan, wheel or triggers to zoom.
-	// Zooming keeps the point under the cursor (wheel) or the screen centre (triggers) in place.
+	// Map mode (no ship yet): the ship controls move the camera, so keyboard and gamepad work the same way
+	// they will when flying. Throttle / turn pan, climb zooms around the screen centre.
+	// The mouse stays camera only: drag pans, the wheel zooms keeping the point under the cursor in place.
 	cam: rl.Camera2D
 	{
 		v := &w.view
+		c := w.controls
 		dt := rl.GetFrameTime()
 		centre := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())} / 2
 		fit := 0.95 * min(centre.x * 2 / MAP_W_KM, centre.y * 2 / MAP_H_KM)
 		z0 := fit * math.pow(f32(2), v.zoom)
 
+		v.pan += [2]f32{c.turn, -c.throttle} * PAN_PX_PER_S * dt / z0
 		if rl.IsMouseButtonDown(.LEFT) do v.pan -= rl.GetMouseDelta() / z0
-		zoom := rl.GetMouseWheelMove() * WHEEL_ZOOM_STEP
-		anchor := rl.GetMousePosition()
-		if rl.IsGamepadAvailable(0) {
-			stick := [2]f32{rl.GetGamepadAxisMovement(0, .RIGHT_X), rl.GetGamepadAxisMovement(0, .RIGHT_Y)}
-			if linalg.length(stick) > PAD_DEADZONE do v.pan += stick * PAD_PAN_PX_PER_S * dt / z0
-			// Triggers rest at -1 and read 0 before the first press, the difference is 0 in both cases.
-			pad_zoom :=
-				(rl.GetGamepadAxisMovement(0, .RIGHT_TRIGGER) -
-					rl.GetGamepadAxisMovement(0, .LEFT_TRIGGER)) /
-				2
-			if abs(pad_zoom) > PAD_DEADZONE {
-				zoom += pad_zoom * PAD_ZOOM_PER_S * dt
-				anchor = centre
-			}
+		zoom := c.climb * ZOOM_PER_S * dt
+		anchor := centre
+		if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+			zoom += wheel * WHEEL_ZOOM_STEP
+			anchor = rl.GetMousePosition()
 		}
 		v.zoom = clamp(v.zoom + zoom, ZOOM_MIN, ZOOM_MAX)
 		z1 := fit * math.pow(f32(2), v.zoom)
