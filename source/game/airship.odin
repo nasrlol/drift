@@ -27,6 +27,12 @@ AIRSHIP_TILT :: 1.0 // radians from straight down, so the sides show
 CAR_BANK :: 0.35 // roll in radians at the maximum turn rate
 CAR_PITCH :: 0.18 // nose up in radians at the maximum climb rate
 CAR_ANIM_RATE :: 3.0 // the animation closes this share of the gap per second
+// In free flight the wheels come down over the CAR_WHEELS_DOWN_M above CAR_WHEELS_STAND_M over the ground or a
+// roof, so they are down before the car lands (Lars, 2026-11-21: "de wielen moeten sneller normaal worden, iets
+// voor hij landt"); folding and unfolding run at CAR_WHEELS_RATE (~0.3 s). Our values.
+CAR_WHEELS_DOWN_M :: 4.8
+CAR_WHEELS_STAND_M :: 1.2
+CAR_WHEELS_RATE :: 9.0
 CAR_HEADING_RATE :: 8.0
 CAR_BOB_M :: 0.06 // hover bob in the air
 CAR_GLOW :: rl.Color{90, 230, 255, 255}
@@ -282,8 +288,15 @@ car_anim_update :: proc(w: ^World, dt: f32) {
 	an := &w.car_anim
 	ground := height_at(w, f32(p.pos.x), f32(p.pos.y))
 	fly: f32 = 1
-	if s.on_road || (s.free && s.driving) do fly = 0
-	else if s.landing || s.lifting do fly = clamp((p.alt - ground) / SHIP_MIN_CLEARANCE, 0, 1)
+	if s.on_road || (s.free && s.driving) {
+		fly = 0
+	} else if s.landing || s.lifting {
+		fly = clamp((p.alt - ground) / SHIP_MIN_CLEARANCE, 0, 1)
+	} else if s.free {
+		hag := p.alt - ground
+		_, roof := collide_car(w, {f32(p.pos.x), f32(p.pos.y)}, hag, 0.5)
+		fly = clamp((hag - max(roof, 0) - CAR_WHEELS_STAND_M) / CAR_WHEELS_DOWN_M, 0, 1)
+	}
 	if !an.seeded {
 		an^ = {
 			fly      = fly,
@@ -293,7 +306,7 @@ car_anim_update :: proc(w: ^World, dt: f32) {
 		}
 	}
 	k := 1 - math.exp(-dt * CAR_ANIM_RATE)
-	an.fly += (fly - an.fly) * k
+	an.fly += (fly - an.fly) * (s.free ? 1 - math.exp(-dt * CAR_WHEELS_RATE) : k)
 	if dt > 0 {
 		an.climb_ms += ((p.alt - an.last_alt) / dt - an.climb_ms) * k
 	}

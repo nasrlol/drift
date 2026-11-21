@@ -770,7 +770,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   the car animation unfolds the wheels (fly -> 0) and it drives like a car: grip 9/s against
                   sliding, 4 m/s^2 to ROAD_MAX_SPEED (126 km/h), brake 9, reverse to 6 m/s, steering over a 2.7 m
                   wheelbase with less lock at speed and at most 0.7 g in a bend; up lifts it off (+3 m/s), a drop
-                  over 0.5 m (a roof edge) makes it fly. Entering free flight from the road graph starts on wheels. pos_frac
+                  over 0.5 m (a roof edge) makes it fly. Entering free flight from the road graph starts on wheels.
+                  The wheels unfold before the touchdown (Lars: "iets voor hij landt"): in free flight Car_Anim.fly
+                  follows the height over the ground or a roof, down over the 4.8 m above 1.2 m, eased at 9/s. pos_frac
                   keeps the part of the position below the f32 resolution of pos. Leaving the street view hands the
                   forward speed back to ship_step. Not recorded in the replay yet (the free flag is not a control).
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
