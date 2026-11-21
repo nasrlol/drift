@@ -2,6 +2,7 @@
 package game
 
 import "core:math"
+import "core:math/linalg"
 
 // All axes are -1..1, zero is neutral. Input code fills it. In map mode the camera reads it,
 // in drive mode ship_step will.
@@ -11,14 +12,20 @@ Controls :: struct {
 	climb:    f32,
 }
 
+Ship_Warning :: enum {
+	Terrain,
+	No_Fly,
+}
+
 // pos is km in map space (y down), alt is m, heading is radians clockwise from north (up on the map),
-// speed is m/s along the heading, turn_rate is rad/s.
+// speed is m/s along the heading, turn_rate is rad/s. warnings is rebuilt every step, the UI only reads it.
 Ship :: struct {
 	pos:       [2]f32,
 	alt:       f32,
 	heading:   f32,
 	speed:     f32,
 	turn_rate: f32,
+	warnings:  bit_set[Ship_Warning],
 }
 
 SHIP_MAX_SPEED :: 35.0
@@ -29,6 +36,7 @@ SHIP_TURN_SMOOTH_S :: 0.5
 SHIP_CLIMB_RATE :: 5.0
 SHIP_CEILING :: 900.0
 SHIP_MIN_CLEARANCE :: 28.0
+SHIP_TERRAIN_WARN_M :: 60.0
 
 // Runs once per fixed step on w.ship. Reads only the ship, the controls, the terrain and the weather.
 ship_step :: proc(w: ^World, c: Controls, dt: f32) {
@@ -56,4 +64,12 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	s.alt += c.climb * SHIP_CLIMB_RATE * dt
 	floor := height_at(w, s.pos.x, s.pos.y) + SHIP_MIN_CLEARANCE
 	s.alt = min(max(s.alt, floor), SHIP_CEILING)
+
+	s.warnings = {}
+	if s.alt - (floor - SHIP_MIN_CLEARANCE) < SHIP_TERRAIN_WARN_M do s.warnings += {.Terrain}
+	for z in w.no_fly {
+		if z.radius > 0 && s.alt < z.ceiling && linalg.length(s.pos - z.center) < z.radius {
+			s.warnings += {.No_Fly}
+		}
+	}
 }
