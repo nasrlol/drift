@@ -89,7 +89,7 @@ ANDREI: WEATHER + NETWORK
 [x] store as flat arrays [hour][layer][cell], changing departure hour is an index, not a recompute
 [x] validate everything (ranges, NaN, missing), reject bad snapshots
 [ ] save snapshot to disk with its hash, load on startup, refresh every 15 min (thread, timeout)
-[ ] wind_at(x, y, layer, hour), gust_at, cloud_at: bilinear, no allocation
+[x] wind_at(x, y, layer, hour), gust_at, cloud_at: bilinear, no allocation
 [ ] bench: wind_at cost, snapshot load time
 network + carpooling (after routing works):
 [ ] ed25519 key pair per user (core:crypto)
