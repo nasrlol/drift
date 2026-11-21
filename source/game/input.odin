@@ -9,12 +9,12 @@ STICK_DEADZONE :: 0.15
 // stick Y is negative when pushed up, so throttle and climb flip it.
 read_controls :: proc() -> Controls {
 	c: Controls
-	if rl.IsKeyDown(.W) do c.throttle += 1
-	if rl.IsKeyDown(.S) do c.throttle -= 1
-	if rl.IsKeyDown(.D) do c.turn += 1
-	if rl.IsKeyDown(.A) do c.turn -= 1
-	if rl.IsKeyDown(.R) do c.climb += 1
-	if rl.IsKeyDown(.F) do c.climb -= 1
+	if rl.IsKeyDown(.W) || rl.IsKeyDown(.UP) do c.throttle += 1
+	if rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN) do c.throttle -= 1
+	if rl.IsKeyDown(.D) || rl.IsKeyDown(.RIGHT) do c.turn += 1
+	if rl.IsKeyDown(.A) || rl.IsKeyDown(.LEFT) do c.turn -= 1
+	if rl.IsKeyDown(.R) || rl.IsKeyDown(.PAGE_UP) do c.climb += 1
+	if rl.IsKeyDown(.F) || rl.IsKeyDown(.PAGE_DOWN) do c.climb -= 1
 
 	if rl.IsGamepadAvailable(0) {
 		c.throttle -= stick_axis(rl.GetGamepadAxisMovement(0, .LEFT_Y))

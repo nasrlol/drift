@@ -1,0 +1,12 @@
+# headwind.snap: wind toward the west on every layer, 15.54 m/s in hours 0..7, 20 m/s in hour 8.
+# Hub 10 lies east and south of hub 6. Ground speed (m/s) per eastbound step, after the +6 m/s retry:
+#             east    southeast   south
+#   fastest   8.5     3.3         9.1       (east makes 2.46 at 18 m/s, so it retries)
+#   calmest   3.5     4.5         blocked   (crosswind 15.5 > 13)
+#   greenest  1.46    2.0         blocked   (east stays under 1.5, so it zigzags on the diagonals)
+# In hour 8 greenest has no step east at all: no safe route. Westbound the wind is a tailwind.
+route 6 10 fastest 0
+route 6 10 calmest 0
+route 6 10 greenest 0
+route 6 10 greenest 8
+route 10 6 greenest 0

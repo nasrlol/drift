@@ -1,0 +1,8 @@
+# cloudy.snap: calm, no gusts. Hours 0..7 overcast on the weather points x 80..200 km, y 80..120 km, clear
+# elsewhere. Hour 8 overcast everywhere. Solar yield is 6.75 kW in clear sky and 1.49 kW overcast.
+# Greenest flies Oostende -> Liege north of the clouds, 11 km longer than the shortest grid path.
+# Fastest ignores the sun, and in uniform overcast greenest flies the shortest path again.
+route 6 10 greenest 0
+route 6 10 fastest 0
+route 6 10 greenest 8
+route 10 6 greenest 0

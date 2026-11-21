@@ -1,0 +1,12 @@
+# The straight Mechelen - Leuven route, then a 260 m gust cell reported on it: the route goes around it.
+route 13 4 fastest 0
+gust 156.5 67.5 0.26
+route 13 4 fastest 0
+# A gust zone closes every layer: a 3 km zone over Antwerpen (hub 11) moves the first grid node out of it,
+# where a no-fly zone up to 400 m only closed layer 0.
+gust 143.012 37.725 3
+route 11 13 calmest 8
+# Brussels (hub 5) under a no-fly zone up to 400 m and a gust zone: both apply in the same route.
+no_fly 139.669 79.4 2 400
+gust 147 75 2
+route 5 4 greenest 3

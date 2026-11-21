@@ -55,6 +55,7 @@ ROUTE_MODE_NAMES :: [Route_Mode]string {
 // Inputs, one command per line, # starts a comment:
 //   route <from hub> <to hub> <fastest|greenest|calmest> <hour 0..8>
 //   no_fly <x km> <y km> <radius km> <ceiling m>   adds a zone to the first free slot of w.no_fly
+//   gust <x km> <y km> <radius km>                 adds a zone to the first free slot of w.gust_zones
 headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strings.Builder) -> bool {
 	t := prof_begin()
 	weather_ok := weather_load_snapshot(w, snapshot_path)
@@ -179,6 +180,36 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 				radius,
 				ceiling,
 			)
+		case "gust":
+			x, x_ok := strconv.parse_f32(f[1])
+			y, y_ok := strconv.parse_f32(f[2])
+			radius, radius_ok := strconv.parse_f32(f[3])
+			parsed := n == 4 && x_ok && y_ok && radius_ok
+			// NaN fails every comparison, Inf fails the upper limits.
+			sane := abs(x) < 1e6 && abs(y) < 1e6 && radius > 0 && radius < 1e6
+			if !parsed || !sane {
+				logf(
+					w,
+					"headless",
+					"inputs line %d: %q, want: gust <x km> <y km> <radius km > 0>",
+					line_no,
+					raw,
+				)
+				return false
+			}
+			slot := -1
+			for z, i in w.gust_zones {
+				if z.radius == 0 {
+					slot = i
+					break
+				}
+			}
+			if slot < 0 {
+				logf(w, "headless", "inputs line %d: already %d gust zones", line_no, MAX_GUST_ZONES)
+				return false
+			}
+			w.gust_zones[slot] = {{x, y}, radius}
+			fmt.sbprintfln(out, "gust %d: %.3f %.3f radius %.3f km", slot, x, y, radius)
 		case:
 			logf(w, "headless", "inputs line %d: unknown command %q", line_no, f[0])
 			return false
@@ -189,17 +220,31 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 
 // Called by the host and the release main with the command line after the program name:
 //   --headless --snapshot <file> --inputs <file> [--dump]
+//   --headless --node [--port <n>]   (peer to peer node only, runs until killed, see node_run)
 // Prints the result (and with --dump the World after the last command) to stdout and timings to stderr. No window is opened.
 @(export)
 game_headless :: proc(args: []string) -> bool {
-	USAGE :: "usage: drift --headless --snapshot <file> --inputs <file> [--dump]"
+	USAGE ::
+		"usage: drift --headless --snapshot <file> --inputs <file> [--dump]\n" +
+		"       drift --headless --node [--port <n>]"
 	snapshot_path, inputs_path: string
-	dump: bool
+	dump, node: bool
+	port := 0
 	for i := 0; i < len(args); i += 1 {
 		switch args[i] {
 		case "--headless":
 		case "--dump":
 			dump = true
+		case "--node":
+			node = true
+		case "--port":
+			ok: bool
+			if i + 1 < len(args) do port, ok = strconv.parse_int(args[i + 1])
+			if !ok || port < 1 || port > 65535 {
+				fmt.eprintfln("[headless] --port needs a number in 1..65535\n%s", USAGE)
+				return false
+			}
+			i += 1
 		case "--snapshot", "--inputs":
 			if i + 1 == len(args) {
 				fmt.eprintfln("[headless] %s needs a file name\n%s", args[i], USAGE)
@@ -213,6 +258,7 @@ game_headless :: proc(args: []string) -> bool {
 			return false
 		}
 	}
+	if node do return node_run(port)
 	if snapshot_path == "" || inputs_path == "" {
 		fmt.eprintln("[headless] missing --snapshot or --inputs\n" + USAGE)
 		return false
@@ -317,20 +363,25 @@ dump_world :: proc(w: ^World, out: ^strings.Builder) {
 			z.ceiling,
 		)
 	}
+	for z, i in w.gust_zones {
+		if z.radius == 0 do continue
+		fmt.sbprintfln(out, "gust %d: %.3f %.3f radius %.3f km", i, z.center.x, z.center.y, z.radius)
+	}
 	if w.grid.terrain_built && w.grid.blocked_built {
 		count: [GRID_LAYERS]int
 		for n in 0 ..< GRID_NODES do count[n / GRID_LAYER_CELLS] += grid_blocked(&w.grid, Node(n)) ? 1 : 0
-		changed := w.grid.blocked_zones != w.no_fly
+		changed := w.grid.blocked_zones != w.no_fly || w.grid.blocked_gusts != w.gust_zones
 		fmt.sbprintfln(
 			out,
 			"blocked nodes per layer %v of %d%s",
 			count,
 			GRID_LAYER_CELLS,
-			changed ? ", no-fly zones changed since, rebuilt by the next route" : "",
+			changed ? ", zones changed since, rebuilt by the next route" : "",
 		)
 	} else {
 		fmt.sbprintln(out, "blocked set not built yet, the next route builds it")
 	}
+	fmt.sbprintfln(out, "last route expanded %d of %d nodes", w.grid.expanded_len, GRID_NODES)
 
 	fmt.sbprintfln(
 		out,

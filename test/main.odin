@@ -7,6 +7,7 @@ import game "../source/game"
 import "core:fmt"
 import "core:mem/virtual"
 import "core:os"
+import "core:slice"
 import "core:strings"
 
 Case :: struct {
@@ -28,6 +29,22 @@ CASES :: [?]Case {
 	},
 	// A hub inside a no-fly zone gets no route, a zone above or next to a hub does not stop it.
 	{"no_fly", "test/data/calm.snap", "test/data/no_fly.txt", "test/data/no_fly.expected"},
+	// A strong headwind: the +6 m/s retry, the 1.5 m/s floor and the crosswind limit each change a route.
+	{
+		"headwind_routes",
+		"test/data/headwind.snap",
+		"test/data/headwind_routes.txt",
+		"test/data/headwind_routes.expected",
+	},
+	// Clouds over the shortest path: greenest flies around them for the sun, fastest does not.
+	{
+		"cloudy_routes",
+		"test/data/cloudy.snap",
+		"test/data/cloudy_routes.txt",
+		"test/data/cloudy_routes.expected",
+	},
+	// A reported gust zone is avoided, closes every layer, and applies together with the no-fly zones.
+	{"gust", "test/data/calm.snap", "test/data/gust.txt", "test/data/gust.expected"},
 	// A NaN in the wind field must reject the snapshot, not reach the router.
 	{"nan_wind", "test/data/nan_wind.snap", "test/data/routes.txt", ""},
 }
@@ -37,7 +54,8 @@ main :: proc() {
 	for c in CASES {
 		if !run_case(c) do failed += 1
 	}
-	fmt.printfln("test: %d passed, %d failed", len(CASES) - failed, failed)
+	if !run_scan_order() do failed += 1
+	fmt.printfln("test: %d passed, %d failed", len(CASES) + 1 - failed, failed)
 	os.exit(failed == 0 ? 0 : 1)
 }
 
@@ -94,4 +112,105 @@ run_case :: proc(c: Case) -> bool {
 		fmt.printfln("test %s: full output in %s, expected in %s", c.name, actual, c.expected)
 	}
 	return false
+}
+
+// The scan animation replays w.grid.expanded after a route. Catches a scan that does not start at the
+// start node or end at the goal, repeats or skips nodes, enters blocked nodes, differs between two runs
+// of the same route, or is left over from the previous route when a route fails before searching.
+run_scan_order :: proc() -> bool {
+	w := (^game.World)(game.game_init())
+	if w == nil {
+		fmt.println("test scan_order: cannot create the World")
+		return false
+	}
+	defer game.game_shutdown(w)
+	context.allocator = virtual.arena_allocator(&w.perm)
+	context.temp_allocator = virtual.arena_allocator(&w.frame)
+
+	out := strings.builder_make()
+	if !game.headless_run(w, "test/data/calm.snap", nil, &out) {
+		fmt.println("test scan_order: cannot load test/data/calm.snap, see the log above")
+		return false
+	}
+
+	// Tower top of hub i, the end point headless_run routes from and to.
+	tower :: proc(w: ^game.World, i: int) -> [3]f32 {
+		p := w.m.hubs[i].pos
+		return {p.x, p.y, game.height_at(w, p.x, p.y) + game.HUB_TOWER_M}
+	}
+
+	g := &w.grid
+	seen := make([]bool, game.GRID_NODES)
+	for from in 0 ..< w.m.hub_count {
+		for to in 0 ..< w.m.hub_count {
+			_, ok := game.route(w, tower(w, from), tower(w, to), .Fastest, 0)
+			if !ok {
+				fmt.printfln("test scan_order: no route %d -> %d on the calm snapshot", from, to)
+				return false
+			}
+			scan := g.expanded[:g.expanded_len]
+			start, _ := game.grid_free_node_near(g, tower(w, from))
+			goal, _ := game.grid_free_node_near(g, tower(w, to))
+			if len(scan) == 0 || scan[0] != start || scan[len(scan) - 1] != goal {
+				fmt.printfln(
+					"test scan_order: route %d -> %d: scan of %d nodes, want first %v and last %v",
+					from,
+					to,
+					len(scan),
+					start,
+					goal,
+				)
+				return false
+			}
+			for n in scan {
+				if seen[n] || game.grid_blocked(g, n) {
+					fmt.printfln(
+						"test scan_order: route %d -> %d: node %v %s",
+						from,
+						to,
+						n,
+						seen[n] ? "expanded twice" : "is blocked",
+					)
+					return false
+				}
+				seen[n] = true
+			}
+			// The returned path is smoothed and resampled (path cleanup), its points can lie in cells A* never
+			// expanded. The A* node path, goal back to start through grid.parent, must be in the scan.
+			for n := goal;; n = g.parent[n] {
+				if !seen[n] {
+					fmt.printfln(
+						"test scan_order: route %d -> %d: A* path node %v not in the scan",
+						from,
+						to,
+						n,
+					)
+					return false
+				}
+				if n == start do break
+			}
+			for n in scan do seen[n] = false
+		}
+	}
+
+	_, first_ok := game.route(w, tower(w, 6), tower(w, 10), .Fastest, 0)
+	first := slice.clone(g.expanded[:g.expanded_len])
+	_, other_ok := game.route(w, tower(w, 14), tower(w, 2), .Fastest, 0)
+	_, again_ok := game.route(w, tower(w, 6), tower(w, 10), .Fastest, 0)
+	if !first_ok || !other_ok || !again_ok || !slice.equal(first, g.expanded[:g.expanded_len]) {
+		fmt.printfln(
+			"test scan_order: route 6 -> 10 twice: scans of %d and %d nodes differ",
+			len(first),
+			g.expanded_len,
+		)
+		return false
+	}
+
+	// Brussels (hub 5) inside a zone over every layer, as in no_fly.txt: the route fails before A* runs.
+	w.no_fly[0] = {{139.669, 79.4}, 8, 10000}
+	if _, ok := game.route(w, tower(w, 5), tower(w, 10), .Fastest, 0); ok || g.expanded_len != 0 {
+		fmt.printfln("test scan_order: failed route 5 -> 10 left a scan of %d nodes, want 0", g.expanded_len)
+		return false
+	}
+	return true
 }

@@ -5,3 +5,4 @@
 *.geojson linguist-generated -diff
 *.bat text eol=crlf
 *.snap binary
+*.ttf binary
