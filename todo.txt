@@ -27,7 +27,7 @@ FIRST, TOGETHER (so everyone can work in parallel)
 
 NASR: MAP + RENDERING + UI
 [x] load belgium.bin and draw lines (km -> px: scale + offset)
-[ ] camera: pan + zoom to cursor (mouse wheel / controller)
+[x] camera: pan + zoom to cursor (mouse wheel / controller)
 [ ] draw cities + names
 [ ] "(c) OpenStreetMap contributors" on screen
 [ ] download Copernicus GLO-90 tiles N49-N51, E002-E006 (sea tiles 404, fine)
@@ -52,7 +52,7 @@ later:
 
 LARS: ROUTING + NAVIGATION
 [x] 3D grid: 1 km cells x 3 layers (203k nodes), all buffers allocated once, reused per route
-[ ] blocked bitset built once per weather hour: terrain + margin, no-fly zones (fixed array, max 8)
+[x] blocked bitset: terrain + 75 m margin, grid edge, no-fly zones (fixed array, max 8), free start / goal node
 [x] A*: 8 dirs + up/down, binary heap in a fixed array, no allocation during search
 [ ] cost per mode: fastest (time), greenest (energy), calmest (time x gusts)
 [ ] ground speed: wind along track + sqrt(v^2 - crosswind^2), retry +6 m/s if < 2.5, block if < 1.5
@@ -99,10 +99,10 @@ ANDREI: WEATHER + NETWORK
 [x] validate everything (ranges, NaN, missing), reject bad snapshots
 [x] save snapshot to disk with its hash, load on startup, refresh every 15 min (thread, timeout)
 [x] wind_at(x, y, layer, hour), gust_at, cloud_at: bilinear, no allocation
-[ ] bench: wind_at cost, snapshot load time
+[x] bench: wind_at cost, snapshot load time
 network + carpooling (after routing works):
 [x] ed25519 key pair per user (core:crypto)
-[ ] signed message format: offer, request, accept, review (fixed-size binary, not JSON)
+[x] signed message format: offer, request, accept, review (fixed-size binary, not JSON)
 [ ] offers include hub ids, times, seats, weather snapshot hash
 [ ] simple relay: store messages, forward to subscribers
 [ ] publish weather snapshot to relay, fetch by hash
