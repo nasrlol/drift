@@ -1,0 +1,25 @@
+weather start 1795176000
+plan Bruxelles - Brussel -> Gent hour 0
+  fastest: 41.6 min, 52.354 km, 75.5 km/h, 33.634 kWh net, Extra_Energy, Via Skyway 300, past Aalst
+    0.000 km Depart: Head west / Leave Bruxelles - Brussel and climb / Rue de l'Écuyer - Schildknaapsstraat
+    0.992 km Straight: Continue on Skyway 300 / for 49 km / Boulevard de l'Abattoir - Slachthuislaan
+    50.491 km Descend: Descend to the Gent tower / 79 m, smoother air below / Schelde
+    52.354 km Arrive: Dock at Gent / Platform at 73 m / Leie
+  greenest: 61.6 min, 52.354 km, 51.0 km/h, 10.337 kWh net, Lowest_Energy, Via Skyway 300, past Aalst
+    0.000 km Depart: Head west / Leave Bruxelles - Brussel and climb / Rue de l'Écuyer - Schildknaapsstraat
+    0.992 km Straight: Continue on Skyway 300 / for 49 km / Boulevard de l'Abattoir - Slachthuislaan
+    50.491 km Descend: Descend to the Gent tower / 79 m, smoother air below / Schelde
+    52.354 km Arrive: Dock at Gent / Platform at 73 m / Leie
+  calmest: 54.0 min, 52.354 km, 58.1 km/h, 15.738 kWh net, Gust_Index, Via Skyway 300, past Aalst
+    0.000 km Depart: Head west / Leave Bruxelles - Brussel and climb / Rue de l'Écuyer - Schildknaapsstraat
+    0.992 km Straight: Continue on Skyway 300 / for 49 km / Boulevard de l'Abattoir - Slachthuislaan
+    50.491 km Descend: Descend to the Gent tower / 79 m, smoother air below / Schelde
+    52.354 km Arrive: Dock at Gent / Platform at 73 m / Leie
+fly greenest from Bruxelles - Brussel to Gent
+  0.0 s: next Continue on Skyway 300 in 992 m
+  69.2 s: next Descend to the Gent tower in 49514 m
+  300.0 s: gust reported (true)
+  300.0 s: reroute 1, 48.311 km left, no route false
+  300.0 s: next Descend to the Gent tower in 46604 m
+  3598.2 s: next Dock at Gent in 1722 m
+  3773.0 s: arrived, docked true, 10.253 kWh net, 5.407 kWh solar

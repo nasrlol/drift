@@ -280,7 +280,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   gives ok = false. Measured (-o:speed, cloud box, 4096 random points, min of 5 runs per
                   point): avg ~4 us at 2..20 km, worst point 30-47 us (city centre cells hold up to 3961
                   segments).
-  terrain.odin    height_at(w, x, y) -> ground height in m. Stub: 0
+  terrain.odin    height_at(w, x, y) -> ground height in m: bilinear between the 250 m cell centres of
+                  w.m.heights (sample (i, j) at ((i + 0.5) * 0.25, (j + 0.5) * 0.25) km). Outside the map the
+                  edge value holds (like wind_at), NaN x or y and a map without heights give 0. No allocation.
+                  Measured (profile build, cloud box): bench avg ~50 ns (4096 random points over the 2.2 MB
+                  grid after a route ran, so mostly cache misses), ~10-18 ns warm, 1.69M calls in grid order
+                  14 ms (the route's terrain set, built on first use and after a reload: +~14 ms).
   weather.odin    wind_at(w, x, y, layer, hour) -> [2]f32 m/s, direction the wind blows toward, x east, y south
                   gust_at(w, x, y, layer, hour) -> 0..1, cloud_at(w, x, y, hour) -> 0..1. Bilinear on the 40 km grid
                   from w.weather, no allocation. Outside the grid the edge value holds, layer and hour are
