@@ -6,7 +6,7 @@ wheel 2 40
 wheel 45 1
 ship 100 141.153 73.877 4 264
 shot 260 build/shots/town_low.png
-ship 270 141.153 73.877 120 264
+ship 270 141.153 73.877 110 264
 mouse 280 0 300
 shot 330 build/shots/town_top.png
 quit 331

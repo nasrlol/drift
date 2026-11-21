@@ -34,7 +34,11 @@ STREET_REACH_KM :: STREET_VIEW_KM
 STREET_CAM_DIST_M :: 8.5
 STREET_CAM_MIN_M :: 4.0
 STREET_CAM_MAX_M :: 40.0 // zoomed out past this the map takes over (street_wants_map)
-STREET_EXIT_M :: 300.0 // the car climbing through this height above the ground goes back to the map (Lars, 2026-11-22)
+// While flying, the car's height over the ground picks the view (Lars, 2026-11-22: "minder als 300 m, je moet
+// maar een beetje hoger of lager gaan en dan switch je naar de volgende mode"): below STREET_LOW_M the street
+// view, above STREET_HIGH_M the map. The tower tops (HUB_TOWER_M) lie below, so take-off and landing are in 3D.
+STREET_LOW_M :: 80.0
+STREET_HIGH_M :: 120.0
 STREET_CAM_LOOK_UP_M :: 1.6 // the camera looks at this point above the car
 STREET_CAM_PITCH :: 0.16 // radians down at rest
 STREET_CAM_HORIZON :: 0.05 // radians: high up, the horizon stays this far above the middle of the view at rest
@@ -75,11 +79,13 @@ Street :: struct {
 	yaw, pitch: f32, // the player's look-around on top of the chase direction, radians
 	dist:       f32, // zero = STREET_CAM_DIST_M
 	idle_s:     f32, // seconds since the player last looked around
-	on_s:       f32, // seconds since the street view switched on
+	on_s:       f32, // seconds in the street view this run, all visits (the key hint shows in the first)
 	origin:     [2]f32, // km
 	eye:        [3]f32, // the camera, street space, eased
 	seeded:     bool,
-	exit_armed: bool, // the car has been below STREET_EXIT_M since the street view came on
+	// The view was picked by hand (zoom, Esc) against the height band: the band waits until the car has been on
+	// the side that agrees with it (below STREET_LOW_M in the street view, above STREET_HIGH_M on the map).
+	hold:       bool,
 	view:       rl.Camera3D,
 	// Road ribbons per STREET_ROAD_TILE_KM tile. road_segs lists, per STREET_ROAD_CELL_KM cell, the map line
 	// segments it holds: kind << 24 | index of the segment's first point (road_cells has the offsets).
@@ -848,21 +854,33 @@ street_ship_pos :: proc(w: ^World) -> [3]f32 {
 // One world, no street view key (Lars, 2026-11-22: "geen 2 modes, als je via de map zo laag naar beneden gaat
 // switch je naar de 3d game, en omgekeerd als je naar boven gaat terug naar de map"): a zoom in past the closest
 // map view (ZOOM_MAX, the camera ~2.3 km away) goes down into the street view at the car, from the plan screen
-// too (that leaves the plan for free flight, like M; Lars: "3D at the car"). Once a frame from game_update.
+// too (that leaves the plan for free flight, like M; Lars: "3D at the car"). While flying on the map, the car
+// sinking below STREET_LOW_M goes down too. Once a frame from game_update.
 street_switch :: proc(w: ^World) {
-	if !w.street.on && w.cam.zoom_past do street_enter(w)
+	st := &w.street
+	switch {
+	case st.on:
+	case w.cam.zoom_past:
+		street_enter(w)
+	case w.screen != .Navigate:
+		st.hold = false
+	case st.hold:
+		if street_ship_pos(w).y > STREET_HIGH_M do st.hold = false
+	case street_ship_pos(w).y < STREET_LOW_M:
+		street_enter(w)
+	}
 	w.cam.zoom_past = false
 }
 
-// Back up to the map (Lars: "fly high or scroll out"): the car climbs through STREET_EXIT_M above the ground,
-// or the camera is zoomed out past STREET_CAM_MAX_M; Esc and Options go back too. Entered above STREET_EXIT_M,
-// the height counts once the car has been below it, so the map does not take over again at once.
+// Back up to the map (Lars: "fly high or scroll out"): the car climbs above STREET_HIGH_M, or the camera is
+// zoomed out past STREET_CAM_MAX_M; Esc and Options go back too.
 street_wants_map :: proc(w: ^World) -> bool {
 	st := &w.street
 	if w.screen != .Navigate || key_pressed(w, .ESCAPE) || pad_pressed(w, .MIDDLE_RIGHT) do return true
-	if street_ship_pos(w).y < STREET_EXIT_M {
-		st.exit_armed = true
-	} else if st.exit_armed {
+	h := street_ship_pos(w).y
+	if st.hold {
+		if h < STREET_LOW_M do st.hold = false
+	} else if h > STREET_HIGH_M {
 		return true
 	}
 	dist := st.dist == 0 ? STREET_CAM_DIST_M : st.dist
@@ -876,10 +894,9 @@ street_enter :: proc(w: ^World) {
 		w.screen = .Navigate
 	}
 	st.on = true
-	st.on_s = 0
 	st.yaw, st.pitch, st.idle_s, st.dist = 0, 0, 0, 0
 	st.seeded = false
-	st.exit_armed = false
+	st.hold = street_ship_pos(w).y >= STREET_LOW_M
 	if !w.script.on do rl.DisableCursor()
 	logf(w, "street", "down into the street view at %.0f m", street_ship_pos(w).y)
 }
@@ -887,6 +904,7 @@ street_enter :: proc(w: ^World) {
 // The map takes over at its closest view behind the car, so one zoom in goes back down.
 street_leave :: proc(w: ^World) {
 	w.street.on = false
+	w.street.hold = street_ship_pos(w).y <= STREET_HIGH_M
 	logf(w, "street", "up to the map at %.0f m", street_ship_pos(w).y)
 	if !w.script.on do rl.EnableCursor()
 	if w.screen != .Navigate do return

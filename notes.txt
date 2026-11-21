@@ -748,12 +748,16 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   naar boven gaat terug naar de map"): street_switch goes down into it when a zoom in (wheel, the +
                   button, R on the plan screen, D-pad up) asks for more than ZOOM_MAX while the map is there
                   (cam.zoom_past, set in cam_zoom_by), always at the car, from the plan screen too (it leaves the plan
-                  for free flight like M; Lars: "3D at the car"). street_wants_map comes back up when the car climbs
-                  through STREET_EXIT_M (300 m over the ground; entered above it, only once it has been below), when
-                  the camera is zoomed out past STREET_CAM_MAX_M (40 m), or with Esc / Options; the map then takes
-                  over at ZOOM_MAX behind the car, so one zoom in goes back down. The log shows each switch ("[street]
-                  down into the street view at 58 m", "up to the map at 300 m"); test/data/street_switch.txt runs
-                  both ways. The cursor is locked while on.
+                  for free flight like M; Lars: "3D at the car"). While flying, the car's height over the ground
+                  picks the view too (Lars, 2026-11-22: "minder als 300 m, een beetje hoger of lager en je switcht"):
+                  below STREET_LOW_M (80 m) the street view, above STREET_HIGH_M (120 m) the map, so take-off from a
+                  tower (58 m) and landing are in 3D and the skyways (300 m and up) on the map. street_wants_map also
+                  goes up when the camera is zoomed out past STREET_CAM_MAX_M (40 m), and with Esc / Options; the map
+                  then takes over at ZOOM_MAX behind the car, so one zoom in goes back down. A view picked by hand
+                  against the band (zoomed down at 200 m, zoomed up at 50 m) holds (st.hold) until the car has been
+                  on the side that agrees with it. The log shows each switch ("[street] down into the street view at
+                  80 m", "up to the map at 120 m"); test/data/street_switch.txt runs every way. The key hint shows
+                  in the first 7 s in the street view of a run. The cursor is locked while on.
                   Street space: metres, x east, y up, z south, around w.street.origin (km, snapped to 0.25 km so the
                   f32 values stay small). street_place puts the map meshes (km, y south, z down) there (tiles.odin). The
                   ground is flat: the car is drawn at alt - height_at, like the buildings stand on the map. Clip
