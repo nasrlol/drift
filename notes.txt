@@ -104,6 +104,16 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
                   a route to the same hub. calm_routes.expected: today the straight line stub.
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
                   once snapshot saving exists, the calm one does not exercise the wind.
+bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.
+                  200 rounds; wind_at / gust_at / cloud_at / height_at over 4096 fixed-seed points per round,
+                  route, three modes, snapshot load, load_map one call per round. Prints min / avg / max per
+                  call and arena usage, exits 1 when an average is over a budget (route 10 ms, three modes
+                  30 ms, snapshot load 5 ms). Not run by the hook or CI: CI machines are too noisy for timings.
+  measured 2026-11-21, Linux on Apple M2 (Asahi), profile config, timer resolution ~42 ns:
+                  wind_at / gust_at / cloud_at ~10 ns per call (~25-35 cycles: two float divides, clamps,
+                  4 loads from L1, ~20 flops; estimate 5-10 ns, divide latency dominates).
+                  route (stub) ~0.3 us, snapshot load ~7 us for 22.7 KB (copy ~1 us + 5.7k range checks;
+                  estimate 3 us, 2x off, fine for now: budget is 5 ms). load_map ~0.2 us (slicing + hub copy).
 source/host/      debug host: loads build/game.so (game.dll on Windows), checks its mtime every frame, copies it to
                   build/game_N.so and loads the copy, unloads the old one after. Compares memory_size,
                   refuses a reload if World changed (restart needed). Run from the repo root.
