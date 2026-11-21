@@ -96,6 +96,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   cache/weather.snap format) and does the work and is what test/ calls.
                   Inputs: one command per line, # comment. "route <from hub> <to hub> <mode> <hour>",
                   hub = index into w.m.hubs, mode fastest / greenest / calmest, hour 0..8.
+                  "no_fly <x km> <y km> <radius km> <ceiling m>" fills the next free slot of w.no_fly.
                   Output per route: "route 6 -> 11 fastest hour 0: 2 points, 104.812 km", then x y alt per point.
                   --dump appends the state dump after the result.
                   Log: logf(w, system, format, args) prints "[route t=1234] message" to stderr, t = w.tick.
@@ -103,13 +104,17 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   (fetch thread, argument parsing) prints "[system] message" with fmt.eprint.
                   State dump: dump_world(w, out) writes tick, build, map counts, hubs, weather start / sha256 /
                   fetched_at, a weather line per hour
-                  (max wind per layer, max gust, mean cloud) and arena used / reserved. No timings, so two dumps
+                  (max wind per layer, max gust, mean cloud), no-fly zones, blocked nodes per layer
+                  and arena used / reserved. No timings, so two dumps
                   of the same run are identical. F5 in the app prints it to stdout, --dump in headless mode.
                   Windows release is -subsystem:windows and has no console: use the debug or profile exe there.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   Path lives in w.route_mem until the next call: from, the centres of the grid nodes
-                  in between, to. ok = false also when from or to lies outside the routing grid.
+                  in between, to. A* never enters a blocked node (see below).
+                  ok = false also when from or to has no free node within 5 cells (outside the grid,
+                  inside a no-fly zone): grid_free_node_near picks the closest free cell centre, lowest free
+                  layer first (spec), the altitude of the end point is not used.
                   Grid: 286 x 237 cells of 1 km x 3 layers (LAYER_ALT) = 203,346 nodes, covers every point
                   in belgium.bin (x 0.6..285.2, y 1.0..236.5 km). node = layer * 286 * 237 + y * 286 + x,
                   each layer a contiguous row-major plane. grid_node_at(pos) snaps to the cell under x, y
@@ -129,6 +134,18 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Measured (cloud box, -o:speed): 2025 routes between all city pairs x 3 x 3 layers,
                   avg 14 us, worst 0.19 ms; corner to corner expands 286 nodes (35k without the weight).
                   Debug build: avg 0.14 ms, worst 0.6 ms. With test walls the cost matched a plain Dijkstra.
+                  Blocked nodes (spec): highest ground in the cell + 75 m above the layer, the outer ring of
+                  cells, or a no-fly zone below its ceiling. w.no_fly: [8]No_Fly_Zone (centre km, radius km,
+                  ceiling m), radius 0 = unused slot, zero = no zones. A zone blocks every cell it overlaps,
+                  not only the cells whose centre it covers. grid_blocked(g, n) reads one bit.
+                  Two bitsets of 25 KB in w.grid: terrain (edge + ground, 25 height_at samples per cell every
+                  250 m = the heightmap spacing, 1.7M calls) and blocked = terrain + zones. route() builds terrain
+                  on first use and after a hot reload, and rebuilds blocked when w.no_fly differs from the zones
+                  it was built with. Nothing in it depends on the forecast hour, so changing hour costs nothing.
+                  Measured (cloud box): terrain build 29 ms debug, 0.06 ms -o:speed with the height_at stub
+                  (expect ~5 ms -o:speed with a bilinear heightmap). Zone rebuild 2 us -o:speed.
+                  Checked against a brute force over all 203k nodes (zones overlapping, at the grid edge,
+                  partly outside, smaller than a cell, NaN / Inf zones ignored) and a whole-grid closest free node.
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
                   Each case = snapshot + inputs through game.headless_run, output compared line by line to the
@@ -138,6 +155,8 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
                   calm.snap: zero wind / gust / cloud, start 1795176000. nan_wind.snap: same with
                   wind[3][1][20].x = NaN, must be rejected by weather_valid. routes.txt: one route per mode, hours 0 / 4 / 8,
                   a route to the same hub. calm_routes.expected: A* grid paths (unsmoothed, wind not used yet).
+                  no_fly.txt: Brussels inside an 8 km zone (no route from or to it), Liege under a 400 m zone
+                  (leaves from layer 1), Antwerpen in a 3 km zone (free node outside it).
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
                   (copy a cache/weather.snap), the calm one does not exercise the wind.
 bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.
