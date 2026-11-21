@@ -361,7 +361,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   w.grid holds the search state as fixed arrays in World (no arena, allocated with World):
                   visit stamp, cost, parent, heap slot and heap item per node. A node's cost and parent only
                   count when visit[n] == grid.search, so a route starts with search += 1, not a 4.9 MB clear.
-                  Cost per mode (spec), edge_cost(g, a, b, mode) for neighbour nodes:
+                  Cost per mode (spec), per edge inside the A* loop:
                     fastest  18 m/s  seconds          dt                                vertical 0.2 x climb m / 3
                     calmest  13 m/s  seconds          dt x (1 + 7 g^2)                  vertical 0.2 x climb m / 3
                     greenest 11 m/s  kWh   (P(v, g) - S(c)) dt / 3600 + 0.25 g^2 km   vertical climb_kwh + 0.02
@@ -382,12 +382,24 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   = 271 KB), rebuilt when the hour or that hour's forecast changes (compared to a 2.5 KB copy,
                   so a new snapshot is picked up without a flag). Zero is a calm, clear hour 0. The three modes
                   and every route in the same hour share it. Build ~2.6 ms -o:speed (406k bilinear samples).
-                  Estimate (grid_estimate) = octile km x lowest cost per km + layer changes x cheapest climb.
-                  Lowest cost per km = the mode's cost at airspeed + the strongest wind of the hour (as a pure
-                  tailwind), its calmest gust and (greenest) its clearest sky; bilinear sampling never leaves the range of the grid points,
-                  so it never overestimates with any snapshot. When the wind can push the ground speed under
-                  2.5 m/s (wind_max > v - 2.5) it also takes the cost at v + 6 with ground speed at most
-                  min(v + 6 + wind_max, 2.5 + sqrt((v + 6)^2 - v^2)), whichever is lower. Consistent, so an expanded node is never reopened.
+                  Estimate (grid_estimate, Estimate built per route): per grid direction k, rate[k] = the mode's
+                  cost per km with the strongest tailwind along k anywhere in the hour (max over the 189 weather
+                  grid points of wind . k), the calmest gust and (greenest) the clearest sky; bilinear sampling
+                  never leaves the range of the grid points, so no edge in direction k is cheaper. When the wind
+                  can push the ground speed under 2.5 m/s (wind_max > v - 2.5) rate[k] also takes the cost at v + 6
+                  with ground speed at most min(v + 6 + tail_k, 2.5 + sqrt((v + 6)^2 - v^2)), whichever is lower. The cheapest way to cover a displacement with
+                  such moves is a small LP; any y with y . k <= rate[k] for all k gives the lower bound
+                  y . displacement (duality). Estimate.y holds the best such y per 45 degree sector (the edge of
+                  the cost polygon there, found by trying all 28 direction pairs) and the estimate is the max of
+                  the 8 dot products + layer changes x cheapest climb. Consistent (each y alone never overestimates
+                  an edge), so an expanded node is never reopened. Rates stay positive (power >= 3 kW + 0.0085 v^3 >
+                  the 6.75 kW solar maximum at every airspeed), so the LP has a valid y in every sector. With a wind field that has one main direction
+                  it follows the wind (windy.snap: 4x fewer expanded nodes than one strongest-wind rate for all
+                  directions); with random wind per cell every direction has a strong tailwind somewhere, there
+                  it gains ~8 %.
+                  The loop precomputes the node index step, unit vector and length per direction, so it does no
+                  division per neighbour (the outer ring is always blocked, so no bounds check for x / y). Edge
+                  costs go through flight_cost (ground speed rules, solar) and mode_climb_cost (signed climb).
                   Weighted x 1.001 to break the many near-ties of an open grid (at most 0.1 % above the cheapest).
                   Checked: cost equals a plain Dijkstra (estimate 0) within 1e-6 on 126 routes x 3 modes, windy
                   and random wind snapshots. Again with ground speed: same found / not found and cost within
@@ -401,7 +413,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                        in the same layer whose straight line is free and costs at most 0.4 % (PULL_TOLERANCE)
                        more than the A* path between them (g.cost difference). line_cost(g, a, b, mode) walks
                        the cells the line crosses (Amanatides-Woo), each piece costs as an edge (flight_cost,
-                       shared with edge_cost) with the weather of its cell; a blocked cell or a blocked piece
+                       shared with the A* loop) with the weather of its cell; a blocked cell or a blocked piece
                        makes the line not free. A line through a cell corner does not enter the cells beside
                        it, the same as a diagonal A* step. Never across a layer change.
                     2. towers: first and last point at the tower top + 6 m (TOWER_ABOVE_M), with a ramp point
@@ -466,6 +478,10 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   With the energy model (4-core cloud box, profile, 2 runs each, before / after): route avg
                   7.7-8.0 / 8.0-8.2 ms, three modes 20.7-21.5 / 22.2-22.5 ms, within the noise of this box.
                   The cloud cache adds 68k cloud_at calls (~0.7 ms) when the hour changes.
+                  Per-direction estimate and loop precompute (Lars, measured on the cost model before ground speed
+                  and energy): route avg 6.2 -> 5.3 ms, three modes 14.8 -> 11 ms. With random wind per weather
+                  cell the estimate stays weak: the worst routes expand up to 70k of 203k nodes. A 4-ary heap
+                  measured no faster. Open: #66 (may the bench use a smooth wind field).
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
                   Each case = snapshot + inputs through game.headless_run, output compared line by line to the

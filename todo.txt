@@ -79,7 +79,7 @@ LARS: ROUTING + NAVIGATION
 [ ] navigation state: next maneuver, distance, then-card, ETA, all derived from path index
 [ ] autopilot: follow route (lookahead point), outputs Controls struct
 [ ] switch manual <-> autopilot
-[ ] bench: one route < 10 ms, three modes < 30 ms
+[~] lars: bench: one route < 10 ms, three modes < 30 ms (waiting: #66)
 design (route.odin, nav.odin = simulation; nav_ui.odin = drawing):
 [ ] three routes at once: plan_routes(w, from, to, hour) fills w.routes[mode] for all modes
 [ ] route summary per mode: minutes, km, km/h, net kWh, mean wind, tag, one-line "why" (after metrics)
