@@ -1,6 +1,8 @@
 package game
 
 import "core:math"
+import "core:math/linalg"
+import "core:mem"
 import "core:mem/virtual"
 
 Route_Mode :: enum u8 {
@@ -35,15 +37,61 @@ GRID_DIRS :: [10][3]int {
 	{0, 0, -1},
 }
 
-// Search state per node, fixed size inside World: allocated once with it, reused by every route.
-// cost and parent of a node only count when visit[node] == search, so a new route bumps search
-// instead of clearing 2.4 MB. Zero is valid: no node has been visited yet.
-Grid :: struct {
-	search: u32,
-	visit:  [GRID_NODES]u32,
-	cost:   [GRID_NODES]f32,
-	parent: [GRID_NODES]Node,
+// A cell is blocked in a layer when its highest ground + this margin is above the layer altitude (spec).
+TERRAIN_MARGIN_M :: 75
+// Ground samples per cell side, 250 m apart including both edges: the spacing of the heightmap, so the
+// highest sample is the highest point of the bilinear terrain inside the cell.
+TERRAIN_SAMPLES :: 5
+MAX_NO_FLY :: 8
+// Route end points snap to the closest free node at most this many cells away from the hub.
+FREE_NODE_CELLS :: 5
+
+GRID_BLOCKED_WORDS :: (GRID_NODES + 63) / 64
+
+// A circle on the map, closed from the ground up to ceiling. radius 0 marks an unused slot,
+// so a zeroed array holds no zones.
+No_Fly_Zone :: struct {
+	center:  [2]f32, // km
+	radius:  f32, // km
+	ceiling: f32, // m, every layer below it is blocked
 }
+
+// Search state per node, fixed size inside World: allocated once with it, reused by every route.
+// cost, parent and slot of a node only count when visit[node] == search, so a new route bumps search
+// instead of clearing 4.9 MB. Zero is valid: no node has been visited yet, the open heap is empty,
+// the blocked set is not built.
+Grid :: struct {
+	search:        u32,
+	heap_len:      u32,
+	visit:         [GRID_NODES]u32,
+	cost:          [GRID_NODES]f32, // km from the start along the best path found so far
+	parent:        [GRID_NODES]Node,
+	slot:          [GRID_NODES]u32, // index in heap while open, HEAP_CLOSED once expanded
+	heap:          [GRID_NODES]Heap_Item, // binary min-heap on f, the open set of A*
+	// Bit n set: node n can not be entered. terrain is the edge ring and the cells too close to the ground,
+	// blocked is terrain plus blocked_zones. Two sets because terrain costs 1.7M height_at calls and only
+	// changes with the library (game_hot_reloaded clears terrain_built), the zones change at runtime.
+	terrain:       [GRID_BLOCKED_WORDS]u64,
+	blocked:       [GRID_BLOCKED_WORDS]u64,
+	blocked_zones: [MAX_NO_FLY]No_Fly_Zone,
+	// Connected free region of each node (A* steps), 0 for a blocked node. Built with blocked.
+	region:        [GRID_NODES]u32,
+	terrain_built: bool,
+	blocked_built: bool,
+}
+
+// f = cost + estimate to the goal, the key of the open heap.
+Heap_Item :: struct {
+	f: f32,
+	n: Node,
+}
+
+HEAP_CLOSED :: max(u32)
+
+// On an open 8-direction grid thousands of nodes have (almost) the same f, so plain A* expands a wide
+// band around the line: 35k nodes corner to corner. Weighting the estimate a little prefers nodes
+// closer to the goal: 286 nodes, at most 0.1 % longer than the cheapest path.
+ESTIMATE_TIE_BREAK :: 1.001
 
 grid_node :: proc(c: [3]int) -> Node {
 	return Node(c.z * GRID_LAYER_CELLS + c.y * GRID_W + c.x)
@@ -85,9 +133,35 @@ grid_neighbor :: proc(n: Node, d: [3]int) -> (next: Node, ok: bool) {
 	return grid_node(c), true
 }
 
+grid_blocked :: proc(g: ^Grid, n: Node) -> bool {
+	return g.blocked[n >> 6] & (1 << (u32(n) & 63)) != 0
+}
+
+// The free node closest to pos (x km, y km) within FREE_NODE_CELLS cells, lowest free layer of that cell
+// (spec: start and goal are the closest free node to the hub, lowest layer first). The altitude in pos
+// is not used. ok = false when pos lies outside the grid or every node around it is blocked.
+grid_free_node_near :: proc(g: ^Grid, pos: [3]f32) -> (n: Node, ok: bool) {
+	hub := grid_cell(grid_node_at(pos) or_return)
+	best := math.inf_f32(1)
+	for y in max(hub.y - FREE_NODE_CELLS, 0) ..= min(hub.y + FREE_NODE_CELLS, GRID_H - 1) {
+		for x in max(hub.x - FREE_NODE_CELLS, 0) ..= min(hub.x + FREE_NODE_CELLS, GRID_W - 1) {
+			for layer in 0 ..< GRID_LAYERS {
+				c := grid_node({x, y, layer})
+				if grid_blocked(g, c) do continue
+				if d := linalg.length2(grid_node_pos(c).xy - pos.xy); d < best {
+					best, n, ok = d, c, true
+				}
+				break
+			}
+		}
+	}
+	return
+}
+
 // from, to: x km, y km, altitude m. Hub i is at w.m.hubs[i].pos, its tower top at HUB_TOWER_M.
 // Returns the path in the same units, or ok = false when no safe route exists with this wind
-// or an end point lies outside the grid. The path lives in the route arena until the next route call.
+// or an end point has no free node near it (outside the grid, in a no-fly zone).
+// The path lives in the route arena until the next route call.
 route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path: [][3]f32, ok: bool) {
 	virtual.arena_free_all(&w.route_mem)
 
@@ -98,15 +172,221 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 		g.visit = {}
 		g.search = 1
 	}
+	g.heap_len = 0
 
-	start := grid_node_at(from) or_return
-	_ = grid_node_at(to) or_return
+	alt := LAYER_ALT
+	if !g.terrain_built {
+		g.terrain = {}
+		count: [GRID_LAYERS]int
+		for y in 0 ..< GRID_H {
+			for x in 0 ..< GRID_W {
+				ground := math.inf_f32(-1)
+				for sy in 0 ..< TERRAIN_SAMPLES {
+					for sx in 0 ..< TERRAIN_SAMPLES {
+						step :: f32(GRID_CELL_KM) / (TERRAIN_SAMPLES - 1)
+						sample := [2]f32{f32(x), f32(y)} * GRID_CELL_KM + [2]f32{f32(sx), f32(sy)} * step
+						ground = max(ground, height_at(w, sample.x, sample.y))
+					}
+				}
+				// The spec closes the outer ring of cells, so no path runs along the edge of the data.
+				edge := x == 0 || y == 0 || x == GRID_W - 1 || y == GRID_H - 1
+				for layer in 0 ..< GRID_LAYERS {
+					// Written as !(free) so a NaN height blocks the cell.
+					if edge || !(ground + TERRAIN_MARGIN_M <= alt[layer]) {
+						n := grid_node({x, y, layer})
+						g.terrain[n >> 6] |= 1 << (u32(n) & 63)
+						count[layer] += 1
+					}
+				}
+			}
+		}
+		g.terrain_built = true
+		g.blocked_built = false
+		logf(w, "route", "terrain set built: %v of %d nodes per layer blocked", count, GRID_LAYER_CELLS)
+	}
+
+	if !g.blocked_built || g.blocked_zones != w.no_fly {
+		// Not rebuilt per forecast hour: neither terrain nor the zones depend on it.
+		g.blocked = g.terrain
+		g.blocked_zones = w.no_fly
+		g.blocked_built = true
+		zones, added := 0, 0
+		for z in g.blocked_zones {
+			// Written as !(valid) so NaN and Inf skip the zone, radius 0 is an unused slot.
+			if !(z.radius > 0 && z.radius < 1e6 && abs(z.center.x) < 1e6 && abs(z.center.y) < 1e6) do continue
+			zones += 1
+			lo := linalg.floor((z.center - z.radius) / GRID_CELL_KM)
+			hi := linalg.floor((z.center + z.radius) / GRID_CELL_KM)
+			for y in max(int(lo.y), 0) ..= min(int(hi.y), GRID_H - 1) {
+				for x in max(int(lo.x), 0) ..= min(int(hi.x), GRID_W - 1) {
+					// Overlap, not the cell centre: a zone smaller than a cell must still block it.
+					cell := [2]f32{f32(x), f32(y)} * GRID_CELL_KM
+					closest := linalg.clamp(z.center, cell, cell + GRID_CELL_KM)
+					if linalg.length2(closest - z.center) >= z.radius * z.radius do continue
+					for layer in 0 ..< GRID_LAYERS {
+						if !(alt[layer] < z.ceiling) do continue
+						n := grid_node({x, y, layer})
+						bit := u64(1) << (u32(n) & 63)
+						if g.blocked[n >> 6] & bit == 0 do added += 1
+						g.blocked[n >> 6] |= bit
+					}
+				}
+			}
+		}
+
+		// Label the connected free regions: a route between two regions fails at once, instead of
+		// expanding every node reachable from the start (a walled-in hub took 33 ms with -o:speed).
+		// The open heap is free between routes, so it serves as the flood fill stack.
+		g.region = {}
+		regions: u32 = 0
+		dirs := GRID_DIRS
+		for i in 0 ..< GRID_NODES {
+			first := Node(i)
+			if g.region[first] != 0 || grid_blocked(g, first) do continue
+			regions += 1
+			g.region[first] = regions
+			g.heap[0].n = first
+			top := 1
+			for top > 0 {
+				top -= 1
+				c := grid_cell(g.heap[top].n)
+				for d in dirs {
+					nc := c + d
+					if nc.x < 0 || nc.x >= GRID_W || nc.y < 0 || nc.y >= GRID_H do continue
+					if nc.z < 0 || nc.z >= GRID_LAYERS do continue
+					next := grid_node(nc)
+					if g.region[next] != 0 || grid_blocked(g, next) do continue
+					g.region[next] = regions
+					g.heap[top].n = next
+					top += 1
+				}
+			}
+		}
+		logf(
+			w,
+			"route",
+			"no-fly zones applied: %d zones block %d nodes beyond the terrain set, %d free regions",
+			zones,
+			added,
+			regions,
+		)
+	}
+
+	start, start_ok := grid_free_node_near(g, from)
+	goal, goal_ok := grid_free_node_near(g, to)
+	if !start_ok {
+		logf(
+			w,
+			"route",
+			"start %v: outside the grid or no free node within %d cells",
+			from.xy,
+			FREE_NODE_CELLS,
+		)
+	}
+	if !goal_ok {
+		logf(w, "route", "goal %v: outside the grid or no free node within %d cells", to.xy, FREE_NODE_CELLS)
+	}
+	if !start_ok || !goal_ok do return nil, false
+	if g.region[start] != g.region[goal] {
+		logf(w, "route", "no path from %v to %v: blocked nodes separate them", from.xy, to.xy)
+		return nil, false
+	}
 	g.visit[start] = g.search
 	g.cost[start] = 0
 	g.parent[start] = start
+	g.slot[start] = 0
+	g.heap_len = 1
+	grid_heap_up(g, start, grid_estimate(start, goal) * ESTIMATE_TIE_BREAK)
 
-	path = make([][3]f32, 2, virtual.arena_allocator(&w.route_mem))
-	path[0] = from
-	path[1] = to
-	return path, true
+	dirs := GRID_DIRS
+	for g.heap_len > 0 {
+		n := g.heap[0].n
+		g.slot[n] = HEAP_CLOSED
+		g.heap_len -= 1
+		if g.heap_len > 0 {
+			last := g.heap[g.heap_len]
+			i: u32 = 0
+			for {
+				c := 2 * i + 1
+				if c >= g.heap_len do break
+				if c + 1 < g.heap_len && g.heap[c + 1].f < g.heap[c].f do c += 1
+				if g.heap[c].f >= last.f do break
+				g.heap[i] = g.heap[c]
+				g.slot[g.heap[i].n] = i
+				i = c
+			}
+			g.heap[i] = last
+			g.slot[last.n] = i
+		}
+
+		if n == goal {
+			count := 1
+			for p := goal; p != start; p = g.parent[p] do count += 1
+			err: mem.Allocator_Error
+			path, err = make([][3]f32, max(count, 2), virtual.arena_allocator(&w.route_mem))
+			if err != nil do return nil, false
+			i := len(path) - 1
+			for p := goal;; p = g.parent[p] {
+				path[i] = grid_node_pos(p)
+				if p == start do break
+				i -= 1
+			}
+			path[0] = from
+			path[len(path) - 1] = to
+			return path, true
+		}
+
+		for d in dirs {
+			next := grid_neighbor(n, d) or_continue
+			if grid_blocked(g, next) do continue
+			// For a single step the estimate is exact: 1 or sqrt 2 cells, or one layer of climb.
+			cost := g.cost[n] + grid_estimate(n, next)
+			if g.visit[next] == g.search {
+				if g.slot[next] == HEAP_CLOSED || cost >= g.cost[next] do continue
+			} else {
+				g.visit[next] = g.search
+				g.slot[next] = g.heap_len
+				g.heap_len += 1
+			}
+			g.cost[next] = cost
+			g.parent[next] = n
+			grid_heap_up(g, next, cost + grid_estimate(next, goal) * ESTIMATE_TIE_BREAK)
+		}
+	}
+	logf(
+		w,
+		"route",
+		"no path from %v to %v, every free node reachable from the start was searched",
+		from.xy,
+		to.xy,
+	)
+	return nil, false
+}
+
+// Cost in km of the cheapest path from a to b on an empty grid: octile distance over the cells plus
+// the altitude change. Never more than the real cost, and consistent, so A* finds the cheapest path
+// and never has to reopen an expanded node.
+grid_estimate :: proc(a, b: Node) -> f32 {
+	ca := grid_cell(a)
+	cb := grid_cell(b)
+	dx := abs(ca.x - cb.x)
+	dy := abs(ca.y - cb.y)
+	alt := LAYER_ALT
+	flat := f32(max(dx, dy) - min(dx, dy)) + math.SQRT_TWO * f32(min(dx, dy))
+	return flat * GRID_CELL_KM + abs(alt[ca.z] - alt[cb.z]) / 1000
+}
+
+// Gives n priority f and moves it up from its slot to its place in the open heap.
+// Used both for a newly opened node (slot = the end of the heap) and for a cheaper path to an open one.
+grid_heap_up :: proc(g: ^Grid, n: Node, f: f32) {
+	i := g.slot[n]
+	for i > 0 {
+		p := (i - 1) / 2
+		if g.heap[p].f <= f do break
+		g.heap[i] = g.heap[p]
+		g.slot[g.heap[i].n] = i
+		i = p
+	}
+	g.heap[i] = {f, n}
+	g.slot[n] = i
 }

@@ -26,7 +26,7 @@ FIRST, TOGETHER (so everyone can work in parallel)
 [x] test/ program: fixed snapshot + fixed inputs -> compare routes and maneuvers to stored results
 
 NASR: MAP + RENDERING + UI
-[ ] load belgium.bin and draw lines (km -> px: scale + offset)
+[x] load belgium.bin and draw lines (km -> px: scale + offset)
 [ ] camera: pan + zoom to cursor (mouse wheel / controller)
 [ ] draw cities + names
 [ ] "(c) OpenStreetMap contributors" on screen
@@ -52,8 +52,8 @@ later:
 
 LARS: ROUTING + NAVIGATION
 [x] 3D grid: 1 km cells x 3 layers (203k nodes), all buffers allocated once, reused per route
-[ ] blocked bitset built once per weather hour: terrain + margin, no-fly zones (fixed array, max 8)
-[ ] A*: 8 dirs + up/down, binary heap in a fixed array, no allocation during search
+[x] blocked bitset: terrain + 75 m margin, grid edge, no-fly zones (fixed array, max 8), free start / goal node
+[x] A*: 8 dirs + up/down, binary heap in a fixed array, no allocation during search
 [ ] cost per mode: fastest (time), greenest (energy), calmest (time x gusts)
 [ ] ground speed: wind along track + sqrt(v^2 - crosswind^2), retry +6 m/s if < 2.5, block if < 1.5
 [ ] energy: battery 180 kWh start 86%, P(v, g) = 3 + 0.0085 v^3 + 6 g, solar from cloud cover, climb cost
@@ -69,9 +69,10 @@ LARS: ROUTING + NAVIGATION
 [ ] bench: one route < 10 ms, three modes < 30 ms
 
 DARIO: SHIP + CONTROLS
-[ ] Windows smoke test: compile.bat debug, run build\drift.exe from the repo root, rebuild once while it runs
+[x] Windows smoke test: compile.bat debug, run build\drift.exe from the repo root, rebuild once while it runs
     and check the game reloads ("[host] reloaded game"). Also try compile.bat release. Report what breaks.
-[ ] Controls struct: throttle, turn, climb (-1..1)
+    Result in notes.txt (SMOKE TEST): rebuild while running fails, needs a compile.bat fix from the owner.
+[x] Controls struct: throttle, turn, climb (-1..1)
 [ ] keyboard WASD + R/F, controller sticks (deadzone)
 [ ] ship_step(dt, controls), fixed timestep 60 Hz (accumulator), pure function of state + controls + world
 [ ] limits: accel +1.2 / -1.6 m/s^2, smoothed turn rate, ceiling 900 m, min 28 m above terrain
