@@ -33,13 +33,15 @@ WEATHER DATA
 Source: Open-Meteo forecast API v1 (CC BY 4.0, free for non-commercial use, no key)
   https://api.open-meteo.com/v1/forecast
   one request for all 63 grid points: latitude=..&longitude=.. (comma lists),
-  hourly=wind_speed_{975,950,925}hPa,wind_direction_{975,950,925}hPa,
+  hourly=wind_speed_{975,950,925}hPa,wind_direction_{975,950,925}hPa,wind_speed_10m,wind_gusts_10m,cloud_cover,
   forecast_hours=9&wind_speed_unit=ms&timezone=GMT&timeformat=unixtime
   hour 0 = the current UTC hour. Open-Meteo counts every location as one call (10000 / day free),
   so 63 points refreshed every 15 min = ~6000 / day. A finer grid needs a slower refresh.
 Grid: 9 x 7 points every 40 km from the map origin (lon 2.38, lat 51.56), covers the 285 x 229 km map.
   lat = 51.56 - y / 111.32, lon = 2.38 + x / (111.32 cos 50.5), same projection as the bake tool.
-Measured (2026-11-21, macOS arm64): one fetch ~360 ms, ~0.9 MB scratch (json values).
+Gust index: Open-Meteo has gusts only at 10 m. index = clamp((gust_10m - wind_10m) / 10 m/s, 0, 1)
+  x (1.08 - LAYER_ALT / 1600), the height factor from the spec. Cloud = cloud_cover % / 100 (total cover).
+Measured (2026-11-21, macOS arm64): one fetch ~400 ms, ~1.2 MB scratch (json values).
 
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
@@ -50,7 +52,8 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   weather.odin    wind_at(w, x, y, layer, hour) -> [2]f32 m/s, direction the wind blows toward, x east, y south
                   gust_at(w, x, y, layer, hour) -> 0..1, cloud_at(w, x, y, hour) -> 0..1. Stubs: 0
                   3 layers = 975 / 950 / 925 hPa ~ LAYER_ALT 300 / 550 / 800 m, hours 0..8 from snapshot start
-                  Weather struct: start (unix s) + wind [hour][layer][cell][2]f32, fixed size 13.6 KB, zero = calm
+                  Weather struct: start (unix s), wind [hour][layer][cell][2]f32, gust [hour][layer][cell] 0..1,
+                  cloud [hour][cell] 0..1. Fixed size 22.7 KB, zero = calm and clear.
   net.odin        fetch_weather(out, scratch) -> ok: blocking Open-Meteo request with curl (15 s timeout,
                   max 1 MB), converts the json into a Weather. Writes out only if every value is present.
                   Run it on a thread, never in the frame loop. Not called yet (snapshot + refresh todo).
