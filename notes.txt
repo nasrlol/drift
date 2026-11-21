@@ -12,8 +12,9 @@ tools/extract_map.sh
   pulls 4 layers out of the .pbf into assets/geojson/
     border.geojson     Belgium outline (1 polygon)
     rivers.geojson     waterway=river
-    roads.geojson      highway = motorway, trunk, primary, secondary, tertiary and their _link ramps (32 MB,
-                       not in git yet: #71). Keeps name + highway, the others keep only name.
+    roads.geojson.gz   highway = motorway, trunk, primary, secondary, tertiary and their _link ramps. Keeps
+                       name + highway, the others keep only name. 32 MB plain, so git keeps it gzipped
+                       (3.9 MB, gzip -9 -n, #71); the bake inflates it with core:compress/deflate.
     cities.geojson     place=city (15 points)
   simplifies lines (0.0005 deg), 5 decimal coordinates
   2026-11-21: GDAL 3.13.3 (conda-forge), run on a laptop because the cloud sessions can not reach geofabrik.
@@ -28,12 +29,13 @@ tools/extract_map.sh
 tools/bake_map/  (odin run tools/bake_map, from repo root)
   reads the geojson files, writes assets/belgium.bin (MAP_VERSION 3, 2.9 MB)
   projection: equirectangular, km, origin top-left (lon 2.38, lat 51.56), y down
-  road kind from the highway tag, a _link counts as its road. Empty geometries (ways with missing nodes) are
-  skipped. Lines of one kind that meet end to end where no third line of that kind touches are joined into
+  road kind from the highway tag, a _link counts as its road; tertiary stays in (#72). Lines are clipped to
+  0..MAP_W_KM x 0..MAP_H_KM (#73, one tertiary point at the German border was at x = 286.27). Empty
+  geometries (ways with missing nodes) are skipped. Lines of one kind that meet end to end where no third line of that kind touches are joined into
   one (OSM starts a new way at every tag change): 195894 -> 56385 lines, 421773 -> 282270 points,
   5.7 -> 2.9 MB, the same 225885 segments. Then sorted by kind, so bigger roads are drawn on top.
   56385 lines, 282270 points, 15 cities, 15 hubs. Bytes per kind (line entries + points):
-    border 31 KB, river 117 KB, tertiary 1096 KB (#72), secondary 659 KB, primary 544 KB, trunk 169 KB,
+    border 31 KB, river 117 KB, tertiary 1096 KB, secondary 659 KB, primary 544 KB, trunk 169 KB,
     motorway 250 KB
 
 belgium.bin format (version 2, all little endian, 4-byte aligned)

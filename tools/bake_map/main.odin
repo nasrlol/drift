@@ -1,15 +1,20 @@
 package bake_map
 
+import "core:compress/deflate"
 import "core:encoding/json"
 import "core:fmt"
 import "core:math"
 import "core:mem"
 import "core:os"
 import "core:slice"
+import "core:strings"
 
 MAP_MAGIC :: 0x54465244
 MAP_VERSION :: 3
 MAX_HUBS :: 32
+// Same as map.odin: every point in belgium.bin lies inside 0..MAP_W_KM x 0..MAP_H_KM.
+MAP_W_KM :: 286
+MAP_H_KM :: 237
 
 Map_Header :: struct {
 	magic, version:                      u32,
@@ -67,13 +72,45 @@ to_point :: proc(v: json.Value) -> [2]f32 {
 	return project(num(a[0]), num(a[1]))
 }
 
+// The extract reaches a little past the border, so each segment is clipped to the map rectangle
+// (Liang-Barsky). A line that leaves the map and comes back becomes two lines. Fewer than 2 points give no
+// line: GDAL writes an empty geometry for a way whose nodes are missing from the extract.
 add_line :: proc(coords: json.Value, kind: Kind) {
+	// Ends the line started at start, or drops a lone point.
+	flush :: proc(start: ^u32, kind: Kind) {
+		n := u32(len(points)) - start^
+		if n >= 2 do append(&lines, Map_Line{start^, n, u32(kind)})
+		else do resize(&points, int(start^))
+		start^ = u32(len(points))
+	}
+
 	a := coords.(json.Array)
-	// GDAL writes an empty geometry for a way whose nodes are missing from the extract. Nothing to draw.
-	if len(a) < 2 do return
 	start := u32(len(points))
-	for c in a do append(&points, to_point(c))
-	append(&lines, Map_Line{start, u32(len(a)), u32(kind)})
+	for i in 1 ..< len(a) {
+		p, q := to_point(a[i - 1]), to_point(a[i])
+		d := q - p
+		t0, t1: f32 = 0, 1
+		visible := true
+		for e in ([4][2]f32{{-d.x, p.x}, {d.x, MAP_W_KM - p.x}, {-d.y, p.y}, {d.y, MAP_H_KM - p.y}}) {
+			if e[0] == 0 {
+				if e[1] < 0 do visible = false
+			} else if e[0] < 0 {
+				t0 = max(t0, e[1] / e[0])
+			} else {
+				t1 = min(t1, e[1] / e[0])
+			}
+		}
+		if !visible || t0 > t1 {
+			flush(&start, kind)
+			continue
+		}
+
+		if t0 > 0 do flush(&start, kind)
+		if u32(len(points)) == start do append(&points, t0 > 0 ? p + d * t0 : p)
+		append(&points, t1 < 1 ? p + d * t1 : q)
+		if t1 < 1 do flush(&start, kind)
+	}
+	flush(&start, kind)
 }
 
 bake_layer :: proc(path: string, kind: Kind) {
@@ -81,6 +118,15 @@ bake_layer :: proc(path: string, kind: Kind) {
 	if err != nil {
 		fmt.eprintln("can't read", path, err)
 		os.exit(1)
+	}
+	// roads.geojson is 32 MB, git keeps it gzipped (3.9 MB, #71).
+	if strings.has_suffix(path, ".gz") {
+		unzipped: [dynamic]u8
+		if zerr := deflate.inflate_gzip(&unzipped, data); zerr != nil {
+			fmt.eprintln("can't gunzip", path, zerr)
+			os.exit(1)
+		}
+		data = unzipped[:]
 	}
 	root, jerr := json.parse(data)
 	if jerr != .None {
@@ -106,7 +152,6 @@ bake_layer :: proc(path: string, kind: Kind) {
 				kind = .Primary
 			case "secondary", "secondary_link":
 				kind = .Secondary
-			// BLOCKED: #72 tertiary is 1.1 MB of the 2.9 MB, kept until nasr says yes or no.
 			case "tertiary", "tertiary_link":
 				kind = .Tertiary
 			case:
@@ -136,8 +181,7 @@ bake_layer :: proc(path: string, kind: Kind) {
 main :: proc() {
 	bake_layer("assets/geojson/border.geojson", .Border)
 	bake_layer("assets/geojson/rivers.geojson", .River)
-	// BLOCKED: #71 roads.geojson is 32 MB, not committed until nasr picks gzip or plain.
-	bake_layer("assets/geojson/roads.geojson", .Motorway) // kind comes from each road's highway tag
+	bake_layer("assets/geojson/roads.geojson.gz", .Motorway) // kind comes from each road's highway tag
 	bake_layer("assets/geojson/cities.geojson", .Border)
 
 	// OSM cuts a road into a new way at every tag change, so most lines are a few points long and the line

@@ -98,7 +98,7 @@ design (route.odin, nav.odin = simulation; nav_ui.odin = drawing):
 [ ] nav_ui: sheet: ETA (green + leaf), "km, arrive hh:mm", stat chips (speed, battery, used, solar, height)
 streets (#67, on dev):
 [~] lars: more streets: trunk / primary / secondary (tertiary if it fits) from the same pbf, Map_Kind per class
-[ ] road graph: keep junctions, bake nodes + edges, ground vehicle moves along edges (waiting: #68)
+[ ] road graph: keep junctions, bake nodes + edges, the airship on the ground (a flying car, #68) moves along edges
 
 DARIO: SHIP + CONTROLS
 [x] Windows smoke test: compile.bat debug, run build\drift.exe from the repo root, rebuild once while it runs
