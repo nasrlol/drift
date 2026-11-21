@@ -44,7 +44,13 @@ game_init :: proc() -> rawptr {
 	}
 	game_hot_reloaded(w)
 	fmt.println("[game] build:", BUILD_MODE)
-	fmt.printfln("[map] %d lines, %d points, %d cities", len(w.m.lines), len(w.m.points), len(w.m.cities))
+	fmt.printfln(
+		"[map] %d lines, %d points, %d cities, %d hubs",
+		len(w.m.lines),
+		len(w.m.points),
+		len(w.m.cities),
+		w.m.hub_count,
+	)
 	return w
 }
 
@@ -54,7 +60,11 @@ game_hot_reloaded :: proc(memory: rawptr) {
 	w := (^World)(memory)
 	m, ok := load_map()
 	if !ok {
-		fmt.eprintln("[map] belgium.bin has a wrong magic or version")
+		fmt.eprintfln(
+			"[map] belgium.bin: wrong magic or version (want %d) or more than %d hubs",
+			MAP_VERSION,
+			MAX_HUBS,
+		)
 	}
 	w.m = m
 }

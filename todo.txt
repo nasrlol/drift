@@ -21,7 +21,7 @@ FIRST, TOGETHER (so everyone can work in parallel)
 [ ] state dump to text (key + flag) and plain text log with system name and tick
 [ ] keep full debug build under 2 s (compile.sh prints the time)
 [x] add #config(DRIFT_DEBUG / DRIFT_PROFILE) in code, then the matching -define in compile.sh
-[ ] hubs: fixed array of Belgian hubs (start with the 15 cities), baked into belgium.bin
+[x] hubs: fixed array of Belgian hubs (start with the 15 cities), baked into belgium.bin
 [ ] bench/ program: times every system, prints min/avg/max, run it before every merge
 [ ] test/ program: fixed snapshot + fixed inputs -> compare routes and maneuvers to stored results
 
@@ -33,7 +33,7 @@ NASR: MAP + RENDERING + UI
 [ ] download Copernicus GLO-90 tiles N49-N51, E002-E006 (sea tiles 404, fine)
 [ ] gdalbuildvrt + gdalwarp to our projection, 250 m cells, raw i16
     (eqc, lat_ts=50.5, lon_0=2.38, R=6378137 so it matches the bin)
-[ ] bake heightmap block into belgium.bin, MAP_VERSION 2
+[ ] bake heightmap block into belgium.bin, MAP_VERSION 3
 [ ] height_at(x, y) bilinear
 [ ] bake hillshade into a texture at build time, draw it as one quad
 [ ] build static map meshes once at startup, never per frame
