@@ -36,7 +36,7 @@ NASR: MAP + RENDERING + UI
 [ ] bake heightmap block into belgium.bin, MAP_VERSION 3
 [ ] height_at(x, y) bilinear
 [ ] bake hillshade into a texture at build time, draw it as one quad
-[ ] build static map meshes once at startup, never per frame
+[x] build static map meshes once at startup, never per frame
 [ ] day / night theme: one palette struct, swap the pointer
 [ ] routes as screen-width strips, built once per route, alternatives grey
 [ ] wind particles: SoA arrays (x[], y[], age[]), one update loop, one draw batch, fixed count

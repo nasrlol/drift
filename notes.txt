@@ -65,12 +65,17 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   step and nothing is recorded.
                   Drive mode: Controls go to ship_step and the replay record, the camera sits on the ship, only the
                   wheel zooms. The ship is drawn as an 8 px red triangle pointing along its heading in both modes.
-                  Map drawing: each Map_Line is one rl.DrawLineStrip
-                  straight from w.m.points ([2]f32 km has the rl.Vector2 layout, no copy, no allocation).
-                  Colors: border dark grey, rivers blue, motorways orange. 10872 strips, 36k points per frame.
-                  Measured 2026-11-21 (Asahi M2, 800 x 450): draw 8.7 ms debug, 7.3 ms profile, over the 4 ms budget.
-                  The cost is raylib pushing 36k vertices one by one through its batch every frame. Fix: the
-                  "static map meshes" todo (upload once at startup, one draw call per kind).
+                  Map drawing (render.odin, built inline in game_update): the whole map is one static mesh, built on
+                  the first frame (needs the window, never in headless) and drawn with one rl.DrawMesh in Mode2D.
+                  Each segment is a quad of 6 vertices (2 triangles, no index buffer: raylib indices are u16 and
+                  153k vertices do not fit). vertexNormal = other end of the segment + the side to push to,
+                  vertexColor.r = Map_Kind. The vertex shader (MAP_VS, GLSL 330) widens each quad to 1 px along the
+                  screen space normal, so lines stay 1 px at every zoom; colors are a uniform per kind.
+                  25493 segments, 152958 vertices, 4.1 MB on the GPU, built in the frame arena and freed after the
+                  upload (mesh pointers set to nil so UnloadMesh only frees GPU buffers). Rebuilt after a hot reload
+                  (the shaders may have changed), unloaded in game_shutdown.
+                  Measured 2026-11-21 (Asahi M2, 800 x 450, debug): draw 8.6 ms with DrawLineStrip -> 0.55 ms with
+                  the mesh (the rest is city text and the overlay). The first frame takes ~34 ms (mesh build).
                   Cities: after EndMode2D, each w.m.cities pos goes through GetWorldToScreen2D, black 3 px dot +
                   name (default font, 10 px) right of it, so both keep their pixel size at every zoom. No overlap
                   culling yet (labels todo). The default font covers Latin-1, "Liege" with e grave draws correctly.

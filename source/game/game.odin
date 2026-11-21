@@ -55,6 +55,7 @@ World :: struct {
 	sim_speed:    int, // index into SIM_SPEEDS, 0 = 1x
 	prof:         Profiler,
 	view:         View,
+	map_mesh:     Map_Mesh,
 }
 
 @(export)
@@ -111,6 +112,8 @@ game_hot_reloaded :: proc(memory: rawptr) {
 	}
 	w.m = m
 	w.grid.terrain_built = false
+	// The new library may change the shaders, so the mesh is rebuilt on the next frame.
+	map_mesh_unload(&w.map_mesh)
 }
 
 @(export)
@@ -191,15 +194,75 @@ game_update :: proc(memory: rawptr) -> bool {
 	t = prof_begin()
 	rl.ClearBackground(rl.RAYWHITE)
 	{
-		// Points are [2]f32 km, the same layout as rl.Vector2, so the strips draw straight from map memory.
+		mm := &w.map_mesh
+		if !mm.built {
+			segments := 0
+			for l in w.m.lines do segments += max(int(l.count) - 1, 0)
+			n := segments * 6
+			pos := make([][3]f32, n, context.temp_allocator)
+			other := make([][3]f32, n, context.temp_allocator)
+			kind := make([][4]u8, n, context.temp_allocator)
+			// Corners A-, B-, B+ and A-, B+, A+: counter-clockwise on screen whatever the direction of the
+			// segment, because the shader pushes them along the screen space normal. raylib culls back faces.
+			ENDS :: [6]bool{false, true, true, false, true, false}
+			SIDES :: [6]f32{-1, 1, -1, -1, -1, 1}
+			ends, sides := ENDS, SIDES
+			i := 0
+			for l in w.m.lines {
+				pts := w.m.points[l.start:][:l.count]
+				for s in 1 ..< len(pts) {
+					a, b := pts[s - 1], pts[s]
+					for k in 0 ..< 6 {
+						p, o := ends[k] ? b : a, ends[k] ? a : b
+						pos[i] = {p.x, p.y, 0}
+						other[i] = {o.x, o.y, sides[k]}
+						kind[i] = {u8(l.kind), 0, 0, 255}
+						i += 1
+					}
+				}
+			}
+			if n > 0 {
+				mm.mesh = {
+					vertexCount   = i32(n),
+					triangleCount = i32(n / 3),
+					vertices      = ([^]f32)(raw_data(pos)),
+					normals       = ([^]f32)(raw_data(other)),
+					colors        = ([^]u8)(raw_data(kind)),
+				}
+				rl.UploadMesh(&mm.mesh, false)
+				// The arrays live in the frame arena, raylib must never free them.
+				mm.mesh.vertices, mm.mesh.normals, mm.mesh.colors = nil, nil, nil
+				shader := rl.LoadShaderFromMemory(MAP_VS, MAP_FS)
+				if !rl.IsShaderValid(shader) do logf(w, "render", "map shader did not compile, the map is not drawn")
+				mm.material = rl.LoadMaterialDefault()
+				mm.material.shader = shader
+				mm.loc_screen = rl.GetShaderLocation(shader, "screen")
+				mm.loc_colors = rl.GetShaderLocation(shader, "colors")
+			}
+			mm.built = true
+			logf(
+				w,
+				"render",
+				"map mesh: %d segments, %d vertices, %.1f MB on the GPU",
+				segments,
+				n,
+				f32(n * (size_of([3]f32) * 2 + size_of([4]u8))) / (1 << 20),
+			)
+		}
+
 		colors := [Map_Kind]rl.Color {
 			.Border   = rl.DARKGRAY,
 			.River    = rl.BLUE,
 			.Motorway = rl.ORANGE,
 		}
 		rl.BeginMode2D(cam)
-		for l in w.m.lines {
-			rl.DrawLineStrip(raw_data(w.m.points[l.start:]), i32(l.count), colors[Map_Kind(l.kind)])
+		if mm.mesh.vertexCount > 0 {
+			screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
+			uniform: [Map_Kind][4]f32
+			for c, k in colors do uniform[k] = rl.ColorNormalize(c)
+			rl.SetShaderValue(mm.material.shader, mm.loc_screen, &screen, .VEC2)
+			rl.SetShaderValueV(mm.material.shader, mm.loc_colors, &uniform, .VEC4, len(uniform))
+			rl.DrawMesh(mm.mesh, mm.material, rl.Matrix(1))
 		}
 		// 8 px marker pointing along the heading, DrawPoly puts the first corner at the rotation angle.
 		rl.DrawPoly(w.ship.pos, 3, 8 / cam.zoom, math.to_degrees(w.ship.heading) - 90, rl.RED)
@@ -281,6 +344,7 @@ game_before_reload :: proc(memory: rawptr) {
 game_shutdown :: proc(memory: rawptr) {
 	w := (^World)(memory)
 	weather_stop(w)
+	map_mesh_unload(&w.map_mesh)
 	virtual.arena_destroy(&w.fetch.mem)
 	virtual.arena_destroy(&w.frame)
 	virtual.arena_destroy(&w.route_mem)
