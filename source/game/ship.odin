@@ -30,7 +30,7 @@ SHIP_CLIMB_RATE :: 5.0
 SHIP_CEILING :: 900.0
 SHIP_MIN_CLEARANCE :: 28.0
 
-// Runs once per fixed step on w.ship. Reads only the ship, the controls and the terrain.
+// Runs once per fixed step on w.ship. Reads only the ship, the controls, the terrain and the weather.
 ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	s := &w.ship
 
@@ -45,9 +45,13 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 		s.speed = max(s.speed - SHIP_BRAKE * dt, target_speed)
 	}
 
-	km := s.speed * dt / 1000
-	s.pos.x += math.sin(s.heading) * km
-	s.pos.y -= math.cos(s.heading) * km
+	// The wind layer nearest to the ship's altitude, the forecast hour from the simulated time.
+	layers := LAYER_ALT
+	layer := clamp(int(math.round((s.alt - layers[0]) / (layers[1] - layers[0]))), 0, WIND_LAYERS - 1)
+	hour := int(w.tick / (SIM_HZ * 3600))
+	wind := wind_at(w, s.pos.x, s.pos.y, layer, hour)
+	air := [2]f32{math.sin(s.heading) * s.speed, -math.cos(s.heading) * s.speed}
+	s.pos += (air + wind) * dt / 1000
 
 	s.alt += c.climb * SHIP_CLIMB_RATE * dt
 	floor := height_at(w, s.pos.x, s.pos.y) + SHIP_MIN_CLEARANCE
