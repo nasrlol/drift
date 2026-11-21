@@ -1,0 +1,12 @@
+# Brussels (hub 5) inside an 8 km zone over every layer: no route from or to it.
+no_fly 139.669 79.4 8 10000
+route 5 10 fastest 0
+route 10 5 greenest 3
+# A 3 km zone on the straight Mechelen - Leuven line: the route goes around it.
+no_fly 156.5 67.5 3 10000
+route 13 4 fastest 0
+# Antwerpen (hub 11) under a zone up to 400 m: layer 0 is closed, the route leaves from layer 1.
+# Mechelen (hub 13) in a 2 km zone: the route ends at the closest free node outside it.
+no_fly 143.012 37.725 8 400
+no_fly 148.722 59.207 2 10000
+route 11 13 calmest 8
