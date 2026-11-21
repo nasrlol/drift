@@ -30,6 +30,13 @@ jobs:
       - name: Checks
         run: ./check.sh
 
+      - name: No open questions in the code
+        run: |
+          if git grep -n 'BLOCKED: #' -- '*.odin'; then
+            echo "open questions (BLOCKED markers) above, answer them before merging"
+            exit 1
+          fi
+
       - name: Build debug
         run: ./compile.sh debug
 
