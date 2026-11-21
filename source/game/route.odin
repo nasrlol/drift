@@ -18,6 +18,12 @@ MODE_AIRSPEED :: [Route_Mode]f32 {
 	.Calmest  = 13,
 }
 
+// Ground speed rules in m/s (spec): below GROUND_RETRY the ship throttles up by GROUND_RETRY_BOOST, below
+// GROUND_MIN even then the edge is blocked.
+GROUND_RETRY :: 2.5
+GROUND_RETRY_BOOST :: 6
+GROUND_MIN :: 1.5
+
 // 1 km cells over every point in belgium.bin (x 0.6..285.2 km, y 1.0..236.5 km), one layer per wind layer.
 GRID_CELL_KM :: 1
 GRID_W :: 286
@@ -329,8 +335,17 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 		wind_max, gust_min: f32 = 0, 1
 		for &layer in g.weather_wind do for v in layer do wind_max = max(wind_max, linalg.length(v))
 		for &layer in g.weather_gust do for v in layer do gust_min = min(gust_min, v)
+		// Ground speed is at most the airspeed plus the strongest wind as a pure tailwind. The boost only
+		// happens where the ground speed at v, at least v - wind_max, is below GROUND_RETRY. There
+		// sqrt(x + k) <= sqrt(x) + sqrt(k) bounds what the boost adds to sqrt(v^2 - crosswind^2).
 		airspeed := MODE_AIRSPEED
-		per_km = mode_flight_cost(mode, airspeed[mode], airspeed[mode] + wind_max, gust_min, 1)
+		v := airspeed[mode]
+		per_km = mode_flight_cost(mode, v, v + wind_max, gust_min, 1)
+		if wind_max > v - GROUND_RETRY {
+			boost := v + GROUND_RETRY_BOOST
+			boost_ground := min(boost + wind_max, GROUND_RETRY + math.sqrt(boost * boost - v * v))
+			per_km = min(per_km, mode_flight_cost(mode, boost, boost_ground, gust_min, 1))
+		}
 		per_layer = math.inf_f32(1)
 		for l in 1 ..< GRID_LAYERS do per_layer = min(per_layer, mode_climb_cost(mode, abs(alt[l] - alt[l - 1])))
 	}
@@ -420,7 +435,7 @@ grid_estimate :: proc(a, b: Node, per_km, per_layer: f32) -> f32 {
 
 // Cost of the edge from node a to its neighbour b in the unit of the mode: seconds for Fastest and
 // Calmest, kWh for Greenest. Wind and gust are the mean of the two node centres, the weather grid is
-// 40 km so that is the value halfway. ok = false when the ship makes no headway.
+// 40 km so that is the value halfway. ok = false when the edge is blocked by the ground speed rules.
 edge_cost :: proc(g: ^Grid, a, b: Node, mode: Route_Mode) -> (cost: f32, ok: bool) {
 	pa := grid_node_pos(a)
 	pb := grid_node_pos(b)
@@ -430,17 +445,28 @@ edge_cost :: proc(g: ^Grid, a, b: Node, mode: Route_Mode) -> (cost: f32, ok: boo
 	v := airspeed[mode]
 	track := pb.xy - pa.xy
 	km := linalg.length(track)
+	dir := track / km
 	wind := (g.wind[a] + g.wind[b]) * 0.5
-	// Placeholder until the ground speed item: airspeed plus the tailwind, crosswind ignored.
-	ground := v + linalg.dot(wind, track) / km
-	// Written as !(headway) so NaN blocks the edge.
-	if !(ground > 0) do return 0, false
+	ground := ground_speed(v, wind, dir) or_return
+	if ground < GROUND_RETRY {
+		v += GROUND_RETRY_BOOST
+		ground = ground_speed(v, wind, dir) or_return
+		if ground < GROUND_MIN do return 0, false
+	}
 	return mode_flight_cost(mode, v, ground, (g.gust[a] + g.gust[b]) * 0.5, km), true
 }
 
+// Ground speed in m/s along the unit track dir at airspeed v in wind (spec): the tailwind plus what is left
+// of v once it cancels the crosswind. ok = false when the crosswind is stronger than v, also for NaN wind.
+ground_speed :: proc(v: f32, wind, dir: [2]f32) -> (ground: f32, ok: bool) {
+	cross := wind.x * dir.y - wind.y * dir.x
+	rest := v * v - cross * cross
+	if !(rest >= 0) do return 0, false
+	return linalg.dot(wind, dir) + math.sqrt(rest), true
+}
+
 // Cost of km flown at airspeed v and ground speed ground (m/s) through gust index gust (spec, per mode).
-// Rises with gust and falls with ground speed, so the calmest gust and the strongest tailwind give the
-// lowest cost per km for the A* estimate.
+// Rises with gust and v (Greenest) and falls with ground speed, which the A* estimate relies on.
 mode_flight_cost :: proc(mode: Route_Mode, v, ground, gust, km: f32) -> f32 {
 	dt := km * 1000 / ground
 	switch mode {

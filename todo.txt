@@ -55,7 +55,7 @@ LARS: ROUTING + NAVIGATION
 [x] blocked bitset: terrain + 75 m margin, grid edge, no-fly zones (fixed array, max 8), free start / goal node
 [x] A*: 8 dirs + up/down, binary heap in a fixed array, no allocation during search
 [x] cost per mode: fastest (time), greenest (energy), calmest (time x gusts)
-[~] lars: ground speed: wind along track + sqrt(v^2 - crosswind^2), retry +6 m/s if < 2.5, block if < 1.5
+[x] ground speed: wind along track + sqrt(v^2 - crosswind^2), retry +6 m/s if < 2.5, block if < 1.5
 [ ] energy: battery 180 kWh start 86%, P(v, g) = 3 + 0.0085 v^3 + 6 g, solar from cloud cover, climb cost
 [ ] path cleanup: skip redundant nodes, Chaikin, ramp to tower top, 40 m terrain clearance
 [ ] metrics: time, kWh, gust index, vs straight-line baseline
