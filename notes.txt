@@ -1114,3 +1114,12 @@ Broken: compile.bat debug while drift.exe runs stops at "copy /y raylib.dll buil
   the file because it is being used by another process", raylib.dll is loaded by the running exe), so game.dll
   is never rebuilt and no reload happens. Fix for the compile.bat owner: copy raylib.dll only when drift.exe
   is not running (move the tasklist check above the copy). "[host] reloaded game" was not reached, unverified.
+
+PERFORMANCE AUDIT (2026-11-21, main at c16dc11, tracking issue #115)
+docs/performance/README.md is the entry point: short version, how to pick up an item, every issue.
+docs/performance/audit-2026-11-21.md has the method, baseline per scenario, costs, memory, plan and limits.
+docs/performance/data/ has the raw numbers: runs, profiler zones, GPU passes, struct sizes, bench output.
+Measured on Windows (Ryzen 7940HS, Radeon 780M + RTX 4060), profile build, 1440 x 900, no vsync or fps cap.
+Main results: street view 4.1 ms p50 in profile and 17.9 ms in debug (trees_draw 12.1 ms there), route planning
+up to 44 ms in the frame loop, route lines 2.5-4.2 ms per frame, the game starts on the integrated GPU, ship_step
+13 us against the 1 us budget (road_try_land), first frame 623 ms. Not measured: cache misses, the live network path.
