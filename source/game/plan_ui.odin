@@ -20,6 +20,7 @@ MAP_BUTTON :: 48
 MAP_BUTTON_GAP :: 10
 LEGEND_X :: 440
 HUB_PICK_PX :: 16 // a click this close to a hub marker opens its menu
+CAR_PICKER_H :: 56
 
 Layers :: struct {
 	hide_wind:   bool,
@@ -251,7 +252,7 @@ plan_ui :: proc(w: ^World) {
 
 	// Card A: from / to, mode chips, departure. No brand row (Lars, 2026-11-21: the logo goes), no day / night
 	// button (light only).
-	a := rl.Rectangle{panel.x, panel.y, panel.width, 252}
+	a := rl.Rectangle{panel.x, panel.y, panel.width, 252 + CAR_PICKER_H + 12}
 	ui_card(w, a)
 	x := a.x + 16
 	y := a.y + 16
@@ -309,6 +310,10 @@ plan_ui :: proc(w: ^World) {
 			p.editing = .None
 		}
 	}
+	y += 38 + 12
+
+	// The car: turning preview + skin segment (car_models.odin).
+	car_skin_picker(w, {x, y, a.width - 32, CAR_PICKER_H})
 
 	// Card B: route rows, wind note, actions. Fills the rest of the panel, the list scrolls.
 	b := rl.Rectangle {

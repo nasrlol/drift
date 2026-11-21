@@ -910,7 +910,7 @@ street_draw :: proc(w: ^World) {
 	{
 		car := street_ship_pos(w)
 		street_shadow(car, w.car_anim.heading)
-		car_draw_street(w, car, w.car_anim, rl.WHITE, look)
+		car_draw_street(w, car, w.car_anim, rl.WHITE, look, w.car_skin)
 		for o in w.others[:w.other_count] {
 			p := others_draw_pos(w, o)
 			d := (p - st.origin) * 1000
@@ -922,7 +922,7 @@ street_draw :: proc(w: ^World) {
 			}
 			jam := traffic_near(w, o.pos, o.alt, o.on_road, TRAFFIC_RADIUS_KM) >= TRAFFIC_MIN_CARS
 			street_shadow(pos, o.heading)
-			car_draw_street(w, pos, an, jam ? CAR_JAM_TINT : CAR_OTHER_TINT, look)
+			car_draw_street(w, pos, an, jam ? CAR_JAM_TINT : rl.WHITE, look, o.skin)
 		}
 	}
 	rl.EndMode3D()

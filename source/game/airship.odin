@@ -42,6 +42,8 @@ Airship :: struct {
 	glow:       rl.Mesh, // thruster disc under a folded wheel
 	material:   rl.Material,
 	ready:      bool,
+	skins:      [Car_Skin]Skin_Mesh, // generated bodies (car_models.odin), Concept unused
+	preview:    rl.RenderTexture2D, // the plan panel's skin preview
 }
 
 CAR_VS :: `#version 330
@@ -236,6 +238,7 @@ airship_build :: proc(w: ^World) {
 	a.material = rl.LoadMaterialDefault()
 	a.material.shader = rl.LoadShaderFromMemory(CAR_VS, CAR_FS)
 	a.ready = a.part_count > 0
+	if a.ready do car_skins_build(w, tmp)
 	logf(w, "car", "car model: %d parts", a.part_count)
 }
 
@@ -290,7 +293,15 @@ car_anim_update :: proc(w: ^World, dt: f32) {
 // camera that looks at it from the south. One world unit is one pixel, so the model stays px long at every zoom,
 // and the camera target is moved so the model lands on its screen position. The altitude shows in a tilted view
 // as the gap between the car and its shadow.
-car_draw :: proc(w: ^World, pos: [2]f32, alt, heading: f32, an: Car_Anim, px: f32, tint: rl.Color) {
+car_draw :: proc(
+	w: ^World,
+	pos: [2]f32,
+	alt, heading: f32,
+	an: Car_Anim,
+	px: f32,
+	tint: rl.Color,
+	skin: Car_Skin,
+) {
 	a := &w.airship
 	if !a.ready do return
 	ground := height_at(w, pos.x, pos.y)
@@ -321,15 +332,7 @@ car_draw :: proc(w: ^World, pos: [2]f32, alt, heading: f32, an: Car_Anim, px: f3
 		fovy       = screen.y,
 		projection = .ORTHOGRAPHIC,
 	}
-	sh := a.material.shader
-	light := [3]f32{-0.45, 1.3, 0.3}
-	view := [3]f32{0, cos_t, sin_t}
-	sky, gnd, sun := [3]f32{0.72, 0.82, 0.98}, [3]f32{0.24, 0.26, 0.3}, f32(1)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "light_dir"), &light, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "view_dir"), &view, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sky"), &sky, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "ground"), &gnd, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sun"), &sun, .FLOAT)
+	car_shader_light(w, {-0.45, 1.3, 0.3}, {0, cos_t, sin_t})
 
 	yaw := math.PI / 2 - (heading - w.cam.pose.yaw)
 	bob := math.sin(an.time * 2.2) * CAR_BOB_M * an.fly
@@ -341,42 +344,93 @@ car_draw :: proc(w: ^World, pos: [2]f32, alt, heading: f32, an: Car_Anim, px: f3
 	mat := a.material
 	mat.maps[0].color = tint
 	rl.BeginMode3D(cam3)
-	for part in a.parts[:a.part_count] {
+	car_parts_draw(w, skin, m, an, mat, true)
+	rl.EndMode3D()
+}
+
+// Sky, ground and sun of the map view for CAR_FS, with the light and view direction.
+car_shader_light :: proc(w: ^World, light, view: [3]f32) {
+	sky, gnd, sun := [3]f32{0.72, 0.82, 0.98}, [3]f32{0.24, 0.26, 0.3}, f32(1)
+	car_shader_set(w, light, view, sky, gnd, sun)
+}
+
+car_shader_set :: proc(w: ^World, light, view, sky, gnd: [3]f32, sun: f32) {
+	sh := w.airship.material.shader
+	light, view, sky, gnd, sun := light, view, sky, gnd, sun
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "light_dir"), &light, .VEC3)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "view_dir"), &view, .VEC3)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sky"), &sky, .VEC3)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "ground"), &gnd, .VEC3)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sun"), &sun, .FLOAT)
+}
+
+// Body and wheels of one skin with model matrix m (inside BeginMode3D). Wheels roll on the road and fold flat
+// (tread down, hub out) in the air; glow adds the thruster discs under the folded wheels. A generated skin moves
+// and scales the Car Concept wheels to its own axles.
+car_parts_draw :: proc(
+	w: ^World,
+	skin: Car_Skin,
+	m: matrix[4, 4]f32,
+	an: Car_Anim,
+	mat: rl.Material,
+	glow: bool,
+) {
+	a := &w.airship
+	gen := &a.skins[skin]
+	concept := skin == .Concept || !gen.ready
+	if !concept do rl.DrawMesh(gen.body, mat, rl.Matrix(m))
+	spare := -1
+	for part, pi in a.parts[:a.part_count] {
 		if part.kind == 0 {
-			rl.DrawMesh(part.mesh, mat, rl.Matrix(m))
+			if concept do rl.DrawMesh(part.mesh, mat, rl.Matrix(m))
 			continue
 		}
-		// Wheels: roll on the road, fold flat (tread down, hub out) in the air.
-		side: f32 = part.pivot.z > 0 ? 1 : -1
+		pivot := part.pivot
+		scale: f32 = 1
+		if !concept {
+			pivot = {
+				gen.wheel_x[part.pivot.x > 0 ? 0 : 1],
+				CAR_WHEEL_R * gen.wheel_s,
+				math.sign(part.pivot.z) * gen.wheel_z,
+			}
+			scale = gen.wheel_s
+			if part.pivot.z > 0 do spare = pi
+		}
+		side: f32 = pivot.z > 0 ? 1 : -1
 		fold := an.fly * math.PI / 2 * side
-		wm := m * linalg.matrix4_translate_f32(part.pivot)
-		wm = wm * linalg.matrix4_rotate_f32(fold, {1, 0, 0})
+		wm := m * linalg.matrix4_translate_f32(pivot)
+		wm = wm * linalg.matrix4_rotate_f32(fold, {1, 0, 0}) * linalg.matrix4_scale_f32(scale)
 		rl.DrawMesh(part.mesh, mat, rl.Matrix(wm * linalg.matrix4_rotate_f32(an.roll, {0, 0, 1})))
-		if an.fly > 0.3 {
+		if glow && an.fly > 0.3 {
 			r := CAR_WHEEL_R * 0.85 * (an.fly - 0.3) / 0.7
 			gm := wm * linalg.matrix4_rotate_f32(-fold, {1, 0, 0})
 			gm = gm * linalg.matrix4_translate_f32({0, -0.12, 0}) * linalg.matrix4_scale_f32({r, 1, r})
 			rl.DrawMesh(a.glow, mat, rl.Matrix(gm))
 		}
 	}
-	rl.EndMode3D()
+	// The spare wheel on the tail, hub to the back.
+	if spare >= 0 && gen.spare != {} {
+		sm :=
+			m * linalg.matrix4_translate_f32(gen.spare) * linalg.matrix4_rotate_f32(-math.PI / 2, {0, 1, 0})
+		rl.DrawMesh(a.parts[spare].mesh, mat, rl.Matrix(sm * linalg.matrix4_scale_f32(gen.wheel_s)))
+	}
 }
 
 // The car at real size in the street view (inside its BeginMode3D): pos in street space (m, y up). Lit by the
 // street view's sun and sky. No bob and no thruster glow, the street view shows the car as it is (Lars:
 // "realistisch, niet te veel animatie"); bank and pitch stay, they come from the flight.
-car_draw_street :: proc(w: ^World, pos: [3]f32, an: Car_Anim, tint: rl.Color, look: Street_Look) {
+car_draw_street :: proc(
+	w: ^World,
+	pos: [3]f32,
+	an: Car_Anim,
+	tint: rl.Color,
+	look: Street_Look,
+	skin: Car_Skin,
+) {
 	a := &w.airship
 	if !a.ready do return
-	sh := a.material.shader
-	light := look.sun_dir
 	view := linalg.normalize(w.street.view.position - pos)
-	sky, gnd, sun := look.sky_amb, look.gnd_amb, look.sun
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "light_dir"), &light, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "view_dir"), &view, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sky"), &sky, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "ground"), &gnd, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sun"), &sun, .FLOAT)
+	car_shader_set(w, look.sun_dir, view, look.sky_amb, look.gnd_amb, look.sun)
 	// Model space: x forward, y up, z right. Heading 0 is north (-z in street space).
 	m := linalg.matrix4_translate_f32(pos)
 	m = m * linalg.matrix4_rotate_f32(math.PI / 2 - an.heading, {0, 1, 0})
@@ -384,30 +438,29 @@ car_draw_street :: proc(w: ^World, pos: [3]f32, an: Car_Anim, tint: rl.Color, lo
 	m = m * linalg.matrix4_rotate_f32(an.pitch, {0, 0, 1})
 	mat := a.material
 	mat.maps[0].color = tint
-	for part in a.parts[:a.part_count] {
-		if part.kind == 0 {
-			rl.DrawMesh(part.mesh, mat, rl.Matrix(m))
-			continue
-		}
-		side: f32 = part.pivot.z > 0 ? 1 : -1
-		fold := an.fly * math.PI / 2 * side
-		wm := m * linalg.matrix4_translate_f32(part.pivot)
-		wm = wm * linalg.matrix4_rotate_f32(fold, {1, 0, 0})
-		rl.DrawMesh(part.mesh, mat, rl.Matrix(wm * linalg.matrix4_rotate_f32(an.roll, {0, 0, 1})))
-	}
+	car_parts_draw(w, skin, m, an, mat, false)
 }
 
 // The player's car (navigation screen).
 airship_draw :: proc(w: ^World) {
 	car_anim_update(w, frame_time(w))
 	an := w.car_anim
-	car_draw(w, {f32(w.pose.pos.x), f32(w.pose.pos.y)}, w.pose.alt, an.heading, an, CAR_PX, rl.WHITE)
+	car_draw(
+		w,
+		{f32(w.pose.pos.x), f32(w.pose.pos.y)},
+		w.pose.alt,
+		an.heading,
+		an,
+		CAR_PX,
+		rl.WHITE,
+		w.car_skin,
+	)
 }
 
-// Other cars from the presence gossip, a bit smaller and tinted so the own car stands out. Cars in a traffic
-// jam (TRAFFIC_MIN_CARS or more on their way within TRAFFIC_RADIUS_KM, themselves included) turn orange.
+// Other cars from the presence gossip, in the skin their player chose and a bit smaller, so the own car stands
+// out. Cars in a traffic jam (TRAFFIC_MIN_CARS or more on their way within TRAFFIC_RADIUS_KM, themselves
+// included) turn orange.
 CAR_OTHER_PX :: 80.0
-CAR_OTHER_TINT :: rl.Color{190, 205, 255, 255}
 CAR_JAM_TINT :: rl.Color{255, 150, 90, 255}
 
 others_draw :: proc(w: ^World) {
@@ -418,6 +471,6 @@ others_draw :: proc(w: ^World) {
 			time = w.car_anim.time + f32(o.author[0]),
 		}
 		jam := traffic_near(w, o.pos, o.alt, o.on_road, TRAFFIC_RADIUS_KM) >= TRAFFIC_MIN_CARS
-		car_draw(w, others_draw_pos(w, o), o.alt, o.heading, an, px, jam ? CAR_JAM_TINT : CAR_OTHER_TINT)
+		car_draw(w, others_draw_pos(w, o), o.alt, o.heading, an, px, jam ? CAR_JAM_TINT : rl.WHITE, o.skin)
 	}
 }
