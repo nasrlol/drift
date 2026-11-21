@@ -406,7 +406,6 @@ nav_ui :: proc(w: ^World) {
 	sheet := nav_sheet_rect(w)
 	round_rect({sheet.x, sheet.y, sheet.width, sheet.height + 22}, 22, pal.sheet)
 	ui_block(w, sheet)
-	round_rect({sheet.x + sheet.width / 2 - 20, sheet.y + 8, 40, 5}, 2.5, pal.line)
 	x := sheet.x + 24
 	if r != nil {
 		ui_icon(w, .Leaf, {x + 16, sheet.y + 46}, 32, pal.green)

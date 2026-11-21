@@ -46,8 +46,9 @@ Soundtrack :: struct {
 // Opens the audio device and starts the stream (window up, not headless).
 music_start :: proc(w: ^World) {
 	m := &w.music
+	// Off by default (nasr, 2026-11-21), on only when N saved "on".
 	data, err := os.read_entire_file(MUSIC_PATH, context.temp_allocator)
-	if err == nil do m.off = strings.trim_space(string(data)) == "off"
+	m.off = err != nil || strings.trim_space(string(data)) != "on"
 	if !rl.IsAudioDeviceReady() do rl.InitAudioDevice()
 	if !rl.IsAudioDeviceReady() {
 		logf(w, "music", "no audio device, the game stays silent")
@@ -83,6 +84,18 @@ music_toggle :: proc(w: ^World) {
 		logf(w, "music", "cannot save %s: %v", MUSIC_PATH, err)
 	}
 	logf(w, "music", "soundtrack %s", m.off ? "off" : "on")
+}
+
+// Speaker button (plan map buttons, navigation button column): lit while the music plays, same as N.
+music_button :: proc(w: ^World, r: rl.Rectangle) {
+	m := &w.music
+	if !ui_round_button(w, r, .Speaker, m.ready && !m.off) do return
+	if !m.ready {
+		ui_toast(w, "No audio device")
+		return
+	}
+	music_toggle(w)
+	ui_toast(w, m.off ? "Music off" : "Music on")
 }
 
 // Refills every stream buffer the device has played.
