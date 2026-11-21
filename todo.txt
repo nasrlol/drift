@@ -80,7 +80,8 @@ DARIO: SHIP + CONTROLS
 [ ] warnings as flags in the ship state (terrain, no-fly), UI only reads them
 [ ] docking: within 30 m horizontal, 25 m vertical of the hub tower
 [ ] sim speed 1x / 5x / 15x / 40x = more fixed steps per frame, never a bigger dt
-[ ] camera follows ship
+[x] map mode: Controls pan / zoom the camera while there is no ship (WASD, R/F, sticks)
+[ ] drive mode: Controls go to ship_step, camera follows ship, key to switch back to map mode
 [ ] record Controls per step for replay (flat array, a few bytes per step)
 [ ] bench: ship_step cost per step
 
