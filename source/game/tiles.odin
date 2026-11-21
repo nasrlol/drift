@@ -102,9 +102,21 @@ tiles_update_draw :: proc(
 			used = true,
 		}
 	}
+	tiles_draw(cache, size, reach, material, target, place)
+}
+
+// Draws the built tiles whose square comes within reach (km) of target, inside BeginMode3D.
+tiles_draw :: proc(
+	cache: ^Tile_Cache,
+	size, reach: f32,
+	material: rl.Material,
+	target: [2]f32,
+	place: Placement,
+) {
 	for t in cache.tiles {
 		if !t.used || t.mesh.vertexCount == 0 do continue
-		if linalg.length(tile_centre(t.key, size) - target) > reach + size do continue
+		gap := linalg.max(linalg.abs(tile_centre(t.key, size) - target) - size / 2, 0)
+		if linalg.length(gap) > reach do continue
 		rl.DrawMesh(t.mesh, material, place_at(place, [2]f32{f32(t.key.x), f32(t.key.y)} * size))
 	}
 }

@@ -1,17 +1,154 @@
-# Flicker check of the street view (see notes.txt): fast flights with uneven frame times like a real screen, the
-# share of pixels that jump away and back between frames (A-B-A) must stay small. Before the render
-# interpolation (w.pose) the tower flight flickered 1.6 %, before the anchored meshes walls z-fought.
+# Flicker and judder checks of the street view (see notes.txt), with uneven frame times like a real screen.
+# flicker: pixels that jump away and back (A-B-A) while the camera turns by a twentieth of a pixel per frame,
+# so only real flicker counts (z-fighting, sparkling texture, shadow acne), not thin details moving across pixels.
+# judder: the car's jumps on the screen during a fast flight; before the render interpolation (w.pose) the world
+# shook by whole simulation steps.
 snapshot test/data/calm.snap
 frame_ms 15.2 18.1 16.0 17.4 15.9 17.4
 press 2 V
-# over the roofs from the tower, accelerating to ~140 km/h
+# over the roofs from the tower
 ship 300 139.6685 79.4001 40 0
-down 305 W
-up 700 W
-flicker 500 560 0.1
-# low along a street in Brussels
-ship 720 140.315 79.543 3 198
-down 725 W
-up 900 W
-flicker 820 880 0.1
-quit 900
+mouse 400 0.05 0
+mouse 401 0.05 0
+mouse 402 0.05 0
+mouse 403 0.05 0
+mouse 404 0.05 0
+mouse 405 0.05 0
+mouse 406 0.05 0
+mouse 407 0.05 0
+mouse 408 0.05 0
+mouse 409 0.05 0
+mouse 410 0.05 0
+mouse 411 0.05 0
+mouse 412 0.05 0
+mouse 413 0.05 0
+mouse 414 0.05 0
+mouse 415 0.05 0
+mouse 416 0.05 0
+mouse 417 0.05 0
+mouse 418 0.05 0
+mouse 419 0.05 0
+mouse 420 0.05 0
+mouse 421 0.05 0
+mouse 422 0.05 0
+mouse 423 0.05 0
+mouse 424 0.05 0
+mouse 425 0.05 0
+mouse 426 0.05 0
+mouse 427 0.05 0
+mouse 428 0.05 0
+mouse 429 0.05 0
+mouse 430 0.05 0
+mouse 431 0.05 0
+mouse 432 0.05 0
+mouse 433 0.05 0
+mouse 434 0.05 0
+mouse 435 0.05 0
+mouse 436 0.05 0
+mouse 437 0.05 0
+mouse 438 0.05 0
+mouse 439 0.05 0
+mouse 440 0.05 0
+mouse 441 0.05 0
+mouse 442 0.05 0
+mouse 443 0.05 0
+mouse 444 0.05 0
+mouse 445 0.05 0
+mouse 446 0.05 0
+mouse 447 0.05 0
+mouse 448 0.05 0
+mouse 449 0.05 0
+mouse 450 0.05 0
+mouse 451 0.05 0
+mouse 452 0.05 0
+mouse 453 0.05 0
+mouse 454 0.05 0
+mouse 455 0.05 0
+mouse 456 0.05 0
+mouse 457 0.05 0
+mouse 458 0.05 0
+mouse 459 0.05 0
+mouse 460 0.05 0
+mouse 461 0.05 0
+mouse 462 0.05 0
+mouse 463 0.05 0
+mouse 464 0.05 0
+mouse 465 0.05 0
+mouse 466 0.05 0
+mouse 467 0.05 0
+mouse 468 0.05 0
+mouse 469 0.05 0
+mouse 470 0.05 0
+flicker 410 470 0.05
+# fast over the roofs, accelerating to ~140 km/h
+down 480 W
+up 800 W
+judder 600 700 1.5
+# low in a street of Brussels, then a fast run along it
+ship 810 140.315 79.543 3 198
+mouse 910 0.05 0
+mouse 911 0.05 0
+mouse 912 0.05 0
+mouse 913 0.05 0
+mouse 914 0.05 0
+mouse 915 0.05 0
+mouse 916 0.05 0
+mouse 917 0.05 0
+mouse 918 0.05 0
+mouse 919 0.05 0
+mouse 920 0.05 0
+mouse 921 0.05 0
+mouse 922 0.05 0
+mouse 923 0.05 0
+mouse 924 0.05 0
+mouse 925 0.05 0
+mouse 926 0.05 0
+mouse 927 0.05 0
+mouse 928 0.05 0
+mouse 929 0.05 0
+mouse 930 0.05 0
+mouse 931 0.05 0
+mouse 932 0.05 0
+mouse 933 0.05 0
+mouse 934 0.05 0
+mouse 935 0.05 0
+mouse 936 0.05 0
+mouse 937 0.05 0
+mouse 938 0.05 0
+mouse 939 0.05 0
+mouse 940 0.05 0
+mouse 941 0.05 0
+mouse 942 0.05 0
+mouse 943 0.05 0
+mouse 944 0.05 0
+mouse 945 0.05 0
+mouse 946 0.05 0
+mouse 947 0.05 0
+mouse 948 0.05 0
+mouse 949 0.05 0
+mouse 950 0.05 0
+mouse 951 0.05 0
+mouse 952 0.05 0
+mouse 953 0.05 0
+mouse 954 0.05 0
+mouse 955 0.05 0
+mouse 956 0.05 0
+mouse 957 0.05 0
+mouse 958 0.05 0
+mouse 959 0.05 0
+mouse 960 0.05 0
+mouse 961 0.05 0
+mouse 962 0.05 0
+mouse 963 0.05 0
+mouse 964 0.05 0
+mouse 965 0.05 0
+mouse 966 0.05 0
+mouse 967 0.05 0
+mouse 968 0.05 0
+mouse 969 0.05 0
+mouse 970 0.05 0
+flicker 915 970 0.05
+down 980 W
+up 1140 W
+judder 1060 1140 1.5
+quit 1145

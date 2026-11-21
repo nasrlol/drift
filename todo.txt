@@ -243,9 +243,10 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
     (headless free / free_on, test/ run_free_flight)
 [x] flicker in the street view: anchored meshes (z-fighting), render interpolation (uneven frames), near plane
     0.25 m; e2e check test/data/street_flicker.txt
-[ ] sun lighting with normals, sky with sun, haze, ambient occlusion at wall feet, sun shadows (shadow map)
-[ ] facades in the shader: floors, windows, doors, shop fronts, brick / plaster / stone per building
-[ ] roofs: gables for houses, parapets and roof details (solar panels, green roofs) for flat roofs
+[x] sun lighting with normals, sky with sun, haze, ambient occlusion at wall feet, sun shadows (shadow map)
+[x] facades in the shader: floors, windows, doors, shop fronts, brick / plaster / stone per building
+[x] roofs: gables for houses, parapets and roof details (solar panels, green roofs) for flat roofs
+[ ] shadows over the whole view (a second, coarser cascade beyond 420 m)
 [ ] trees with trunks near the camera, street trees, hedges, instanced; street furniture
 [ ] other cars (presence) tested in the street view with two nodes
 

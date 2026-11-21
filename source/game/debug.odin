@@ -719,7 +719,12 @@ dump_world :: proc(w: ^World, out: ^strings.Builder) {
 //   shot <frame> <png file>          after everything of that frame is drawn
 //   flicker <from> <to> <max %>      share of pixels that flicker over these frames: a pixel that jumps away in
 //                                    one frame and back in the next (A-B-A, by more than 60 summed over r, g, b),
-//                                    which smooth motion never does; logs FAILED above max %
+//                                    which smooth motion never does; logs FAILED above max %. Use it with
+//                                    sub-pixel motion (mouse 0.05 per frame): thin details that move a few
+//                                    pixels per frame jump A-B-A without any flicker
+//   judder <from> <to> <max px>      how far the car jumps on the screen from one frame to the next beyond its
+//                                    smooth motion (the largest second difference of its screen position); the
+//                                    chase camera keeps it nearly still unless frames and steps do not line up
 //   quit <frame>
 // Frame 0 is the first frame; the loading screen covers the first ~80. The window keeps its size (1440 x 900):
 // SetWindowSize on a macOS Retina screen leaves raylib drawing into a quarter of the framebuffer.
@@ -731,6 +736,7 @@ Script_Kind :: enum u8 {
 	Ship,
 	Shot,
 	Flicker,
+	Judder,
 	Quit,
 }
 
@@ -761,6 +767,10 @@ Script :: struct {
 	fl_seen:  int, // frames captured in the current flicker range
 	fl_hits:  int,
 	fl_total: int,
+	// judder: the car's last two screen positions and the largest jump so far
+	jd:       [2][2]f32,
+	jd_seen:  int,
+	jd_max:   f32,
 }
 
 // Reads and checks the whole script before the first frame: a bad line stops the run with its line number.
@@ -851,6 +861,11 @@ game_script :: proc(memory: rawptr, path: string) -> bool {
 			budget, budget_ok := num(f[3])
 			e.kind, e.v = .Flicker, {f32(to), budget, 0, 0}
 			ok = n == 4 && frame_ok && to_ok && to >= frame + 2 && budget_ok && budget >= 0
+		case "judder":
+			to, to_ok := strconv.parse_int(f[2], 10)
+			budget, budget_ok := num(f[3])
+			e.kind, e.v = .Judder, {f32(to), budget, 0, 0}
+			ok = n == 4 && frame_ok && to_ok && to >= frame + 2 && budget_ok && budget >= 0
 		case "quit":
 			e.kind = .Quit
 			ok = n == 2 && frame_ok
@@ -913,7 +928,7 @@ script_frame :: proc(w: ^World) {
 			w.pose_prev = ship_pose(s)
 			w.car_anim.seeded = false
 			w.street.seeded = false
-		case .Shot, .Flicker, .Quit:
+		case .Shot, .Flicker, .Judder, .Quit:
 		}
 	}
 }
@@ -925,6 +940,7 @@ script_end :: proc(w: ^World) -> (quit: bool) {
 	// A flicker range that started earlier and has not ended: this frame counts.
 	for e in sc.events[:sc.first] {
 		if e.kind == .Flicker && sc.frame <= int(e.v.x) do script_flicker(w, e)
+		if e.kind == .Judder && sc.frame <= int(e.v.x) do script_judder(w, e)
 	}
 	for e in sc.events[sc.first:sc.next] {
 		switch e.kind {
@@ -950,6 +966,9 @@ script_end :: proc(w: ^World) -> (quit: bool) {
 		case .Flicker:
 			sc.fl_seen, sc.fl_hits, sc.fl_total = 0, 0, 0
 			script_flicker(w, e)
+		case .Judder:
+			sc.jd_seen, sc.jd_max = 0, 0
+			script_judder(w, e)
 		case .Quit:
 			quit = true
 			logf(w, "script", "frame %d: quit, %d shots or checks failed", sc.frame, sc.failures)
@@ -1003,6 +1022,30 @@ script_flicker :: proc(w: ^World, e: Script_Event) {
 			e.frame,
 			sc.frame,
 			pct,
+			e.v.y,
+			over ? "FAILED" : "ok",
+		)
+	}
+}
+
+// One frame of a judder range e: the car's screen position (street view) against the last two.
+script_judder :: proc(w: ^World, e: Script_Event) {
+	sc := &w.script
+	if !w.street.on do return
+	p := rl.GetWorldToScreen(street_ship_pos(w) + {0, 0.8, 0}, w.street.view)
+	if sc.jd_seen >= 2 do sc.jd_max = max(sc.jd_max, linalg.length(p - 2 * sc.jd[1] + sc.jd[0]))
+	sc.jd[0], sc.jd[1] = sc.jd[1], p
+	sc.jd_seen += 1
+	if sc.frame == int(e.v.x) {
+		over := sc.jd_max > e.v.y
+		if over do sc.failures += 1
+		logf(
+			w,
+			"script",
+			"frames %d..%d: the car jumps up to %.2f px beyond its motion (max %.2f) %s",
+			e.frame,
+			sc.frame,
+			sc.jd_max,
 			e.v.y,
 			over ? "FAILED" : "ok",
 		)

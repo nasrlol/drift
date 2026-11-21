@@ -365,10 +365,18 @@ car_draw :: proc(w: ^World, pos: [2]f32, alt, heading: f32, an: Car_Anim, px: f3
 // The car at real size in the street view (inside its BeginMode3D): pos in street space (m, y up). Lit by the
 // street view's sun and sky. No bob and no thruster glow, the street view shows the car as it is (Lars:
 // "realistisch, niet te veel animatie"); bank and pitch stay, they come from the flight.
-car_draw_street :: proc(w: ^World, pos: [3]f32, an: Car_Anim, tint: rl.Color, look: Street_Look) {
+// depth: draw with this material instead (the street view's shadow pass), no lighting.
+car_draw_street :: proc(
+	w: ^World,
+	pos: [3]f32,
+	an: Car_Anim,
+	tint: rl.Color,
+	look: Street_Look,
+	depth: ^rl.Material = nil,
+) {
 	a := &w.airship
 	if !a.ready do return
-	sh := a.material.shader
+	sh := depth != nil ? depth.shader : a.material.shader
 	light := look.sun_dir
 	view := linalg.normalize(w.street.view.position - pos)
 	sky, gnd, sun := look.sky_amb, look.gnd_amb, look.sun
@@ -382,7 +390,7 @@ car_draw_street :: proc(w: ^World, pos: [3]f32, an: Car_Anim, tint: rl.Color, lo
 	m = m * linalg.matrix4_rotate_f32(math.PI / 2 - an.heading, {0, 1, 0})
 	m = m * linalg.matrix4_rotate_f32(-an.bank, {1, 0, 0})
 	m = m * linalg.matrix4_rotate_f32(an.pitch, {0, 0, 1})
-	mat := a.material
+	mat := depth != nil ? depth^ : a.material
 	mat.maps[0].color = tint
 	for part in a.parts[:a.part_count] {
 		if part.kind == 0 {

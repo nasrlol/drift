@@ -562,9 +562,14 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   is drawn: TakeScreenshot drops the directory), quit <frame>. frame_ms <ms> ... repeats uneven frame
                   times instead of SIM_DT (a frame then steps 0, 1 or 2 times, as on a real screen). flicker <from>
                   <to> <max %> counts the pixels that jump away and back between three frames (A-B-A, > 60 summed
-                  over r, g, b), which smooth motion never does, and logs FAILED above max %.
-                  test/data/street_flicker.txt flies fast with uneven frames (max 0.1 %): 0.054 % over the roofs,
-                  0.008 % in a street (2026-11-21); without the render interpolation 0.96 % and 0.44 %. The loading screen covers frames
+                  over r, g, b) and logs FAILED above max %. Only meaningful with sub-pixel motion (mouse 0.05 per
+                  frame): in a fast flight thin details (frames, copings, edges) that move a few pixels per frame
+                  jump A-B-A too (1.7 % with the detailed houses) without any flicker. judder <from> <to> <max px>
+                  is the largest second difference of the car's screen position: the chase camera keeps the car
+                  nearly still unless frames and fixed steps do not line up.
+                  test/data/street_flicker.txt (uneven frames): flicker 0.006 % over the roofs and 0.0003 % in a
+                  street (max 0.05 %), judder 0.02 px in fast flights (max 1.5); without the render interpolation
+                  the judder is 3.1 and 2.8 px (2026-11-21). The loading screen covers frames
                   0..~80. The window stays 1440 x 900: SetWindowSize on a macOS Retina screen leaves raylib
                   drawing into a quarter of the framebuffer. Shots go to build/shots/ (not in git), the
                   standard scripts are test/data/street_*.txt.
@@ -638,6 +643,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   the car, its animation and the map's chase camera read it. Drawing the raw state jumped 0, 1 or 2
                   steps per frame with uneven frame times while the cameras eased per frame: buildings and roads
                   shook (Lars: "het flikkert"). A jump of > 200 m or no stepping (plan screen) draws the state as is.
+  shadows         (street.odin) one 4096^2 depth map (rlgl framebuffer with only a depth texture, raylib's own
+                  RenderTexture holds no depth texture) over a 420 m square ahead of the camera (0.1 m per texel),
+                  drawn each frame from an orthographic sun camera 1500 m up the sun direction, its centre snapped
+                  to whole texels in f64 world metres so edges do not crawl. Houses, trees and cars cast (depth-only
+                  shader), houses and the ground receive (sun_shadow in STREET_GLSL: normal offset 0.12 m, bias
+                  0.09 m, 3 x 3 PCF, faded at the box edge). The texture is bound to slot 14 for the main pass.
   street.odin     (Lars) the street view (Lars, 2026-11-21: "een 3d game waar je tussen huizen kan vliegen, zoals
                   gta in third person, zo realistisch mogelijk"). V on the navigation screen (or the plan screen, which
                   goes to free flight first) switches it on, V or Esc back to the map; the cursor is locked while on.
