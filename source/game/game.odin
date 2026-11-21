@@ -16,17 +16,18 @@ MAX_FRAME_DT :: 0.25
 // Keys 1..4. More simulated time per frame means more fixed steps, dt stays SIM_DT.
 SIM_SPEEDS :: [4]f64{1, 5, 15, 40}
 
-// Camera: zoom is log2 relative to the fitted view, so zero is the whole map.
-ZOOM_MIN :: -1
-ZOOM_MAX :: 7
-WHEEL_ZOOM_STEP :: 0.25
-ZOOM_PER_S :: 2
-PAN_PX_PER_S :: 600
-
-View :: struct {
-	pan:  [2]f32, // km from the map centre to the screen centre
-	zoom: f32,
+// Screens of the design: plan (zero, the start screen) and navigate. Esc goes back to plan.
+Screen :: enum u8 {
+	Plan,
+	Navigate,
 }
+
+LOADING_MIN_S :: 0.9 // the loading screen stays at least this long
+LOADING_FADE_S :: 0.4
+LOADING_TURN_S :: 0.9 // one turn of the ring
+SCAN_S :: 1.6 // the A* scan animation after a new plan
+LINE_DEPTH_BIAS :: 2e-4 // NDC depth step between the line passes on the ground plane (casing, fill, wind)
+HUB_MARKER_PX :: 26
 
 // Set by compile.sh with -define: debug builds get DRIFT_DEBUG, profile builds DRIFT_PROFILE, release neither.
 DRIFT_DEBUG :: #config(DRIFT_DEBUG, false)
@@ -50,7 +51,12 @@ World :: struct {
 	grid:         Grid,
 	controls:     Controls,
 	ship:         Ship,
-	drive_mode:   bool, // zero = map mode: Controls move the camera. Drive mode: Controls steer the ship
+	screen:       Screen, // zero = plan: Controls move the camera. Navigate: Controls steer the ship
+	plan:         Plan,
+	plan_mem:     virtual.Arena, // paths and maneuvers of w.routes, reset by plan_routes
+	routes:       [Route_Mode]Planned_Route,
+	nav:          Nav,
+	nav_wind:     bool, // wind trails while navigating (design: off by default)
 	replay:       Replay,
 	no_fly:       [MAX_NO_FLY]No_Fly_Zone,
 	gust_zones:   [MAX_GUST_ZONES]Gust_Zone, // reported in flight, route() goes around them
@@ -58,7 +64,10 @@ World :: struct {
 	accum:        f64,
 	sim_speed:    int, // index into SIM_SPEEDS, 0 = 1x
 	prof:         Profiler,
-	view:         View,
+	cam:          Cam,
+	ui:           Ui,
+	loading_s:    f32, // seconds the window has shown frames, for the loading screen
+	scan_s:       f32, // seconds since the last plan, for the A* scan animation
 	// GPU texture and glyph tables owned by raylib, zero until the first frame with a window.
 	fonts:        Fonts,
 	line_meshes:  Line_Meshes,
@@ -75,7 +84,11 @@ game_memory_size :: proc() -> int {
 
 @(export)
 game_init_window :: proc() {
-	rl.InitWindow(800, 450, "drift")
+	rl.SetConfigFlags({.WINDOW_RESIZABLE, .MSAA_4X_HINT})
+	rl.InitWindow(1440, 900, "drift")
+	rl.SetWindowMinSize(900, 600)
+	// Esc leaves navigation (design), it does not close the window.
+	rl.SetExitKey(.KEY_NULL)
 	rl.SetTargetFPS(60)
 }
 
@@ -150,23 +163,53 @@ game_update :: proc(memory: rawptr) -> bool {
 	t := prof_begin()
 	weather_poll(w)
 	node_poll(w)
-	w.controls = read_controls()
-
-	if rl.IsKeyPressed(.M) do w.drive_mode = !w.drive_mode
-	if rl.IsKeyPressed(.T) do w.theme = w.theme == .Night ? .Day : .Night
-	for key, i in ([?]rl.KeyboardKey{.ONE, .TWO, .THREE, .FOUR}) {
-		if rl.IsKeyPressed(key) do w.sim_speed = i
+	ui_begin(w)
+	keys := read_controls()
+	pad := pilot_pad_controls(w)
+	w.controls = {
+		clamp(keys.throttle + pad.throttle, -1, 1),
+		clamp(keys.turn + pad.turn, -1, 1),
+		clamp(keys.climb + pad.climb, -1, 1),
 	}
+	typing := w.plan.editing != .None
+
+	if !typing {
+		if rl.IsKeyPressed(.T) do w.theme = w.theme == .Night ? .Day : .Night
+		for key, i in ([?]rl.KeyboardKey{.ONE, .TWO, .THREE, .FOUR}) {
+			if rl.IsKeyPressed(key) do w.sim_speed = i
+		}
+		// M: free flight without a route (the old drive mode), or back to the plan screen.
+		if rl.IsKeyPressed(.M) {
+			if w.screen == .Plan {
+				nav_stop(w)
+				w.screen = .Navigate
+				cam_chase(w)
+			} else {
+				pilot_exit(w)
+			}
+		}
+	}
+	if w.screen == .Navigate {
+		if rl.IsKeyPressed(.ESCAPE) do pilot_exit(w)
+		// Design: whoever presses a steering key in navigation takes over at once.
+		if w.nav.active && !w.nav.manual && w.controls != {} do nav_set_manual(w, true)
+	} else {
+		plan_refresh(w)
+	}
+
 	speeds := SIM_SPEEDS
 	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT) * speeds[w.sim_speed]
 	for w.accum >= SIM_DT {
-		if w.drive_mode {
-			step := controls_pack(w.controls)
+		if w.screen == .Navigate {
+			c := w.controls
+			if w.nav.active && !w.nav.manual do c = nav_autopilot(w)
+			step := controls_pack(c)
 			if w.replay.count < len(w.replay.steps) {
 				w.replay.steps[w.replay.count] = step
 				w.replay.count += 1
 			}
 			ship_step(w, controls_unpack(step), SIM_DT)
+			nav_update(w, SIM_DT)
 		}
 		w.tick += 1
 		w.accum -= SIM_DT
@@ -179,50 +222,14 @@ game_update :: proc(memory: rawptr) -> bool {
 		fmt.print(strings.to_string(b))
 	}
 
-	// km -> px: Camera2D zoom is px per km, w.view.pan is where the screen centre looks.
-	// Map mode: the ship controls move the camera, so keyboard and gamepad work the same way as when flying.
-	// Throttle / turn pan, climb zooms around the screen centre. The mouse stays camera only: drag pans, the
-	// wheel zooms keeping the point under the cursor in place.
-	// Drive mode (M toggles): the controls go to the ship and the camera sits on it, only the wheel zooms.
-	// The toolbar is drawn after the map, but laid out here so the mouse does not pan or zoom the map under it.
-	toolbar := rl.Rectangle{f32(rl.GetScreenWidth()) - TOOLBAR_W - 8, 8, TOOLBAR_W, TOOLBAR_H}
-	mouse_on_ui := rl.CheckCollisionPointRec(rl.GetMousePosition(), toolbar)
-
-	cam: rl.Camera2D
-	{
-		v := &w.view
-		c := w.controls
-		if w.drive_mode do c = {}
-		dt := rl.GetFrameTime()
-		centre := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())} / 2
-		fit := 0.95 * min(centre.x * 2 / MAP_W_KM, centre.y * 2 / MAP_H_KM)
-		z0 := fit * math.pow(f32(2), v.zoom)
-
-		v.pan += [2]f32{c.turn, -c.throttle} * PAN_PX_PER_S * dt / z0
-		if rl.IsMouseButtonDown(.LEFT) && !w.drive_mode && !mouse_on_ui do v.pan -= rl.GetMouseDelta() / z0
-		zoom := c.climb * ZOOM_PER_S * dt
-		anchor := centre
-		if wheel := rl.GetMouseWheelMove(); wheel != 0 && !mouse_on_ui {
-			zoom += wheel * WHEEL_ZOOM_STEP
-			anchor = rl.GetMousePosition()
-		}
-		v.zoom = clamp(v.zoom + zoom, ZOOM_MIN, ZOOM_MAX)
-		z1 := fit * math.pow(f32(2), v.zoom)
-		v.pan += (anchor - centre) * (1 / z0 - 1 / z1)
-		half := [2]f32{MAP_W_KM, MAP_H_KM} / 2
-		if w.drive_mode do v.pan = w.ship.pos - half
-		v.pan = linalg.clamp(v.pan, -half, half)
-
-		cam = {
-			offset = centre,
-			target = half + v.pan,
-			zoom   = z1,
-		}
-	}
+	// Camera: input when the mouse is not on last frame's UI, glides, chase / preview, then the raylib camera.
+	// The keyboard and stick pan only on the plan screen, in navigation they steer the ship.
+	cam_update(w, !ui_mouse_captured(w), w.screen == .Plan && !typing)
 
 	palettes := PALETTES
 	w.palette = palettes[w.theme]
 	pal := palette(w)
+	frame_dt := min(rl.GetFrameTime(), MAX_FRAME_DT)
 
 	rl.BeginDrawing()
 	t = prof_begin()
@@ -245,6 +252,31 @@ game_update :: proc(memory: rawptr) -> bool {
 				}
 			}
 			if n > 0 do lm.map_lines = line_mesh_upload(pos, other, color, false)
+			{
+				// Ground layer grid (gust risk, solar): GROUND_CELL_KM quads, two triangles each, colors per
+				// vertex rewritten every frame, positions fixed.
+				gpos := make([][3]f32, GROUND_VERTICES, context.temp_allocator)
+				for gy in 0 ..< GROUND_H - 1 {
+					for gx in 0 ..< GROUND_W - 1 {
+						corners := ground_quad(gx, gy)
+						base := (gy * (GROUND_W - 1) + gx) * 6
+						for c, k in corners {
+							gpos[base + k] = {f32(c.x * GROUND_CELL_KM), f32(c.y * GROUND_CELL_KM), 0}
+						}
+					}
+				}
+				lm.ground = rl.Mesh {
+					vertexCount   = GROUND_VERTICES,
+					triangleCount = GROUND_VERTICES / 3,
+					vertices      = ([^]f32)(raw_data(gpos)),
+					colors        = ([^]u8)(
+						raw_data(make([][4]u8, GROUND_VERTICES, context.temp_allocator)),
+					),
+				}
+				rl.UploadMesh(&lm.ground, true)
+				lm.ground.vertices, lm.ground.colors = nil, nil
+				lm.ground_material = rl.LoadMaterialDefault()
+			}
 			lm.wind = line_mesh_upload(
 				make([][3]f32, WIND_VERTICES, context.temp_allocator),
 				make([][3]f32, WIND_VERTICES, context.temp_allocator),
@@ -257,6 +289,10 @@ game_update :: proc(memory: rawptr) -> bool {
 			lm.material.shader = shader
 			lm.loc_screen = rl.GetShaderLocation(shader, "screen")
 			lm.loc_colors = rl.GetShaderLocation(shader, "colors")
+			lm.loc_widths = rl.GetShaderLocation(shader, "widths")
+			lm.loc_fog_c = rl.GetShaderLocation(shader, "fog_color")
+			lm.loc_fog_r = rl.GetShaderLocation(shader, "fog_range")
+			lm.loc_bias = rl.GetShaderLocation(shader, "depth_bias")
 			lm.built = true
 			logf(
 				w,
@@ -268,132 +304,231 @@ game_update :: proc(memory: rawptr) -> bool {
 			)
 		}
 
-		// Wind particles: layer 0 (the lowest, until the layer toggles), forecast hour of the simulated time.
-		// Update loop over the SoA arrays, then one pass writes the trails into the wind mesh.
-		{
+		// Wind particles: the wind layer of the layers panel, forecast hour of the simulated time. Spread over the
+		// ground the camera sees. Update loop over the SoA arrays, then one pass writes the trails into the wind
+		// mesh, colored by speed.
+		show_wind := w.screen == .Plan ? !w.plan.layers.hide_wind : w.nav_wind
+		if show_wind {
 			wp := &w.wind
-			dt := min(rl.GetFrameTime(), MAX_FRAME_DT)
-			lo := rl.GetScreenToWorld2D({0, 0}, cam)
-			hi := rl.GetScreenToWorld2D({f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}, cam)
-			hour := int(w.tick / (SIM_HZ * 3600))
-			km_per_ms := WIND_PX_PER_MS / cam.zoom
+			lo, hi := [2]f32{1e9, 1e9}, [2]f32{-1e9, -1e9}
+			screen := w.cam.screen
+			for c in ([?][2]f32{{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0.5, 0}, {0.5, 0.5}}) {
+				if g, ok := cam_ground_at(w, c * screen); ok {
+					lo = linalg.min(lo, g)
+					hi = linalg.max(hi, g)
+				}
+			}
+			lo = linalg.max(lo, [2]f32{0, 0})
+			hi = linalg.min(hi, [2]f32{MAP_W_KM, MAP_H_KM})
+			hour := sim_hour(w)
+			km_per_ms := WIND_PX_PER_MS / w.cam.px_per_km
 			for i in 0 ..< WIND_PARTICLES {
-				wp.age[i] += dt
+				wp.age[i] += frame_dt
 				out := wp.x[i] < lo.x || wp.x[i] > hi.x || wp.y[i] < lo.y || wp.y[i] > hi.y
 				if !wp.seeded || out || wp.age[i] >= WIND_LIFE_S {
 					wp.x[i] = lo.x + wind_rand(wp) * (hi.x - lo.x)
 					wp.y[i] = lo.y + wind_rand(wp) * (hi.y - lo.y)
 					wp.age[i] = wp.seeded ? 0 : wind_rand(wp) * WIND_LIFE_S
 				}
-				v := wind_at(w, wp.x[i], wp.y[i], 0, hour)
+				v := wind_at(w, wp.x[i], wp.y[i], w.plan.layers.wind_layer, hour)
 				wp.vx[i], wp.vy[i] = v.x, v.y
-				wp.x[i] += v.x * km_per_ms * dt
-				wp.y[i] += v.y * km_per_ms * dt
+				wp.x[i] += v.x * km_per_ms * frame_dt
+				wp.y[i] += v.y * km_per_ms * frame_dt
 			}
 			wp.seeded = true
 
 			pos := make([][3]f32, WIND_VERTICES, context.temp_allocator)
 			other := make([][3]f32, WIND_VERTICES, context.temp_allocator)
 			color := make([][4]u8, WIND_VERTICES, context.temp_allocator)
+			// Plan screen: 40 % opacity (design).
+			alpha: f32 = w.screen == .Plan ? 0.4 : 0.8
 			for i in 0 ..< WIND_PARTICLES {
 				v := [2]f32{wp.vx[i], wp.vy[i]}
-				if linalg.length(v) < WIND_CALM_MS do continue
+				speed := linalg.length(v)
+				if speed < WIND_CALM_MS do continue
 				p := [2]f32{wp.x[i], wp.y[i]}
-				fade := math.sin(math.PI * wp.age[i] / WIND_LIFE_S)
+				fade := math.sin(math.PI * wp.age[i] / WIND_LIFE_S) * alpha
 				tail := p - v * km_per_ms * WIND_TRAIL_S
-				line_quad(pos, other, color, i * 6, p, tail, {WIND_COLOR, 0, 0, u8(fade * 255)})
+				k := speed < 6 ? 0 : speed < 10 ? 1 : speed < 14 ? 2 : 3
+				line_quad(pos, other, color, i * 6, p, tail, {u8(WIND_COLOR + k), 0, 0, u8(fade * 255)})
 			}
 			rl.UpdateMeshBuffer(lm.wind, 0, raw_data(pos), i32(len(pos) * size_of(pos[0])), 0)
 			rl.UpdateMeshBuffer(lm.wind, 2, raw_data(other), i32(len(other) * size_of(other[0])), 0)
 			rl.UpdateMeshBuffer(lm.wind, 3, raw_data(color), i32(len(color) * size_of(color[0])), 0)
 		}
 
-		rl.BeginMode2D(cam)
+		// A tilted camera: the far land fades into the horizon color (design "Kaart").
+		if tilt := w.cam.pose.tilt; tilt > 0.05 {
+			h := i32(w.cam.screen.y * 0.45)
+			rl.DrawRectangleGradientV(
+				0,
+				0,
+				i32(w.cam.screen.x),
+				h,
+				rl.ColorAlpha(pal.horizon, min(tilt / 0.9, 1)),
+				rl.ColorAlpha(pal.horizon, 0),
+			)
+		}
+
+		// Everything lies on the ground plane (z = 0): raylib's depth test passes equal depths, so later draws go on
+		// top. Triangles face the camera when they are counter-clockwise on the map (x east, y south).
+		rl.BeginMode3D(w.cam.view)
+
+		// Draw order 2: ground layers.
+		if w.screen == .Plan || w.nav_wind do layers_draw_ground(w)
+
+		// A* scan animation: replays the order the last route search expanded its nodes (grid.expanded), a
+		// faint accent square per 1 km cell, over SCAN_S after a new plan. The router does no extra work.
+		if w.scan_s > 0 && w.scan_s < SCAN_S && w.screen == .Plan {
+			w.scan_s += frame_dt
+			g := &w.grid
+			shown := int(f32(g.expanded_len) * min(w.scan_s / (SCAN_S * 0.7), 1))
+			fade := 1 - clamp((w.scan_s - SCAN_S * 0.7) / (SCAN_S * 0.3), 0, 1)
+			c := rl.ColorAlpha(pal.accent, 0.18 * fade)
+			for n in g.expanded[:shown] {
+				cell := grid_cell(n)
+				x, y := f32(cell.x) * GRID_CELL_KM, f32(cell.y) * GRID_CELL_KM
+				a, b := [3]f32{x + 0.1, y + 0.1, 0}, [3]f32{x + 0.1, y + 0.9, 0}
+				c2, d := [3]f32{x + 0.9, y + 0.9, 0}, [3]f32{x + 0.9, y + 0.1, 0}
+				rl.DrawTriangle3D(a, b, c2, c)
+				rl.DrawTriangle3D(a, c2, d, c)
+			}
+		}
+
+		// Draw order 3: road casings, then the fills. Widths are pixels on the screen (design "De kaart": 10 / 8 /
+		// 6 px + 2 px casing per side). The design's zoom range ends at a ~16 km wide view; zoomed out further
+		// the widths shrink and the street classes drop out, otherwise all of Belgium is one blob of roads.
 		{
-			screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
-			uniform: [LINE_COLORS][4]f32
-			// Until the road casings: the border in text_2 (the design has no border color), rivers in the water
-			// color, roads in the design's fill color of their class (trunk / primary = main road, secondary /
-			// tertiary = street).
-			uniform[Map_Kind.Border] = rl.ColorNormalize(pal.text_2)
-			uniform[Map_Kind.River] = rl.ColorNormalize(pal.water)
-			uniform[Map_Kind.Tertiary] = rl.ColorNormalize(pal.street)
-			uniform[Map_Kind.Secondary] = rl.ColorNormalize(pal.street)
-			uniform[Map_Kind.Primary] = rl.ColorNormalize(pal.main_road)
-			uniform[Map_Kind.Trunk] = rl.ColorNormalize(pal.main_road)
-			uniform[Map_Kind.Motorway] = rl.ColorNormalize(pal.motorway)
-			uniform[WIND_COLOR] = rl.ColorNormalize(pal.text)
-			rl.SetShaderValue(lm.material.shader, lm.loc_screen, &screen, .VEC2)
-			rl.SetShaderValueV(lm.material.shader, lm.loc_colors, &uniform, .VEC4, LINE_COLORS)
-			if lm.map_lines.vertexCount > 0 do rl.DrawMesh(lm.map_lines, lm.material, rl.Matrix(1))
-			rl.DrawMesh(lm.wind, lm.material, rl.Matrix(1))
-		}
-		rl.EndMode2D()
-		airship_draw(w, cam)
-
-		// Labels in screen space, so dots and text keep their pixel size at every zoom.
-		// Names are 0-terminated UTF-8 from the bake, the default raylib font covers Latin-1 (Liege has an e grave).
-		// Off screen: dropped. Overlapping an earlier label: only the dot. Earlier = first in the bake, there is
-		// no population yet to rank cities by.
-		labels := make([dynamic]Label, 0, len(w.m.cities), context.temp_allocator)
-		screen_rect := rl.Rectangle{0, 0, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
-		for &c in w.m.cities {
-			p := rl.GetWorldToScreen2D(c.pos, cam)
-			text := cstring(raw_data(c.name[:]))
-			l := Label {
-				dot   = p,
-				rect  = {
-					p.x + 6 - LABEL_GAP_PX,
-					p.y - LABEL_PX / 2 - LABEL_GAP_PX,
-					f32(rl.MeasureText(text, LABEL_PX)) + 2 * LABEL_GAP_PX,
-					LABEL_PX + 2 * LABEL_GAP_PX,
-				},
-				text  = text,
-				shown = true,
+			screen := w.cam.screen
+			z := w.cam.pose.zoom
+			// Full design widths from zoom ~4.5 (a ~16 km wide view), eased in so a city-to-city view stays light.
+			t := clamp((z - 1.5) / 3, 0, 1)
+			t *= t
+			streets := clamp((z - 3) / 1.5, 0, 1)
+			fill, casing: [LINE_COLORS]f32
+			fill[Map_Kind.Border] = 1.5
+			fill[Map_Kind.River] = 1.5 + 2.5 * t
+			fill[Map_Kind.Motorway] = 2 + 8 * t
+			fill[Map_Kind.Trunk] = 1 + 7 * t
+			fill[Map_Kind.Primary] = 1 + 7 * t
+			fill[Map_Kind.Secondary] = streets * 6
+			fill[Map_Kind.Tertiary] = streets * 6
+			for k in ([?]Map_Kind{.Motorway, .Trunk, .Primary, .Secondary, .Tertiary}) {
+				if fill[k] > 0 do casing[k] = fill[k] + 4 * t
 			}
-			if !rl.CheckCollisionPointRec(p, screen_rect) && !rl.CheckCollisionRecs(l.rect, screen_rect) do continue
-			for &prev in labels {
-				if prev.shown && rl.CheckCollisionRecs(l.rect, prev.rect) do l.shown = false
+			for k in 0 ..< WIND_COLOR_COUNT do fill[WIND_COLOR + k] = 1.5
+			colors, casing_colors: [LINE_COLORS][4]f32
+			colors[Map_Kind.Border] = rl.ColorNormalize(pal.text_2)
+			colors[Map_Kind.River] = rl.ColorNormalize(pal.water)
+			colors[Map_Kind.Tertiary] = rl.ColorNormalize(pal.street)
+			colors[Map_Kind.Secondary] = rl.ColorNormalize(pal.street)
+			colors[Map_Kind.Primary] = rl.ColorNormalize(pal.main_road)
+			colors[Map_Kind.Trunk] = rl.ColorNormalize(pal.main_road)
+			colors[Map_Kind.Motorway] = rl.ColorNormalize(pal.motorway)
+			wind := wind_colors(w)
+			for c, k in wind do colors[WIND_COLOR + k] = rl.ColorNormalize(c)
+			casing_colors[Map_Kind.Tertiary] = rl.ColorNormalize(pal.street_casing)
+			casing_colors[Map_Kind.Secondary] = rl.ColorNormalize(pal.street_casing)
+			casing_colors[Map_Kind.Primary] = rl.ColorNormalize(pal.main_road_casing)
+			casing_colors[Map_Kind.Trunk] = rl.ColorNormalize(pal.main_road_casing)
+			casing_colors[Map_Kind.Motorway] = rl.ColorNormalize(pal.motorway_casing)
+			horizon := rl.ColorNormalize(pal.horizon).rgb
+			// Fog starts a bit beyond the ship in the chase view, none from above.
+			dist := linalg.length(w.cam.view.position - w.cam.view.target)
+			fog := w.cam.pose.tilt > 0.05 ? [2]f32{dist * 1.2, dist * 3.5} : [2]f32{1e9, 2e9}
+			sh := lm.material.shader
+			rl.SetShaderValue(sh, lm.loc_screen, &screen, .VEC2)
+			rl.SetShaderValue(sh, lm.loc_fog_c, &horizon, .VEC3)
+			rl.SetShaderValue(sh, lm.loc_fog_r, &fog, .VEC2)
+			if lm.map_lines.vertexCount > 0 {
+				bias := f32(LINE_DEPTH_BIAS)
+				rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
+				rl.SetShaderValueV(sh, lm.loc_colors, &casing_colors, .VEC4, LINE_COLORS)
+				rl.SetShaderValueV(sh, lm.loc_widths, &casing, .FLOAT, LINE_COLORS)
+				rl.DrawMesh(lm.map_lines, lm.material, rl.Matrix(1))
+				bias = 2 * LINE_DEPTH_BIAS
+				rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
+				rl.SetShaderValueV(sh, lm.loc_colors, &colors, .VEC4, LINE_COLORS)
+				rl.SetShaderValueV(sh, lm.loc_widths, &fill, .FLOAT, LINE_COLORS)
+				rl.DrawMesh(lm.map_lines, lm.material, rl.Matrix(1))
 			}
-			append(&labels, l)
+			bias := f32(3 * LINE_DEPTH_BIAS)
+			rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
+			rl.SetShaderValueV(sh, lm.loc_colors, &colors, .VEC4, LINE_COLORS)
+			rl.SetShaderValueV(sh, lm.loc_widths, &fill, .FLOAT, LINE_COLORS)
+			if show_wind do rl.DrawMesh(lm.wind, lm.material, rl.Matrix(1))
 		}
-		for &l in labels {
-			rl.DrawCircleV(l.dot, 3, pal.text)
-			if l.shown do rl.DrawText(l.text, i32(l.rect.x + LABEL_GAP_PX), i32(l.rect.y + LABEL_GAP_PX), LABEL_PX, pal.text)
-		}
+		rl.EndMode3D()
 
-		// Toolbar: map / drive mode, sim speed, theme. The same keys still work (M, 1-4, T).
-		// A click changes the state after this frame's update, so it shows from the next frame on.
-		rl.DrawRectangleRec(toolbar, pal.surface)
-		r := rl.Rectangle{toolbar.x + UI_PAD, toolbar.y + UI_PAD, UI_BUTTON_W, UI_BUTTON_H}
-		if ui_button(w, r, "Map", !w.drive_mode) do w.drive_mode = false
-		r.x += UI_BUTTON_W + UI_GAP
-		if ui_button(w, r, "Drive", w.drive_mode) do w.drive_mode = true
-		r.x += UI_BUTTON_W + UI_GROUP_GAP
-		for s, i in speeds {
-			if ui_button(w, r, fmt.tprintf("%.0fx", s), w.sim_speed == i) do w.sim_speed = i
-			r.x += UI_BUTTON_W + UI_GAP
+		// Draw order 5 and 6: routes, then the airship (only while flying).
+		nav_draw_routes(w)
+		if w.screen == .Navigate do airship_draw(w)
+
+		// Draw order 7: hub markers with their names (design: green 26 px circle, white 2 px border, tower icon
+		// 15 px, name in Figtree 600 13 px). Names are the real ones from belgium.bin. Screen space, culled: a
+		// name that overlaps an earlier one is dropped, the marker stays.
+		{
+			labels := make([dynamic]rl.Rectangle, 0, w.m.hub_count, context.temp_allocator)
+			for i in 0 ..< w.m.hub_count {
+				h := w.m.hubs[i].pos
+				p, visible := cam_to_screen(w, {h.x, h.y, 0})
+				if !visible do continue
+				name := hub_name(w, i)
+				size := ui_text_size(w, name, .Figtree_600, 13)
+				rect := rl.Rectangle{p.x + HUB_MARKER_PX / 2 + 4, p.y - size.y / 2, size.x, size.y}
+				shown := true
+				for prev in labels do if rl.CheckCollisionRecs(rect, prev) do shown = false
+				rl.DrawCircleV(p, HUB_MARKER_PX / 2, rl.WHITE)
+				rl.DrawCircleV(p, HUB_MARKER_PX / 2 - 2, pal.hub)
+				ui_icon(w, .Tower, p, 15, rl.WHITE)
+				if !shown do continue
+				append(&labels, rect)
+				for o in ([?][2]f32{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}) {
+					ui_text(w, {rect.x, rect.y} + o, name, .Figtree_600, 13, pal.label_halo)
+				}
+				ui_text(w, {rect.x, rect.y}, name, .Figtree_600, 13, pal.area_label)
+			}
 		}
-		r.x += UI_GROUP_GAP - UI_GAP
-		THEME_NAMES :: [Theme]string {
-			.Day   = "Day",
-			.Night = "Night",
-		}
-		names := THEME_NAMES
-		for name, theme in names {
-			if ui_button(w, r, name, w.theme == theme) do w.theme = theme
-			r.x += UI_BUTTON_W + UI_GAP
+		nav_draw_trip_markers(w)
+
+		// Draw order 8: the screen UI.
+		switch w.screen {
+		case .Plan:
+			nav_draw_bubbles(w)
+			plan_ui(w)
+			plan_map_controls(w)
+		case .Navigate:
+			nav_ui(w)
+			pilot_ui(w)
 		}
 	}
 	{
 		// The OpenStreetMap license (ODbL) asks for this credit wherever the map is shown.
-		CREDIT :: "\u00a9 OpenStreetMap contributors"
+		CREDIT :: "© OpenStreetMap contributors"
 		PAD :: 4
 		text := ui_text_size(w, CREDIT, .Roboto_400, 12)
 		screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 		box := linalg.floor(screen - text - 2 * PAD)
 		rl.DrawRectangleV(box, text + 2 * PAD, rl.ColorAlpha(pal.surface, 0.8))
 		ui_text(w, box + PAD, CREDIT, .Roboto_400, 12, pal.text_2)
+	}
+	ui_toast_draw(w)
+
+	// Loading screen (design "Laadscherm"): night sky, a 38 px ring with a cyan top turning once per 0.9 s, then
+	// it fades out in 0.4 s. Covers the first frames while the map mesh and the fonts are built.
+	w.loading_s += frame_dt
+	if w.loading_s < LOADING_MIN_S + LOADING_FADE_S {
+		night := PALETTES[.Night]
+		alpha := 1 - clamp((w.loading_s - LOADING_MIN_S) / LOADING_FADE_S, 0, 1)
+		screen := w.cam.screen
+		rl.DrawRectangleV({0, 0}, screen, rl.ColorAlpha(night.sky, alpha))
+		c := screen / 2 - {0, 16}
+		angle := w.loading_s / LOADING_TURN_S * 360
+		rl.DrawRing(c, 16, 19, 0, 360, 48, rl.ColorAlpha(night.surface_3, alpha))
+		rl.DrawRing(c, 16, 19, angle - 90, angle, 24, rl.ColorAlpha(night.route, alpha))
+		text := "Building the map of Belgium..."
+		size := ui_text_size(w, text, .Roboto_400, 14)
+		ui_text(w, {c.x - size.x / 2, c.y + 34}, text, .Roboto_400, 14, rl.ColorAlpha(night.text_2, alpha))
 	}
 	prof_end(w, .Draw, t)
 
@@ -405,7 +540,9 @@ game_update :: proc(memory: rawptr) -> bool {
 			worst: f32
 			for ms in p.frame_ms do worst = max(worst, ms)
 			MB :: f32(1 << 20)
-			rl.DrawRectangle(8, 8, 300, 132, {0, 0, 0, 170})
+			x0 := i32(w.cam.screen.x) - 316 - 88 // left of the map controls column
+			y0 := i32(w.cam.screen.y) - 170
+			rl.DrawRectangle(x0, y0, 300, 132, {0, 0, 0, 170})
 			lines := [?]cstring {
 				fmt.ctprintf(
 					"frame %.2f ms (update %.2f, draw %.2f)",
@@ -424,21 +561,27 @@ game_update :: proc(memory: rawptr) -> bool {
 				),
 				fmt.ctprintf("frame arena %.1f KB", f32(p.frame_used) / 1024),
 			}
-			for line, i in lines do rl.DrawText(line, 14, 14 + i32(i) * 12, 10, rl.RAYWHITE)
+			for line, i in lines do rl.DrawText(line, x0 + 6, y0 + 6 + i32(i) * 12, 10, rl.RAYWHITE)
 
 			// 2 px per frame, oldest on the left, 10 px per ms, the yellow line is the budget.
-			base :: 134
+			base := y0 + 126
 			rl.DrawLine(
-				14,
+				x0 + 6,
 				base - FRAME_BUDGET_MS * 10,
-				14 + PROF_FRAMES * 2,
+				x0 + 6 + PROF_FRAMES * 2,
 				base - FRAME_BUDGET_MS * 10,
 				rl.YELLOW,
 			)
 			for i in 0 ..< PROF_FRAMES {
 				ms := p.frame_ms[(p.head + i) % PROF_FRAMES]
 				h := clamp(i32(ms * 10), 1, 60)
-				rl.DrawRectangle(14 + i32(i) * 2, base - h, 2, h, ms > FRAME_BUDGET_MS ? rl.RED : rl.GREEN)
+				rl.DrawRectangle(
+					x0 + 6 + i32(i) * 2,
+					base - h,
+					2,
+					h,
+					ms > FRAME_BUDGET_MS ? rl.RED : rl.GREEN,
+				)
 			}
 		}
 	}
@@ -470,6 +613,7 @@ game_shutdown :: proc(memory: rawptr) {
 	virtual.arena_destroy(&w.fetch.mem)
 	virtual.arena_destroy(&w.node.mem)
 	virtual.arena_destroy(&w.frame)
+	virtual.arena_destroy(&w.plan_mem)
 	virtual.arena_destroy(&w.route_mem)
 	perm := w.perm
 	virtual.arena_destroy(&perm)
