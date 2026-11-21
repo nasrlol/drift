@@ -65,6 +65,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   step and nothing is recorded.
                   Drive mode: Controls go to ship_step and the replay record, the camera sits on the ship, only the
                   wheel zooms. The ship is drawn as an 8 px red triangle pointing along its heading in both modes.
+                  Colors (render.odin): every drawn color comes from Palette, PALETTES has one per Theme (Day,
+                  Night). w.theme (zero = Day) picks it, key T toggles. World keeps the enum, not a pointer: a pointer
+                  into this library's constants would dangle after a hot reload. The map line colors go to the mesh
+                  shader as a uniform, so switching the theme does not rebuild anything. The profiler overlay keeps
+                  its own fixed colors.
                   Map drawing (render.odin, built inline in game_update): the whole map is one static mesh, built on
                   the first frame (needs the window, never in headless) and drawn with one rl.DrawMesh in Mode2D.
                   Each segment is a quad of 6 vertices (2 triangles, no index buffer: raylib indices are u16 and

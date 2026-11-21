@@ -56,6 +56,7 @@ World :: struct {
 	prof:         Profiler,
 	view:         View,
 	map_mesh:     Map_Mesh,
+	theme:        Theme, // zero = day, T toggles
 }
 
 @(export)
@@ -128,6 +129,7 @@ game_update :: proc(memory: rawptr) -> bool {
 	w.controls = read_controls()
 
 	if rl.IsKeyPressed(.M) do w.drive_mode = !w.drive_mode
+	if rl.IsKeyPressed(.T) do w.theme = w.theme == .Day ? .Night : .Day
 	for key, i in ([?]rl.KeyboardKey{.ONE, .TWO, .THREE, .FOUR}) {
 		if rl.IsKeyPressed(key) do w.sim_speed = i
 	}
@@ -190,9 +192,12 @@ game_update :: proc(memory: rawptr) -> bool {
 		}
 	}
 
+	palettes := PALETTES
+	pal := &palettes[w.theme]
+
 	rl.BeginDrawing()
 	t = prof_begin()
-	rl.ClearBackground(rl.RAYWHITE)
+	rl.ClearBackground(pal.background)
 	{
 		mm := &w.map_mesh
 		if !mm.built {
@@ -250,30 +255,25 @@ game_update :: proc(memory: rawptr) -> bool {
 			)
 		}
 
-		colors := [Map_Kind]rl.Color {
-			.Border   = rl.DARKGRAY,
-			.River    = rl.BLUE,
-			.Motorway = rl.ORANGE,
-		}
 		rl.BeginMode2D(cam)
 		if mm.mesh.vertexCount > 0 {
 			screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 			uniform: [Map_Kind][4]f32
-			for c, k in colors do uniform[k] = rl.ColorNormalize(c)
+			for c, k in pal.lines do uniform[k] = rl.ColorNormalize(c)
 			rl.SetShaderValue(mm.material.shader, mm.loc_screen, &screen, .VEC2)
 			rl.SetShaderValueV(mm.material.shader, mm.loc_colors, &uniform, .VEC4, len(uniform))
 			rl.DrawMesh(mm.mesh, mm.material, rl.Matrix(1))
 		}
 		// 8 px marker pointing along the heading, DrawPoly puts the first corner at the rotation angle.
-		rl.DrawPoly(w.ship.pos, 3, 8 / cam.zoom, math.to_degrees(w.ship.heading) - 90, rl.RED)
+		rl.DrawPoly(w.ship.pos, 3, 8 / cam.zoom, math.to_degrees(w.ship.heading) - 90, pal.ship)
 		rl.EndMode2D()
 
 		// Cities in screen space, so dots and text keep their pixel size at every zoom.
 		// Names are 0-terminated UTF-8 from the bake, the default raylib font covers Latin-1 (Liege has an e grave).
 		for &c in w.m.cities {
 			p := rl.GetWorldToScreen2D(c.pos, cam)
-			rl.DrawCircleV(p, 3, rl.BLACK)
-			rl.DrawText(cstring(raw_data(c.name[:])), i32(p.x) + 6, i32(p.y) - 5, 10, rl.BLACK)
+			rl.DrawCircleV(p, 3, pal.city)
+			rl.DrawText(cstring(raw_data(c.name[:])), i32(p.x) + 6, i32(p.y) - 5, 10, pal.city)
 		}
 	}
 	prof_end(w, .Draw, t)

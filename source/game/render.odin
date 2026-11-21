@@ -3,6 +3,57 @@ package game
 
 import rl "vendor:raylib"
 
+// Every color that is drawn comes from the palette of the current theme. World keeps the theme, not a pointer
+// to the palette: a pointer into this library's constants would dangle after a hot reload.
+Theme :: enum u8 {
+	Day,
+	Night,
+}
+
+Palette :: struct {
+	background: rl.Color,
+	lines:      [Map_Kind]rl.Color,
+	city:       rl.Color,
+	ship:       rl.Color,
+	wind:       rl.Color,
+	panel:      rl.Color,
+	button:     rl.Color,
+	button_hot: rl.Color,
+	button_on:  rl.Color,
+	text:       rl.Color,
+}
+
+PALETTES :: [Theme]Palette {
+	.Day = {
+		background = {245, 245, 245, 255},
+		lines = {.Border = {80, 80, 80, 255}, .River = {0, 121, 241, 255}, .Motorway = {255, 161, 0, 255}},
+		city = {20, 20, 20, 255},
+		ship = {230, 41, 55, 255},
+		wind = {60, 90, 150, 255},
+		panel = {255, 255, 255, 220},
+		button = {225, 225, 225, 255},
+		button_hot = {200, 200, 200, 255},
+		button_on = {150, 190, 240, 255},
+		text = {20, 20, 20, 255},
+	},
+	.Night = {
+		background = {18, 22, 30, 255},
+		lines = {
+			.Border = {150, 150, 165, 255},
+			.River = {70, 140, 230, 255},
+			.Motorway = {230, 150, 40, 255},
+		},
+		city = {235, 235, 235, 255},
+		ship = {255, 90, 90, 255},
+		wind = {170, 200, 255, 255},
+		panel = {30, 34, 44, 220},
+		button = {50, 56, 70, 255},
+		button_hot = {70, 78, 96, 255},
+		button_on = {60, 100, 160, 255},
+		text = {235, 235, 235, 255},
+	},
+}
+
 // The whole map is one static mesh, uploaded once and drawn with one call. Drawing it as line strips sent
 // 36k points through the raylib batch every frame (8.6 ms). Each segment is a quad of two triangles whose
 // corners sit on the segment ends; the vertex shader pushes them sideways in screen space, so lines are
