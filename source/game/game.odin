@@ -311,10 +311,15 @@ game_update :: proc(memory: rawptr) -> bool {
 		{
 			screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 			uniform: [LINE_COLORS][4]f32
-			// Until the land use bake: the border in text_2 (the design has no border color), rivers in the water
-			// color, motorways in their fill color.
+			// Until the road casings: the border in text_2 (the design has no border color), rivers in the water
+			// color, roads in the design's fill color of their class (trunk / primary = main road, secondary /
+			// tertiary = street).
 			uniform[Map_Kind.Border] = rl.ColorNormalize(pal.text_2)
 			uniform[Map_Kind.River] = rl.ColorNormalize(pal.water)
+			uniform[Map_Kind.Tertiary] = rl.ColorNormalize(pal.street)
+			uniform[Map_Kind.Secondary] = rl.ColorNormalize(pal.street)
+			uniform[Map_Kind.Primary] = rl.ColorNormalize(pal.main_road)
+			uniform[Map_Kind.Trunk] = rl.ColorNormalize(pal.main_road)
 			uniform[Map_Kind.Motorway] = rl.ColorNormalize(pal.motorway)
 			uniform[WIND_COLOR] = rl.ColorNormalize(pal.text)
 			rl.SetShaderValue(lm.material.shader, lm.loc_screen, &screen, .VEC2)

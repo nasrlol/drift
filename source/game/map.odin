@@ -1,11 +1,12 @@
 package game
 
 MAP_MAGIC :: 0x54465244
-MAP_VERSION :: 2
+MAP_VERSION :: 3
 MAX_HUBS :: 32
 // Docking towers, top = ground + HUB_TOWER_M (spec).
 HUB_TOWER_M :: 58
 // Every point in belgium.bin lies inside 0..MAP_W_KM x 0..MAP_H_KM (same extent as the routing grid).
+// The bake clips lines to it (tools/bake_map has a copy of both).
 MAP_W_KM :: 286
 MAP_H_KM :: 237
 
@@ -25,9 +26,14 @@ Map_Hub :: struct {
 	pos:  [2]f32,
 	name: [32]u8,
 }
+// belgium.bin lists the lines in this order, so a bigger road is drawn on top of a smaller one.
 Map_Kind :: enum u32 {
 	Border,
 	River,
+	Tertiary,
+	Secondary,
+	Primary,
+	Trunk,
 	Motorway,
 }
 
