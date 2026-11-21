@@ -116,7 +116,26 @@ game_update :: proc(memory: rawptr) -> bool {
 	rl.BeginDrawing()
 	t = prof_begin()
 	rl.ClearBackground(rl.RAYWHITE)
-	rl.DrawText("hello raylib", 190, 200, 20, rl.DARKGRAY)
+	{
+		// km -> px: Camera2D zoom is px per km, the map centre lands on the screen centre.
+		// Points are [2]f32 km, the same layout as rl.Vector2, so the strips draw straight from map memory.
+		sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
+		cam := rl.Camera2D {
+			offset = {sw / 2, sh / 2},
+			target = {MAP_W_KM / 2, MAP_H_KM / 2},
+			zoom   = 0.95 * min(sw / MAP_W_KM, sh / MAP_H_KM),
+		}
+		colors := [Map_Kind]rl.Color {
+			.Border   = rl.DARKGRAY,
+			.River    = rl.BLUE,
+			.Motorway = rl.ORANGE,
+		}
+		rl.BeginMode2D(cam)
+		for l in w.m.lines {
+			rl.DrawLineStrip(raw_data(w.m.points[l.start:]), i32(l.count), colors[Map_Kind(l.kind)])
+		}
+		rl.EndMode2D()
+	}
 	prof_end(w, .Draw, t)
 
 	// Profiler overlay, F3 toggles it. It shows the previous frame and is not counted in draw ms.
