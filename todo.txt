@@ -57,7 +57,7 @@ LARS: ROUTING + NAVIGATION
 [x] cost per mode: fastest (time), greenest (energy), calmest (time x gusts)
 [x] ground speed: wind along track + sqrt(v^2 - crosswind^2), retry +6 m/s if < 2.5, block if < 1.5
 [x] energy: battery 180 kWh start 86%, P(v, g) = 3 + 0.0085 v^3 + 6 g, solar from cloud cover, climb cost
-[~] lars: path cleanup: skip redundant nodes, Chaikin, ramp to tower top, 40 m terrain clearance (waiting: #45, #46)
+[x] path cleanup: skip redundant nodes, Chaikin, ramp to tower top, 40 m terrain clearance
 [ ] metrics: time, kWh, gust index, vs straight-line baseline
 [ ] record expanded-node order into a flat array (for the scan animation)
 [ ] user-reported gust zones (fixed array, max 4), reroute around them
