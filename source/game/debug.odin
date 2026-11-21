@@ -1,12 +1,16 @@
 package game
 
 import "core:fmt"
+import "core:math"
 import "core:math/linalg"
 import "core:mem/virtual"
 import "core:os"
+import "core:reflect"
+import "core:slice"
 import "core:strconv"
 import "core:strings"
 import "core:time"
+import rl "vendor:raylib"
 
 // Timing is compiled in for debug and profile builds only. Wall-clock time is fine here,
 // it is only displayed and never fed back into the simulation.
@@ -56,6 +60,9 @@ ROUTE_MODE_NAMES :: [Route_Mode]string {
 //   route <from hub> <to hub> <fastest|greenest|calmest> <hour 0..8>
 //   no_fly <x km> <y km> <radius km> <ceiling m>   adds a zone to the first free slot of w.no_fly
 //   gust <x km> <y km> <radius km>                 adds a zone to the first free slot of w.gust_zones
+//   free <x km> <y km> <height m> <heading deg> <throttle> <turn> <climb> <seconds>
+//                                                  free flight (the street view's, ship_free_step) from rest
+//   free_on <throttle> <turn> <climb> <seconds>    free flight on from where the last one ended
 headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strings.Builder) -> bool {
 	t := prof_begin()
 	weather_ok := weather_load_snapshot(w, snapshot_path)
@@ -70,7 +77,7 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 		line := strings.trim_space(raw)
 		if line == "" || line[0] == '#' do continue
 
-		f: [8]string
+		f: [10]string
 		n := 0
 		for field in strings.fields_iterator(&line) {
 			if n == len(f) {
@@ -450,6 +457,70 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 				fmt.sbprintfln(out, "  not arrived after %.0f s, %.3f km left", limit, nv.remaining_km)
 			}
 			nav_stop(w)
+		case "free", "free_on":
+			// The car at rest at height m above the ground (free), or as the last free command left it
+			// (free_on), then fixed controls for the given seconds at SIM_DT. Prints where it ends, its speed,
+			// the wall hits and how many steps its centre was inside a building footprint (must be 0).
+			s := &w.ship
+			k := f[0] == "free" ? 5 : 1
+			v: [8]f32
+			sane := n == k + 4
+			for i in 0 ..< n - 1 {
+				ok: bool
+				v[i], ok = strconv.parse_f32(f[i + 1])
+				sane &&= ok && abs(v[i]) < 1e6
+			}
+			c := Controls{v[k - 1], v[k], v[k + 1]}
+			secs := v[k + 2]
+			sane &&= abs(c.throttle) <= 1 && abs(c.turn) <= 1 && abs(c.climb) <= 1 && secs > 0 && secs < 1e5
+			if f[0] == "free" {
+				sane &&= v[0] >= 0 && v[1] >= 0 && v[0] <= MAP_W_KM && v[1] <= MAP_H_KM && v[2] >= 0
+			}
+			if !sane {
+				logf(
+					w,
+					"headless",
+					"inputs line %d: %q, want: free <x km> <y km> <height m> <heading deg> <throttle> <turn> " +
+					"<climb> <seconds> or free_on <throttle> <turn> <climb> <seconds>",
+					line_no,
+					line,
+				)
+				return false
+			}
+			if f[0] == "free" {
+				s^ = {
+					pos       = {v[0], v[1]},
+					alt       = height_at(w, v[0], v[1]) + v[2],
+					heading   = v[3] * math.PI / 180,
+					used_kwh  = s.used_kwh,
+					solar_kwh = s.solar_kwh,
+				}
+			}
+			hits, inside := 0, 0
+			top: f32
+			for _ in 0 ..< int(secs / SIM_DT + 0.5) {
+				before := s.hit_s
+				ship_free_step(w, c, SIM_DT)
+				w.tick += 1
+				if s.hit_s < before do hits += 1
+				hag := s.alt - height_at(w, s.pos.x, s.pos.y)
+				if push, _ := collide_car(w, s.pos, hag - FREE_HOVER_M * 0.5, 0.01); push != {} do inside += 1
+				top = max(top, s.speed)
+			}
+			fmt.sbprintfln(
+				out,
+				"%s: after %.2f s at %.5f %.5f, height %.2f m, %.1f km/h (top %.1f), heading %.1f deg, %d wall hits, inside %d steps",
+				f[0],
+				secs,
+				s.pos.x,
+				s.pos.y,
+				s.alt - height_at(w, s.pos.x, s.pos.y),
+				s.speed * 3.6,
+				top * 3.6,
+				s.heading * 180 / math.PI,
+				hits,
+				inside,
+			)
 		case:
 			logf(w, "headless", "inputs line %d: unknown command %q", line_no, f[0])
 			return false
@@ -633,4 +704,307 @@ dump_world :: proc(w: ^World, out: ^strings.Builder) {
 		w.frame.total_used,
 		w.frame.total_reserved,
 	)
+}
+
+// Scripted run (--script <file>): the real window and drawing, driven by a text file with one command per line,
+// so a change to the picture is checked with screenshots instead of by hand. Every frame stands for exactly
+// SIM_DT and steps the simulation once, keys and mouse come only from the script (input.odin), and the weather
+// comes from a file, not the network, so the same script gives the same screenshots. # starts a comment.
+//   snapshot <file>                  weather snapshot (net.odin format), default the embedded fallback
+//   frame_ms <ms> [<ms> ...]         frame times to repeat (up to 8) instead of SIM_DT: uneven frames, as on a
+//                                    real screen, so a frame steps the simulation 0, 1 or 2 times
+//   ship <frame> <x km> <y km> <height above ground m> <heading deg>   the car there, at rest
+//   down <frame> <KEY>   up <frame> <KEY>   press <frame> <KEY>    raylib key names: W, SPACE, LEFT_SHIFT, V
+//   mouse <frame> <dx px> <dy px>    wheel <frame> <notches>
+//   shot <frame> <png file>          after everything of that frame is drawn
+//   flicker <from> <to> <max %>      share of pixels that flicker over these frames: a pixel that jumps away in
+//                                    one frame and back in the next (A-B-A, by more than 60 summed over r, g, b),
+//                                    which smooth motion never does; logs FAILED above max %
+//   quit <frame>
+// Frame 0 is the first frame; the loading screen covers the first ~80. The window keeps its size (1440 x 900):
+// SetWindowSize on a macOS Retina screen leaves raylib drawing into a quarter of the framebuffer.
+Script_Kind :: enum u8 {
+	Down,
+	Up,
+	Mouse,
+	Wheel,
+	Ship,
+	Shot,
+	Flicker,
+	Quit,
+}
+
+Script_Event :: struct {
+	frame: int,
+	kind:  Script_Kind,
+	key:   rl.KeyboardKey,
+	v:     [4]f32,
+	path:  string, // into the script text, perm arena
+}
+
+Script :: struct {
+	on:       bool,
+	frame:    int,
+	events:   []Script_Event, // perm arena, in frame order
+	next:     int, // first event after this frame
+	first:    int, // first event of this frame
+	down:     #sparse[rl.KeyboardKey]bool,
+	was:      #sparse[rl.KeyboardKey]bool,
+	mouse:    [2]f32, // this frame's mouse move, px
+	wheel:    f32,
+	failures: int, // shots that could not be written
+	frame_ms: [8]f32, // frame_ms pattern, zero = every frame SIM_DT
+	frame_n:  int,
+	// flicker: the last three frames (perm arena, 4 bytes per pixel) and the count so far
+	fl:       [3][]u8,
+	fl_size:  [2]i32,
+	fl_seen:  int, // frames captured in the current flicker range
+	fl_hits:  int,
+	fl_total: int,
+}
+
+// Reads and checks the whole script before the first frame: a bad line stops the run with its line number.
+@(export)
+game_script :: proc(memory: rawptr, path: string) -> bool {
+	w := (^World)(memory)
+	context.allocator = virtual.arena_allocator(&w.perm)
+	context.temp_allocator = virtual.arena_allocator(&w.frame)
+	defer virtual.arena_free_all(&w.frame)
+	data, err := os.read_entire_file(path, context.allocator)
+	if err != nil {
+		logf(w, "script", "cannot read %s: %v", path, err)
+		return false
+	}
+	events := make([dynamic]Script_Event, 0, 64)
+	snapshot := ""
+	frame_ms: [8]f32
+	frame_n := 0
+	text := string(data)
+	line_no := 0
+	for raw in strings.split_lines_iterator(&text) {
+		line_no += 1
+		line := strings.trim_space(raw)
+		if line == "" || line[0] == '#' do continue
+		f: [10]string
+		n := 0
+		for field in strings.fields_iterator(&line) {
+			if n == len(f) {
+				n += 1
+				break
+			}
+			f[n] = field
+			n += 1
+		}
+		num :: proc(s: string) -> (f32, bool) {
+			v, ok := strconv.parse_f32(s)
+			return v, ok && abs(v) < 1e7
+		}
+		frame, frame_ok := strconv.parse_int(f[1], 10)
+		frame_ok &&= frame >= 0
+		e := Script_Event {
+			frame = frame,
+		}
+		ok := false
+		switch f[0] {
+		case "snapshot":
+			snapshot, ok = f[1], n == 2
+		case "frame_ms":
+			ok = n >= 2 && n <= 9
+			for i in 1 ..< min(n, 9) {
+				v, v_ok := num(f[i])
+				ok &&= v_ok && v > 0 && v < 250
+				frame_ms[i - 1] = v
+			}
+			frame_n = n - 1
+		case "down", "up", "press":
+			key, key_ok := reflect.enum_from_name(rl.KeyboardKey, f[2])
+			ok = n == 3 && frame_ok && key_ok && key != .KEY_NULL
+			e.key = key
+			e.kind = f[0] == "up" ? .Up : .Down
+			if ok && f[0] == "press" {
+				append(&events, e)
+				e.frame += 1
+				e.kind = .Up
+			}
+		case "mouse":
+			x, x_ok := num(f[2])
+			y, y_ok := num(f[3])
+			e.kind, e.v.xy = .Mouse, {x, y}
+			ok = n == 4 && frame_ok && x_ok && y_ok
+		case "wheel":
+			x, x_ok := num(f[2])
+			e.kind, e.v.x = .Wheel, x
+			ok = n == 3 && frame_ok && x_ok
+		case "ship":
+			x, x_ok := num(f[2])
+			y, y_ok := num(f[3])
+			h, h_ok := num(f[4])
+			deg, deg_ok := num(f[5])
+			e.kind, e.v = .Ship, {x, y, h, deg}
+			on_map := x >= 0 && y >= 0 && x <= MAP_W_KM && y <= MAP_H_KM && h >= 0 && h <= SHIP_CEILING
+			ok = n == 6 && frame_ok && x_ok && y_ok && h_ok && deg_ok && on_map
+		case "shot":
+			e.kind, e.path = .Shot, f[2]
+			ok = n == 3 && frame_ok && strings.has_suffix(f[2], ".png")
+		case "flicker":
+			to, to_ok := strconv.parse_int(f[2], 10)
+			budget, budget_ok := num(f[3])
+			e.kind, e.v = .Flicker, {f32(to), budget, 0, 0}
+			ok = n == 4 && frame_ok && to_ok && to >= frame + 2 && budget_ok && budget >= 0
+		case "quit":
+			e.kind = .Quit
+			ok = n == 2 && frame_ok
+		}
+		if !ok {
+			logf(w, "script", "%s line %d: %q is not a valid command (see debug.odin)", path, line_no, line)
+			return false
+		}
+		if f[0] != "snapshot" && f[0] != "frame_ms" do append(&events, e)
+	}
+	slice.stable_sort_by(events[:], proc(a, b: Script_Event) -> bool {return a.frame < b.frame})
+	quits := false
+	for e in events do quits ||= e.kind == .Quit
+	if !quits {
+		logf(w, "script", "%s has no quit command", path)
+		return false
+	}
+	weather_ok := snapshot != "" ? weather_load_snapshot(w, snapshot) : weather_load_fallback(w)
+	if !weather_ok {
+		logf(w, "script", "weather snapshot %q does not load", snapshot)
+		return false
+	}
+	w.script = {
+		on       = true,
+		events   = events[:],
+		frame_ms = frame_ms,
+		frame_n  = frame_n,
+	}
+	logf(w, "script", "%s: %d events, last frame %d", path, len(events), events[len(events) - 1].frame)
+	return true
+}
+
+// Start of a scripted frame: key, mouse and ship commands of this frame.
+script_frame :: proc(w: ^World) {
+	sc := &w.script
+	sc.was = sc.down
+	sc.mouse, sc.wheel = {}, 0
+	sc.first = sc.next
+	for sc.next < len(sc.events) && sc.events[sc.next].frame <= sc.frame {
+		e := sc.events[sc.next]
+		sc.next += 1
+		switch e.kind {
+		case .Down:
+			sc.down[e.key] = true
+		case .Up:
+			sc.down[e.key] = false
+		case .Mouse:
+			sc.mouse += e.v.xy
+		case .Wheel:
+			sc.wheel += e.v.x
+		case .Ship:
+			s := &w.ship
+			s^ = {
+				pos       = e.v.xy,
+				alt       = height_at(w, e.v.x, e.v.y) + e.v.z,
+				heading   = e.v.w * math.PI / 180,
+				used_kwh  = s.used_kwh,
+				solar_kwh = s.solar_kwh,
+			}
+			w.pose_prev = ship_pose(s)
+			w.car_anim.seeded = false
+			w.street.seeded = false
+		case .Shot, .Flicker, .Quit:
+		}
+	}
+}
+
+// End of a scripted frame, after all drawing and before EndDrawing: screenshots and flicker counts, then true on
+// the quit frame.
+script_end :: proc(w: ^World) -> (quit: bool) {
+	sc := &w.script
+	// A flicker range that started earlier and has not ended: this frame counts.
+	for e in sc.events[:sc.first] {
+		if e.kind == .Flicker && sc.frame <= int(e.v.x) do script_flicker(w, e)
+	}
+	for e in sc.events[sc.first:sc.next] {
+		switch e.kind {
+		case .Shot:
+			// raylib batches 2D drawing: flush it, so the shot holds everything drawn this frame.
+			rl.EndScissorMode()
+			dir := os.dir(e.path)
+			if dir != "" && dir != "." do _ = os.make_directory_all(dir)
+			img := rl.LoadImageFromScreen()
+			ok := rl.ExportImage(img, strings.clone_to_cstring(e.path, context.temp_allocator))
+			if !ok do sc.failures += 1
+			logf(
+				w,
+				"script",
+				"frame %d: shot %s %dx%d %s",
+				sc.frame,
+				e.path,
+				img.width,
+				img.height,
+				ok ? "" : "FAILED",
+			)
+			rl.UnloadImage(img)
+		case .Flicker:
+			sc.fl_seen, sc.fl_hits, sc.fl_total = 0, 0, 0
+			script_flicker(w, e)
+		case .Quit:
+			quit = true
+			logf(w, "script", "frame %d: quit, %d shots or checks failed", sc.frame, sc.failures)
+		case .Down, .Up, .Mouse, .Wheel, .Ship:
+		}
+	}
+	sc.frame += 1
+	return quit
+}
+
+// One frame of a flicker range e (from e.frame to e.v.x): keeps the last three frames and counts the pixels of the
+// middle one that differ from both neighbours in the same direction.
+script_flicker :: proc(w: ^World, e: Script_Event) {
+	sc := &w.script
+	rl.EndScissorMode() // flush raylib's batch, as for a shot
+	img := rl.LoadImageFromScreen()
+	defer rl.UnloadImage(img)
+	size := [2]i32{img.width, img.height}
+	bytes := int(size.x) * int(size.y) * 4
+	if img.format != .UNCOMPRESSED_R8G8B8A8 || bytes == 0 do return
+	if sc.fl_size != size {
+		for &f in sc.fl do f = make([]u8, bytes, virtual.arena_allocator(&w.perm))
+		sc.fl_size = size
+		sc.fl_seen = 0
+	}
+	sc.fl[0], sc.fl[1], sc.fl[2] = sc.fl[1], sc.fl[2], sc.fl[0]
+	copy(sc.fl[2], ([^]u8)(img.data)[:bytes])
+	sc.fl_seen += 1
+	if sc.fl_seen >= 3 {
+		a, b, c := sc.fl[0], sc.fl[1], sc.fl[2]
+		for i := 0; i < bytes; i += 4 {
+			up, down := 0, 0
+			for k in i ..< i + 3 {
+				d0 := int(b[k]) - int(a[k])
+				d1 := int(b[k]) - int(c[k])
+				if d0 > 20 && d1 > 20 do up += min(d0, d1)
+				if d0 < -20 && d1 < -20 do down += min(-d0, -d1)
+			}
+			if up > 60 || down > 60 do sc.fl_hits += 1
+		}
+		sc.fl_total += bytes / 4
+	}
+	if sc.frame == int(e.v.x) {
+		pct := 100 * f64(sc.fl_hits) / f64(max(sc.fl_total, 1))
+		over := pct > f64(e.v.y)
+		if over do sc.failures += 1
+		logf(
+			w,
+			"script",
+			"frames %d..%d: %.4f %% of the pixels flicker (max %.4f %%) %s",
+			e.frame,
+			sc.frame,
+			pct,
+			e.v.y,
+			over ? "FAILED" : "ok",
+		)
+	}
 }

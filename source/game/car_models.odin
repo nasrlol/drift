@@ -24,10 +24,10 @@ Car_Skin :: enum u8 {
 	Cigarette,
 }
 CAR_SKIN_NAMES :: [Car_Skin]string {
-	.Concept = "Concept",
-	.Sport   = "Sport",
-	.Hatch   = "Hatch",
-	.Offroad = "4x4",
+	.Concept   = "Concept",
+	.Sport     = "Sport",
+	.Hatch     = "Hatch",
+	.Offroad   = "4x4",
 	.Cigarette = "Smoke",
 }
 CAR_SKIN_PATH :: "cache/car_skin.txt"
@@ -88,14 +88,14 @@ Body_Part :: struct {
 PAINT :: [4]u8{0, 0, 0, 255} // marker: use Body_Spec.paint
 
 Body_Spec :: struct {
-	keys:           []Body_Key,
-	parts:          []Body_Part,
-	r_low, r_belt:  f32, // corner radius at the floor and at the belt line
-	r_roof, crown:  f32, // roof corner radius, how much the roof and bonnet bulge in the middle
-	paint:          [3]u8,
-	wheel_x:        [2]f32, // front and rear axle
+	keys:             []Body_Key,
+	parts:            []Body_Part,
+	r_low, r_belt:    f32, // corner radius at the floor and at the belt line
+	r_roof, crown:    f32, // roof corner radius, how much the roof and bonnet bulge in the middle
+	paint:            [3]u8,
+	wheel_x:          [2]f32, // front and rear axle
 	wheel_z, wheel_r: f32, // half track, wheel radius
-	spare:          bool, // spare wheel on the tail
+	spare:            bool, // spare wheel on the tail
 }
 
 // What car_parts_draw needs of one generated skin.

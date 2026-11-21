@@ -167,7 +167,7 @@ pilot_ui :: proc(w: ^World) {
 		id, hot, fired := ui_widget(w, fly)
 		c := [2]f32{fly.x + fly.width / 2, fly.y + fly.height / 2}
 		on := n.manual || !n.active
-		bg := on ? pal.accent : w.theme == .Night ? rl.Color{48, 49, 52, 255} : pal.surface_2
+		bg := on ? pal.accent : pal.surface_2
 		rl.DrawCircleV(c, SELF_FLY_BUTTON / 2, hot && !on ? rl.ColorBrightness(bg, 0.1) : bg)
 		ui_icon(w, .Steer, c, 32, on ? pal.sheet : pal.accent)
 		ui_focus_ring(w, id, fly, SELF_FLY_BUTTON / 2)

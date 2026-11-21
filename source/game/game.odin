@@ -76,8 +76,7 @@ World :: struct {
 	fonts:           Fonts,
 	line_meshes:     Line_Meshes,
 	labels:          Map_Labels,
-	theme:           Theme, // zero = night (the design default), T toggles
-	palette:         Palette, // PALETTES[theme], copied every frame, read through palette(w)
+	palette:         Palette, // PALETTE, copied every frame, read through palette(w)
 	wind:            Wind_Particles,
 	airship:         Airship,
 	buildings:       Buildings,
@@ -96,7 +95,10 @@ World :: struct {
 	presence_send_s: f32,
 	presence_copy_s: f32,
 	street:          Street, // the third-person street view, street.odin
+	pose_prev:       Ship_Pose, // the ship before the last fixed step
+	pose:            Ship_Pose, // where the ship is drawn this frame (ship.odin)
 	collide:         Collide, // building footprints for free flight, collide.odin
+	script:          Script, // --script: keys, mouse and screenshots per frame, debug.odin
 }
 
 @(export)
@@ -196,10 +198,14 @@ game_update :: proc(memory: rawptr) -> bool {
 	defer virtual.arena_free_all(&w.frame)
 
 	t := prof_begin()
-	weather_poll(w)
-	node_poll(w)
+	if w.script.on {
+		script_frame(w)
+	} else {
+		weather_poll(w)
+		node_poll(w)
+	}
 	ui_begin(w)
-	keys := read_controls(w.street.on)
+	keys := read_controls(w)
 	pad := pilot_pad_controls(w)
 	w.controls = {
 		clamp(keys.throttle + pad.throttle, -1, 1),
@@ -209,11 +215,10 @@ game_update :: proc(memory: rawptr) -> bool {
 	typing := w.plan.editing != .None
 
 	if !typing {
-		if rl.IsKeyPressed(.T) do w.theme = w.theme == .Night ? .Day : .Night
 		// V: the third-person street view (street.odin), V again or Esc back to the map.
-		if rl.IsKeyPressed(.V) do street_toggle(w)
+		if key_pressed(w, .V) do street_toggle(w)
 		// M: free flight without a route (the old drive mode), or back to the plan screen.
-		if rl.IsKeyPressed(.M) && !w.street.on {
+		if key_pressed(w, .M) && !w.street.on {
 			if w.screen == .Plan {
 				nav_stop(w)
 				w.screen = .Navigate
@@ -223,19 +228,21 @@ game_update :: proc(memory: rawptr) -> bool {
 			}
 		}
 	}
-	if w.street.on && (w.screen != .Navigate || rl.IsKeyPressed(.ESCAPE)) {
+	if w.street.on && (w.screen != .Navigate || key_pressed(w, .ESCAPE)) {
 		street_toggle(w)
 	} else if w.screen == .Navigate {
-		if rl.IsKeyPressed(.ESCAPE) do pilot_exit(w)
+		if key_pressed(w, .ESCAPE) do pilot_exit(w)
 		// Design: whoever presses a steering key in navigation takes over at once.
 		if w.nav.active && !w.nav.manual && w.controls != {} do nav_set_manual(w, true)
 	} else {
 		plan_refresh(w)
 	}
 
-	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT)
+	// A scripted run steps exactly once per frame, unless it gives frame times (frame_ms).
+	w.accum += w.script.on && w.script.frame_n == 0 ? SIM_DT : f64(frame_time(w))
 	for w.accum >= SIM_DT {
 		if w.screen == .Navigate {
+			w.pose_prev = ship_pose(&w.ship)
 			c := w.controls
 			autopilot := w.nav.active && !w.nav.manual
 			// Street view by hand: free flight with momentum, the throttle is the thrust (no cruise control).
@@ -261,11 +268,26 @@ game_update :: proc(memory: rawptr) -> bool {
 		w.tick += 1
 		w.accum -= SIM_DT
 	}
-	carpool_frame(w, f32(min(f64(rl.GetFrameTime()), MAX_FRAME_DT)))
-	presence_frame(w, f32(min(f64(rl.GetFrameTime()), MAX_FRAME_DT)))
+	{
+		// Between the last two steps; a jump (a teleport, a new start) or no stepping at all draws the state as is.
+		now := ship_pose(&w.ship)
+		p := w.pose_prev
+		jump := abs(now.pos.x - p.pos.x) + abs(now.pos.y - p.pos.y) > 0.2
+		if w.screen != .Navigate || jump do p = now
+		t := f32(clamp(w.accum / SIM_DT, 0, 1))
+		w.pose = {
+			pos     = p.pos + (now.pos - p.pos) * f64(t),
+			alt     = p.alt + (now.alt - p.alt) * t,
+			heading = angle_lerp(p.heading, now.heading, t),
+		}
+	}
+	if !w.script.on {
+		carpool_frame(w, frame_time(w))
+		presence_frame(w, frame_time(w))
+	}
 	prof_end(w, .Update, t)
 
-	if rl.IsKeyPressed(.F5) {
+	if key_pressed(w, .F5) {
 		b := strings.builder_make(context.temp_allocator)
 		dump_world(w, &b)
 		fmt.print(strings.to_string(b))
@@ -275,14 +297,13 @@ game_update :: proc(memory: rawptr) -> bool {
 	// The keyboard and stick pan only on the plan screen, in navigation they steer the ship.
 	cam_update(w, !ui_mouse_captured(w) && !w.street.on, w.screen == .Plan && !typing)
 
-	palettes := PALETTES
-	w.palette = palettes[w.theme]
+	w.palette = PALETTE
 	pal := palette(w)
-	frame_dt := min(rl.GetFrameTime(), MAX_FRAME_DT)
+	frame_dt := frame_time(w)
 
 	rl.BeginDrawing()
 	t = prof_begin()
-	space := w.theme == .Night ? rl.Color{4, 7, 15, 255} : pal.sky
+	space := pal.sky
 	bg := rl.ColorLerp(pal.land, space, clamp(-w.cam.pose.zoom, 0, 1))
 	rl.ClearBackground(bg)
 	if w.street.on do street_draw(w)
@@ -543,11 +564,11 @@ game_update :: proc(memory: rawptr) -> bool {
 					ease_in_out(grow),
 					target,
 					BUILDINGS_CULL_KM + view_km,
-					rl.Matrix(1),
+					MAP_PLACEMENT,
 					look,
 				)
-				towns_draw(w, target, TOWN_REACH_KM, rl.Matrix(1))
-				nature_draw(w, target, TREE_REACH_KM, rl.Matrix(1))
+				towns_draw(w, target, TOWN_REACH_KM, MAP_PLACEMENT)
+				nature_draw(w, target, TREE_REACH_KM, MAP_PLACEMENT)
 			}
 		}
 		rl.EndMode3D()
@@ -612,28 +633,28 @@ game_update :: proc(memory: rawptr) -> bool {
 	}
 	ui_toast_draw(w)
 
-	// Loading screen (design "Laadscherm"): night sky, a 38 px ring with a cyan top turning once per 0.9 s, then
+	// Loading screen (design "Laadscherm", in the light palette): sky, a 38 px ring with a cyan top turning once per 0.9 s, then
 	// it fades out in 0.4 s. Covers the first frames while the map mesh and the fonts are built.
 	w.loading_s += frame_dt
 	if w.loading_s < LOADING_MIN_S + LOADING_FADE_S {
-		night := PALETTES[.Night]
+		pal := PALETTE
 		alpha := 1 - clamp((w.loading_s - LOADING_MIN_S) / LOADING_FADE_S, 0, 1)
 		screen := w.cam.screen
-		rl.DrawRectangleV({0, 0}, screen, rl.ColorAlpha(night.sky, alpha))
+		rl.DrawRectangleV({0, 0}, screen, rl.ColorAlpha(pal.sky, alpha))
 		c := screen / 2 - {0, 16}
 		angle := w.loading_s / LOADING_TURN_S * 360
-		rl.DrawRing(c, 16, 19, 0, 360, 48, rl.ColorAlpha(night.surface_3, alpha))
-		rl.DrawRing(c, 16, 19, angle - 90, angle, 24, rl.ColorAlpha(night.route, alpha))
+		rl.DrawRing(c, 16, 19, 0, 360, 48, rl.ColorAlpha(pal.surface_3, alpha))
+		rl.DrawRing(c, 16, 19, angle - 90, angle, 24, rl.ColorAlpha(pal.route, alpha))
 		text := "Building the map of Belgium..."
 		size := ui_text_size(w, text, .Roboto_400, 14)
-		ui_text(w, {c.x - size.x / 2, c.y + 34}, text, .Roboto_400, 14, rl.ColorAlpha(night.text_2, alpha))
+		ui_text(w, {c.x - size.x / 2, c.y + 34}, text, .Roboto_400, 14, rl.ColorAlpha(pal.text_2, alpha))
 	}
 	prof_end(w, .Draw, t)
 
 	// Profiler overlay, F3 or the Profiler toggle in the layers panel shows it. It shows the previous frame and is not counted in draw ms.
 	when PROFILING {
 		p := &w.prof
-		if rl.IsKeyPressed(.F3) do p.shown = !p.shown
+		if key_pressed(w, .F3) do p.shown = !p.shown
 		if p.shown {
 			worst: f32
 			for ms in p.frame_ms do worst = max(worst, ms)
@@ -683,6 +704,7 @@ game_update :: proc(memory: rawptr) -> bool {
 			}
 		}
 	}
+	quit := w.script.on && script_end(w)
 	rl.EndDrawing()
 
 	when PROFILING {
@@ -691,7 +713,14 @@ game_update :: proc(memory: rawptr) -> bool {
 		w.prof.frame_used = w.frame.total_used
 	}
 
-	return !rl.WindowShouldClose()
+	return !rl.WindowShouldClose() && !quit
+}
+
+// Seconds this frame stands for, for drawing and animation: the real frame time, or exactly one step in a
+// scripted run so its screenshots do not depend on the machine.
+frame_time :: proc(w: ^World) -> f32 {
+	if sc := &w.script; sc.on do return sc.frame_n > 0 ? sc.frame_ms[sc.frame % sc.frame_n] / 1000 : SIM_DT
+	return min(rl.GetFrameTime(), MAX_FRAME_DT)
 }
 
 // The host calls this on the old library right before it unloads it.

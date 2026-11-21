@@ -255,34 +255,36 @@ Car_Anim :: struct {
 	seeded:   bool,
 }
 
-// Eases w.car_anim towards the ship state: fly from the height above the road (landing and take-off show as the
-// arms swinging and the wheels tucking), bank from the turn rate, pitch from the climb, the heading without jumps.
+// Eases w.car_anim towards the drawn ship (w.pose and the ship state): fly from the height above the road (landing
+// and take-off show as the arms swinging and the wheels tucking), bank from the turn rate, pitch from the climb,
+// the heading without jumps.
 car_anim_update :: proc(w: ^World, dt: f32) {
 	s := &w.ship
+	p := w.pose
 	an := &w.car_anim
-	ground := height_at(w, s.pos.x, s.pos.y)
+	ground := height_at(w, f32(p.pos.x), f32(p.pos.y))
 	fly: f32 = 1
 	if s.on_road do fly = 0
-	else if s.landing || s.lifting do fly = clamp((s.alt - ground) / SHIP_MIN_CLEARANCE, 0, 1)
+	else if s.landing || s.lifting do fly = clamp((p.alt - ground) / SHIP_MIN_CLEARANCE, 0, 1)
 	if !an.seeded {
 		an^ = {
 			fly      = fly,
-			heading  = s.heading,
-			last_alt = s.alt,
+			heading  = p.heading,
+			last_alt = p.alt,
 			seeded   = true,
 		}
 	}
 	k := 1 - math.exp(-dt * CAR_ANIM_RATE)
 	an.fly += (fly - an.fly) * k
 	if dt > 0 {
-		an.climb_ms += ((s.alt - an.last_alt) / dt - an.climb_ms) * k
+		an.climb_ms += ((p.alt - an.last_alt) / dt - an.climb_ms) * k
 	}
-	an.last_alt = s.alt
+	an.last_alt = p.alt
 	bank := clamp(s.turn_rate / SHIP_MAX_TURN_RATE, -1, 1) * CAR_BANK * an.fly
 	pitch := clamp(an.climb_ms / SHIP_CLIMB_RATE, -1, 1) * CAR_PITCH * an.fly
 	an.bank += (bank - an.bank) * k
 	an.pitch += (pitch - an.pitch) * k
-	an.heading = angle_lerp(an.heading, s.heading, 1 - math.exp(-dt * CAR_HEADING_RATE))
+	an.heading = angle_lerp(an.heading, p.heading, 1 - math.exp(-dt * CAR_HEADING_RATE))
 	an.roll -= dt * s.speed / CAR_WHEEL_R * (1 - an.fly)
 	an.time += dt
 }
@@ -291,7 +293,15 @@ car_anim_update :: proc(w: ^World, dt: f32) {
 // camera that looks at it from the south. One world unit is one pixel, so the model stays px long at every zoom,
 // and the camera target is moved so the model lands on its screen position. The altitude shows in a tilted view
 // as the gap between the car and its shadow.
-car_draw :: proc(w: ^World, pos: [2]f32, alt, heading: f32, an: Car_Anim, px: f32, tint: rl.Color, skin: Car_Skin) {
+car_draw :: proc(
+	w: ^World,
+	pos: [2]f32,
+	alt, heading: f32,
+	an: Car_Anim,
+	px: f32,
+	tint: rl.Color,
+	skin: Car_Skin,
+) {
 	a := &w.airship
 	if !a.ready do return
 	ground := height_at(w, pos.x, pos.y)
@@ -338,10 +348,9 @@ car_draw :: proc(w: ^World, pos: [2]f32, alt, heading: f32, an: Car_Anim, px: f3
 	rl.EndMode3D()
 }
 
-// Sky, ground and sun of the map view (day or night) for CAR_FS, with the light and view direction.
+// Sky, ground and sun of the map view for CAR_FS, with the light and view direction.
 car_shader_light :: proc(w: ^World, light, view: [3]f32) {
 	sky, gnd, sun := [3]f32{0.72, 0.82, 0.98}, [3]f32{0.24, 0.26, 0.3}, f32(1)
-	if w.theme == .Night do sky, gnd, sun = {0.2, 0.26, 0.4}, {0.05, 0.06, 0.09}, 0.6
 	car_shader_set(w, light, view, sky, gnd, sun)
 }
 
@@ -358,7 +367,14 @@ car_shader_set :: proc(w: ^World, light, view, sky, gnd: [3]f32, sun: f32) {
 // Body and wheels of one skin with model matrix m (inside BeginMode3D). Wheels roll on the road and fold flat
 // (tread down, hub out) in the air; glow adds the thruster discs under the folded wheels. A generated skin moves
 // and scales the Car Concept wheels to its own axles.
-car_parts_draw :: proc(w: ^World, skin: Car_Skin, m: matrix[4, 4]f32, an: Car_Anim, mat: rl.Material, glow: bool) {
+car_parts_draw :: proc(
+	w: ^World,
+	skin: Car_Skin,
+	m: matrix[4, 4]f32,
+	an: Car_Anim,
+	mat: rl.Material,
+	glow: bool,
+) {
 	a := &w.airship
 	gen := &a.skins[skin]
 	concept := skin == .Concept || !gen.ready
@@ -394,7 +410,8 @@ car_parts_draw :: proc(w: ^World, skin: Car_Skin, m: matrix[4, 4]f32, an: Car_An
 	}
 	// The spare wheel on the tail, hub to the back.
 	if spare >= 0 && gen.spare != {} {
-		sm := m * linalg.matrix4_translate_f32(gen.spare) * linalg.matrix4_rotate_f32(-math.PI / 2, {0, 1, 0})
+		sm :=
+			m * linalg.matrix4_translate_f32(gen.spare) * linalg.matrix4_rotate_f32(-math.PI / 2, {0, 1, 0})
 		rl.DrawMesh(a.parts[spare].mesh, mat, rl.Matrix(sm * linalg.matrix4_scale_f32(gen.wheel_s)))
 	}
 }
@@ -402,7 +419,14 @@ car_parts_draw :: proc(w: ^World, skin: Car_Skin, m: matrix[4, 4]f32, an: Car_An
 // The car at real size in the street view (inside its BeginMode3D): pos in street space (m, y up). Lit by the
 // street view's sun and sky. No bob and no thruster glow, the street view shows the car as it is (Lars:
 // "realistisch, niet te veel animatie"); bank and pitch stay, they come from the flight.
-car_draw_street :: proc(w: ^World, pos: [3]f32, an: Car_Anim, tint: rl.Color, look: Street_Look, skin: Car_Skin) {
+car_draw_street :: proc(
+	w: ^World,
+	pos: [3]f32,
+	an: Car_Anim,
+	tint: rl.Color,
+	look: Street_Look,
+	skin: Car_Skin,
+) {
 	a := &w.airship
 	if !a.ready do return
 	view := linalg.normalize(w.street.view.position - pos)
@@ -419,9 +443,18 @@ car_draw_street :: proc(w: ^World, pos: [3]f32, an: Car_Anim, tint: rl.Color, lo
 
 // The player's car (navigation screen).
 airship_draw :: proc(w: ^World) {
-	car_anim_update(w, min(rl.GetFrameTime(), MAX_FRAME_DT))
+	car_anim_update(w, frame_time(w))
 	an := w.car_anim
-	car_draw(w, w.ship.pos, w.ship.alt, an.heading, an, CAR_PX, rl.WHITE, w.car_skin)
+	car_draw(
+		w,
+		{f32(w.pose.pos.x), f32(w.pose.pos.y)},
+		w.pose.alt,
+		an.heading,
+		an,
+		CAR_PX,
+		rl.WHITE,
+		w.car_skin,
+	)
 }
 
 // Other cars from the presence gossip, in the skin their player chose and a bit smaller, so the own car stands

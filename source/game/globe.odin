@@ -298,8 +298,7 @@ globe_draw :: proc(w: ^World) {
 	if !g.ready do return
 
 	pal := palette(w)
-	night := w.theme == .Night
-	ocean := rl.ColorNormalize(night ? rl.Color{13, 27, 46, 255} : rl.Color{185, 212, 236, 255}).rgb
+	ocean := rl.ColorNormalize(rl.Color{185, 212, 236, 255}).rgb
 	land := rl.ColorNormalize(pal.land).rgb
 	grid := rl.ColorNormalize(pal.text_2).rgb
 	atmo := rl.ColorNormalize(pal.accent).rgb

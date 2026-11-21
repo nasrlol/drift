@@ -183,14 +183,14 @@ cam_chase :: proc(w: ^World) {
 }
 
 cam_chase_pose :: proc(w: ^World, zoom: f32) -> Cam_Pose {
-	s := &w.ship
+	p := w.pose
 	ppk := cam_fit_scale(w.cam.screen) * math.pow(f32(2), zoom)
 	ahead := CAM_CHASE_AHEAD * w.cam.screen.y / ppk
-	fwd := [2]f32{math.sin(s.heading), -math.cos(s.heading)}
+	fwd := [2]f32{math.sin(p.heading), -math.cos(p.heading)}
 	return {
-		pan = s.pos + fwd * ahead - [2]f32{MAP_W_KM, MAP_H_KM} / 2,
+		pan = [2]f32{f32(p.pos.x), f32(p.pos.y)} + fwd * ahead - [2]f32{MAP_W_KM, MAP_H_KM} / 2,
 		zoom = zoom,
-		yaw = s.heading,
+		yaw = p.heading,
 		tilt = CAM_CHASE_TILT,
 	}
 }
@@ -241,7 +241,7 @@ cam_zoom_by :: proc(w: ^World, steps: f32, anchor: [2]f32) {
 // or the preview, then the raylib camera for this frame. Drawing only, frame time is fine.
 cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 	c := &w.cam
-	dt := min(rl.GetFrameTime(), MAX_FRAME_DT)
+	dt := frame_time(w)
 	c.screen = {f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 	c.view, c.px_per_km = cam_build(c.pose, c.screen)
 	pan0 := c.pose.pan // where the screen centre was last frame, over Belgium (see the end)

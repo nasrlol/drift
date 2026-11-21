@@ -105,7 +105,8 @@ not.
 
 ## Hard limits
 
-- Odin only. Allowed imports: core:*, base:*, vendor:raylib, vendor:curl, our own packages.
+- Odin only. Allowed imports: core:*, base:*, vendor:raylib (and its rlgl module, vendor:raylib/rlgl), vendor:curl,
+  our own packages.
 - Simulation code (terrain, weather, route, ship, nav) never imports raylib.
 - No map iteration, no wall-clock time, no threads, no unseeded randomness in simulation code.
 - No new files named utils, helpers, common, types or misc. No test files outside test/.

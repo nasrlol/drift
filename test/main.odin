@@ -6,9 +6,12 @@ package test
 import game "../source/game"
 import "core:crypto/ed25519"
 import "core:fmt"
+import "core:math"
+import "core:math/linalg"
 import "core:mem/virtual"
 import "core:os"
 import "core:slice"
+import "core:strconv"
 import "core:strings"
 
 Case :: struct {
@@ -66,7 +69,8 @@ main :: proc() {
 	}
 	if !run_scan_order() do failed += 1
 	if !run_carpool() do failed += 1
-	fmt.printfln("test: %d passed, %d failed", len(CASES) + 2 - failed, failed)
+	if !run_free_flight() do failed += 1
+	fmt.printfln("test: %d passed, %d failed", len(CASES) + 3 - failed, failed)
 	os.exit(failed == 0 ? 0 : 1)
 }
 
@@ -315,5 +319,247 @@ run_carpool :: proc() -> bool {
 	stars, count := game.carpool_reputation(w, a)
 	if count != 1 || stars != 4 do return fail("reputation of A: %v stars from %d reviews, want 4 from 1", stars, count)
 	if _, cb := game.carpool_reputation(w, b); cb != 0 do return fail("B has %d reviews, want 0", cb)
+	return true
+}
+
+// Free flight in the street view (ship_free_step) through the headless free command. Catches a car that flies
+// through a building, does not stay on a roof, misses its top speed (252 km/h), ignores a crosswind, or flies a
+// different path for the same inputs.
+run_free_flight :: proc() -> bool {
+	World_Run :: struct {
+		w:   ^game.World,
+		out: string,
+	}
+	// A fresh World, the inputs through headless_run; the World is left open for the checks.
+	run :: proc(snapshot, inputs: string) -> (r: World_Run, ok: bool) {
+		r.w = (^game.World)(game.game_init())
+		if r.w == nil do return
+		context.allocator = virtual.arena_allocator(&r.w.perm)
+		b := strings.builder_make()
+		ok = game.headless_run(r.w, snapshot, transmute([]u8)inputs, &b)
+		r.out = strings.to_string(b)
+		return
+	}
+	// The number in front of what in the last line of out ("3 wall hits", "inside 0 steps").
+	count :: proc(out, what: string) -> int {
+		lines := strings.trim_space(out)
+		last := lines[strings.last_index_byte(lines, '\n') + 1:]
+		if what == "steps" {
+			i := strings.index(last, "inside ")
+			if i < 0 do return -1
+			n, _ := strconv.parse_int(strings.fields(last[i + 7:], context.temp_allocator)[0])
+			return n
+		}
+		i := strings.index(last, what)
+		if i < 0 do return -1
+		f := strings.fields(last[:i], context.temp_allocator)
+		n, _ := strconv.parse_int(f[len(f) - 1])
+		return n
+	}
+	inside :: proc(ring: [][2]f32, p: [2]f32) -> bool {
+		in_ring := false
+		for k in 0 ..< len(ring) {
+			a, b := ring[k], ring[(k + 1) % len(ring)]
+			if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (b.x - a.x) * (p.y - a.y) / (b.y - a.y) do in_ring = !in_ring
+		}
+		return in_ring
+	}
+	pose_km :: proc(w: ^game.World) -> [2]f32 {
+		p := game.ship_pose(&w.ship).pos
+		return {f32(p.x), f32(p.y)}
+	}
+	heading_deg :: proc(dir: [2]f32) -> f32 {
+		return math.atan2(dir.x, -dir.y) * 180 / math.PI
+	}
+
+	// A known building in Brussels: real footprint, at least 12 m high and 400 m2, its centroid inside it, with a
+	// wall of 12 m or more that has 9 m of free space in front of it.
+	base, base_ok := run("test/data/calm.snap", "")
+	if !base_ok {
+		fmt.println("test free_flight: cannot load test/data/calm.snap")
+		return false
+	}
+	w := base.w
+	defer game.game_shutdown(w)
+	context.allocator = virtual.arena_allocator(&w.perm)
+	context.temp_allocator = virtual.arena_allocator(&w.frame)
+	tower := w.ship.pos // game_init starts on the Brussels tower
+	game.collide_build(w)
+	co := &w.collide
+	ring: [][2]f32
+	height: f32
+	centre, start, wall_a, wall_b, toward: [2]f32
+	search: for bi in 0 ..< len(co.b_count) {
+		n := int(co.b_count[bi])
+		if n < 4 || co.b_height[bi] < 12 do continue
+		pts := co.points[co.b_start[bi]:][:n]
+		if linalg.length(pts[0] - tower) > 1 do continue
+		area: f32
+		c: [2]f32
+		for k in 0 ..< n {
+			// Relative to the first corner: km of ~140 squared in f32 would drown a 400 m2 area.
+			a, b := pts[k] - pts[0], pts[(k + 1) % n] - pts[0]
+			cr := a.x * b.y - b.x * a.y
+			area += cr / 2
+			c += (a + b) * cr
+		}
+		if abs(area) * 1e6 < 400 do continue
+		c = pts[0] + c / (6 * area)
+		if !inside(pts, c) do continue
+		for k in 0 ..< n {
+			a, b := pts[k], pts[(k + 1) % n]
+			if linalg.length(b - a) * 1000 < 12 do continue
+			mid := (a + b) / 2
+			d := linalg.normalize(b - a)
+			out := [2]f32{-d.y, d.x}
+			if linalg.dot(out, mid - c) < 0 do out = -out
+			for s: f32 = 0; s <= 6; s += 1 {
+				push, roof := game.collide_car(
+					w,
+					mid + out * (9 - s) / 1000,
+					2 - game.FREE_HOVER_M / 2,
+					game.FREE_RADIUS_M,
+				)
+				if push != {} || roof > 0 do continue search
+			}
+			ring, height, centre = pts, co.b_height[bi], c
+			start, wall_a, wall_b, toward = mid + out * 0.009, a, b, -out
+			break search
+		}
+	}
+	if ring == nil {
+		fmt.println(
+			"test free_flight: no building in Brussels with a free wall of 12 m, 12 m high, 9 m clear",
+		)
+		return false
+	}
+
+	// 1: full throttle into the wall from 9 m: stopped against it, never inside, at the car's radius.
+	{
+		r, ok := run(
+			"test/data/calm.snap",
+			fmt.tprintf("free %.5f %.5f 2 %.2f 1 0 0 6\n", start.x, start.y, heading_deg(toward)),
+		)
+		defer if r.w != nil do game.game_shutdown(r.w)
+		if !ok {
+			fmt.println("test free_flight: wall run failed")
+			return false
+		}
+		p := pose_km(r.w)
+		ab := wall_b - wall_a
+		q := wall_a + ab * clamp(linalg.dot(p - wall_a, ab) / linalg.dot(ab, ab), 0, 1)
+		dist := linalg.length(p - q) * 1000
+		if count(r.out, "steps") != 0 ||
+		   count(r.out, "wall hits") < 1 ||
+		   inside(ring, p) ||
+		   dist < game.FREE_RADIUS_M - 0.5 ||
+		   dist > game.FREE_RADIUS_M + 1 {
+			fmt.printfln(
+				"test free_flight: into the wall: %.2f m from it (want ~%.1f), inside the footprint %v\n  %s",
+				dist,
+				game.FREE_RADIUS_M,
+				inside(ring, p),
+				r.out,
+			)
+			return false
+		}
+	}
+
+	// 2: down onto the roof, then hands off: it hovers FREE_HOVER_M over the roof and stays there.
+	{
+		r, ok := run(
+			"test/data/calm.snap",
+			fmt.tprintf(
+				"free %.5f %.5f %.2f 0 0 0 -1 4\nfree_on 0 0 0 3\n",
+				centre.x,
+				centre.y,
+				height + 12,
+			),
+		)
+		defer if r.w != nil do game.game_shutdown(r.w)
+		s := &r.w.ship
+		hag := s.alt - game.height_at(r.w, s.pos.x, s.pos.y)
+		before := s.alt
+		more := strings.builder_make()
+		ok2 :=
+			ok &&
+			game.headless_run(r.w, "test/data/calm.snap", transmute([]u8)string("free_on 0 0 0 3\n"), &more)
+		if !ok2 || abs(hag - (height + game.FREE_HOVER_M)) > 0.25 || abs(s.alt - before) > 0.01 {
+			fmt.printfln(
+				"test free_flight: on the roof (%.1f m): %.2f m above the ground (want %.2f), then moved %.3f m\n  %s",
+				height,
+				hag,
+				height + game.FREE_HOVER_M,
+				s.alt - before,
+				r.out,
+			)
+			return false
+		}
+	}
+
+	// 3: full throttle in open country: top speed SHIP_MAX_SPEED (70 m/s, 252 km/h).
+	{
+		r, ok := run("test/data/calm.snap", "free 132.924 83.707 60 0 1 0 0 60\n")
+		defer if r.w != nil do game.game_shutdown(r.w)
+		if !ok || abs(r.w.ship.speed - game.SHIP_MAX_SPEED) > 0.5 || count(r.out, "wall hits") != 0 {
+			fmt.printfln(
+				"test free_flight: top speed %.2f m/s, want %.0f\n  %s",
+				r.w.ship.speed,
+				game.SHIP_MAX_SPEED,
+				r.out,
+			)
+			return false
+		}
+	}
+
+	// 4: across the wind at 300 m: the car drifts with it, sideways by about the wind speed.
+	{
+		r, ok := run("test/data/windy.snap", "")
+		defer if r.w != nil do game.game_shutdown(r.w)
+		x, y: f32 = 132.924, 83.707
+		alt := game.height_at(r.w, x, y) + 300
+		wind := game.wind_at(r.w, x, y, game.layer_at(alt), 0)
+		speed := linalg.length(wind)
+		if !ok || speed < 2 {
+			fmt.printfln(
+				"test free_flight: windy.snap has %.1f m/s at %.0f m there, too little for the test",
+				speed,
+				alt,
+			)
+			return false
+		}
+		across := linalg.normalize([2]f32{-wind.y, wind.x})
+		b := strings.builder_make()
+		inputs := fmt.tprintf("free %.3f %.3f 300 %.2f 0.5 0 0 20\n", x, y, heading_deg(across))
+		ok = game.headless_run(r.w, "test/data/windy.snap", transmute([]u8)inputs, &b)
+		moved := (pose_km(r.w) - {x, y}) * 1000
+		drift := linalg.dot(moved, wind / speed)
+		if !ok || drift < 0.8 * speed * 20 || drift > 1.05 * speed * 20 {
+			fmt.printfln(
+				"test free_flight: %.1f m/s across the wind for 20 s drifted %.1f m with it, want ~%.0f m\n  %s",
+				speed,
+				drift,
+				speed * 20,
+				strings.to_string(b),
+			)
+			return false
+		}
+	}
+
+	// 5: the same inputs twice (gusty weather, turning and climbing) give the same flight to the bit.
+	{
+		IN :: "free 139.50 79.30 40 30 1 0.4 0.3 8\nfree_on 0.5 -1 -0.5 6\n"
+		a, a_ok := run("test/data/windy.snap", IN)
+		defer if a.w != nil do game.game_shutdown(a.w)
+		b, b_ok := run("test/data/windy.snap", IN)
+		defer if b.w != nil do game.game_shutdown(b.w)
+		sa, sb := a.w.ship, b.w.ship
+		same := sa.pos == sb.pos && sa.pos_frac == sb.pos_frac && sa.alt == sb.alt && sa.vel == sb.vel
+		same &&= sa.heading == sb.heading && a.out == b.out
+		if !a_ok || !b_ok || !same {
+			fmt.printfln("test free_flight: the same inputs twice differ\n  %s\n  %s", a.out, b.out)
+			return false
+		}
+	}
 	return true
 }

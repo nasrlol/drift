@@ -20,8 +20,8 @@ nature_rand :: proc(seed: ^u32) -> f32 {
 	return f32(seed^ >> 8) / f32(1 << 24)
 }
 
-// The trees whose centre lies in lo ..< hi (Tile_Build). Each park triangle seeds its trees the same way for
-// every tile, a tile keeps the ones inside it.
+// The trees whose centre lies in lo ..< hi (Tile_Build), relative to lo. Each park triangle seeds its trees the
+// same way for every tile, a tile keeps the ones inside it.
 nature_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	pos := make([dynamic][3]f32, 0, 8192, context.temp_allocator)
 	col := make([dynamic][4]u8, 0, 8192, context.temp_allocator)
@@ -47,6 +47,7 @@ nature_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 				h := (0.010 + 0.014 * nature_rand(&seed)) // km
 				turn0 := nature_rand(&seed) * math.TAU
 				if c.x < lo.x || c.y < lo.y || c.x >= hi.x || c.y >= hi.y do continue
+				c -= lo
 				apex := [3]f32{c.x, c.y, -h}
 				for k in 0 ..< TREE_SIDES {
 					// Counter-clockwise on the map: the angle goes down.
@@ -67,8 +68,8 @@ nature_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 }
 
 // Inside BeginMode3D, right after buildings_draw (which sets the shader's uniforms), around target (km).
-nature_draw :: proc(w: ^World, target: [2]f32, reach: f32, transform: rl.Matrix) {
+nature_draw :: proc(w: ^World, target: [2]f32, reach: f32, place: Placement) {
 	b := &w.buildings
 	if !b.ready do return
-	tiles_update_draw(w, &w.nature, TREE_TILE_KM, reach, nature_build_tile, b.material, target, transform)
+	tiles_update_draw(w, &w.nature, TREE_TILE_KM, reach, nature_build_tile, b.material, target, place)
 }
