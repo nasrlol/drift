@@ -5,6 +5,7 @@ package bench
 
 import game "../source/game"
 import "core:fmt"
+import "core:math"
 import "core:mem/virtual"
 import "core:os"
 import "core:time"
@@ -54,7 +55,21 @@ main :: proc() {
 		return f32(seed^ >> 8) / f32(1 << 24)
 	}
 	w.weather.start = 1795176000
-	for &hour in w.weather.wind do for &layer in hour do for &v in layer do v = {rnd(&seed) * 30 - 15, rnd(&seed) * 30 - 15}
+	// A smooth wind field like a real forecast (#66): one prevailing direction per hour, turned and scaled
+	// slowly across the map, 0..21 m/s like the old independent random field.
+	for &hour in w.weather.wind {
+		heading := rnd(&seed) * math.TAU
+		for &layer in hour {
+			base := rnd(&seed) * 16.8 // the variation below adds up to 25 %, so at most 21 m/s
+			phase := rnd(&seed) * math.TAU
+			for &v, cell in layer {
+				gx, gy := f32(cell % game.WEATHER_GRID_W), f32(cell / game.WEATHER_GRID_W)
+				a := heading + 0.5 * math.sin(gx * 0.6 + phase)
+				speed := base * (1 + 0.25 * math.sin(gy * 0.7 + phase))
+				v = {math.cos(a) * speed, math.sin(a) * speed}
+			}
+		}
+	}
 	for &hour in w.weather.gust do for &layer in hour do for &g in layer do g = rnd(&seed)
 	for &hour in w.weather.cloud do for &c in hour do c = rnd(&seed)
 	generated := w.weather
