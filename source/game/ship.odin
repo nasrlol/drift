@@ -82,6 +82,7 @@ SHIP_BRAKE :: 6.0
 SHIP_MAX_TURN_RATE :: 0.6
 SHIP_TURN_SMOOTH_S :: 0.5
 SHIP_CLIMB_RATE :: 12.0
+SHIP_POWER_CAP_MS :: 35.0 // 126 km/h, see the energy in ship_step
 // Climbing costs this much power per m/s of climb on top of P(v, g) (spec "Vermogen").
 SHIP_CLIMB_KW_PER_MS :: 4.3
 SHIP_CEILING :: 900.0
@@ -153,7 +154,10 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	// Energy (spec): P(airspeed, gust) + climbing power, solar from the cloud cover of this hour.
 	climb_ms := max(s.alt - alt0, 0) / dt
 	gust := gust_at(w, s.pos.x, s.pos.y, layer, hour)
-	s.used_kwh += (power_kw(s.speed, gust) + climb_ms * SHIP_CLIMB_KW_PER_MS) * dt / 3600
+	// Above SHIP_POWER_CAP_MS the draw stops growing (Lars, 2026-11-21: flying at 252 km/h emptied the battery in
+	// 3 min with P(v) = 3 + 0.0085 v^3). The routes never fly that fast, so their energy is unchanged.
+	s.used_kwh +=
+		(power_kw(min(s.speed, SHIP_POWER_CAP_MS), gust) + climb_ms * SHIP_CLIMB_KW_PER_MS) * dt / 3600
 	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, hour)) * dt / 3600
 
 	s.warnings = {}
