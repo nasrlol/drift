@@ -119,8 +119,10 @@ canvas.addEventListener("pointermove", (e) => {
   } else if (fingers.size === 2 && pinch > 0) {
     const now = spread();
     const [a, b] = [...fingers.values()];
-    Module._web_zoom(Math.log2(now / pinch), (a.x + b.x) / 2 * gameScale, (a.y + b.y) / 2 * gameScale);
-    pinch = now;
+    if (now > 0) {
+      Module._web_zoom(Math.log2(now / pinch), (a.x + b.x) / 2 * gameScale, (a.y + b.y) / 2 * gameScale);
+      pinch = now;
+    }
   }
 });
 const lift = (e) => {
@@ -165,13 +167,31 @@ stick.addEventListener("pointermove", (e) => { if (e.pointerId === stickId) move
 stick.addEventListener("pointerup", (e) => { if (e.pointerId === stickId) releaseStick(); });
 stick.addEventListener("pointercancel", (e) => { if (e.pointerId === stickId) releaseStick(); });
 
-for (const [id, value] of [["up", 1], ["down", -1]]) {
+const held = { up: false, down: false };
+const sendLift = () => { pad.climb = (held.up ? 1 : 0) - (held.down ? 1 : 0); sendPad(); };
+for (const id of ["up", "down"]) {
   const b = byId(id);
-  const off = () => { if (pad.climb === value) { pad.climb = 0; sendPad(); } b.classList.remove("on"); };
-  b.addEventListener("pointerdown", (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); pad.climb = value; b.classList.add("on"); sendPad(); });
+  const off = () => { held[id] = false; b.classList.remove("on"); sendLift(); };
+  b.addEventListener("pointerdown", (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); held[id] = true; b.classList.add("on"); sendLift(); });
   b.addEventListener("pointerup", off);
   b.addEventListener("pointercancel", off);
 }
+function releaseControls() {
+  releaseStick();
+  for (const id of ["up", "down"]) { held[id] = false; byId(id).classList.remove("on"); }
+  sendLift();
+}
+// A call or an app switch can swallow the finger's release, nothing may stay pressed after it.
+function releaseTouches() {
+  const last = [...fingers.values()].pop();
+  fingers.clear();
+  pendingPress = null;
+  pinch = 0;
+  if (last) queue.push({ type: "mouseup", x: last.x, y: last.y, buttons: 0 });
+}
+const releaseAll = () => { releaseControls(); releaseTouches(); };
+addEventListener("blur", releaseAll);
+document.addEventListener("visibilitychange", () => { if (document.hidden) releaseAll(); });
 for (const id of ["panel", "fly", "street", "auto", "exit"]) {
   byId(id).addEventListener("click", () => Module._web_action(ACTION[id]));
 }
@@ -200,7 +220,7 @@ function syncHud() {
   const clear = street ? Math.round(STREET_HUD_H / gameScale) + 12 : wide ? 12 : Math.round(SHEET_H / gameScale) + 12;
   hud.style.setProperty("--clear", `${clear}px`);
   Module._web_stick_top((window.innerHeight - clear - STICK_SIZE) * gameScale);
-  if (!controls && (pad.throttle || pad.turn || pad.climb)) { releaseStick(); pad.climb = 0; sendPad(); }
+  if (!controls) releaseControls();
 }
 
 var Module = {
