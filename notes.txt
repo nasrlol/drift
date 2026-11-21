@@ -130,6 +130,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Inputs: one command per line, # comment. "route <from hub> <to hub> <mode> <hour>",
                   hub = index into w.m.hubs, mode fastest / greenest / calmest, hour 0..8.
                   "no_fly <x km> <y km> <radius km> <ceiling m>" fills the next free slot of w.no_fly.
+                  "gust <x km> <y km> <radius km>" fills the next free slot of w.gust_zones.
                   Output per route: "route 6 -> 11 fastest hour 0: 2 points, 104.812 km", then x y alt per point.
                   --dump appends the state dump after the result.
                   Log: logf(w, system, format, args) prints "[route t=1234] message" to stderr, t = w.tick.
@@ -137,7 +138,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   (fetch thread, argument parsing) prints "[system] message" with fmt.eprint.
                   State dump: dump_world(w, out) writes tick, build, map counts, hubs, weather start / sha256 /
                   fetched_at, a weather line per hour
-                  (max wind per layer, max gust, mean cloud), no-fly zones, blocked nodes per layer
+                  (max wind per layer, max gust, mean cloud), no-fly zones, gust zones, blocked nodes per layer
                   and arena used / reserved. No timings, so two dumps
                   of the same run are identical. F5 in the app prints it to stdout, --dump in headless mode.
                   Windows release is -subsystem:windows and has no console: use the debug or profile exe there.
@@ -197,6 +198,14 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   250 m = the heightmap spacing, 1.7M calls) and blocked = terrain + zones. route() builds terrain
                   on first use and after a hot reload, and rebuilds blocked when w.no_fly differs from the zones
                   it was built with. Nothing in it depends on the forecast hour, so changing hour costs nothing.
+                  Gust zones (spec "Gust melden"): w.gust_zones: [4]Gust_Zone (centre km, radius km), radius 0 =
+                  unused slot. Reported in flight, they block like a no-fly zone without a ceiling (every layer):
+                  the spec gives a reported zone no altitude limit. route() rebuilds blocked and the regions when
+                  w.gust_zones differs from grid.blocked_gusts, so the next route call is the reroute around them.
+                  Not built yet: the report action (where the zone goes, see todo) and clearing zones.
+                  Measured (cloud box, -o:speed): route right after a new gust zone avg 5.5-6.6 ms, max 13 ms,
+                  almost all of it the region flood fill (bench "route after gust", route budget 10 ms).
+                  Checked against a brute force over all 203k nodes with random no-fly + gust zones (40 rounds).
                   A* skips blocked neighbours. With blocked also the free regions are labelled (flood fill over
                   the A* steps, grid.region per node, the open heap is the stack): start and goal in different
                   regions fail at once. Without it a walled-in hub expanded every reachable node (33 ms -o:speed).
@@ -218,13 +227,17 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
                   no_fly.txt: Brussels inside an 8 km zone (no route from or to it), a 3 km zone on the
                   Mechelen - Leuven line (goes around), Antwerpen under a 400 m zone (leaves from layer 1),
                   Mechelen in a 2 km zone (ends at the closest free node outside it).
+                  gust.txt: a 260 m gust zone on the Mechelen - Leuven line (goes around it, stays at 300 m),
+                  a 3 km gust zone over Antwerpen (start moves out of it, every layer is closed), a no-fly
+                  and a gust zone in the same route.
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
                   (copy a cache/weather.snap), the calm one does not exercise the wind.
 bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.
                   200 rounds; wind_at / gust_at / cloud_at / height_at over 4096 fixed-seed points per round,
-                  route, three modes, snapshot load, load_map one call per round. Prints min / avg / max per
-                  call and arena usage, exits 1 when an average is over a budget (route 10 ms, three modes
-                  30 ms, snapshot load 5 ms). Not run by the hook or CI: CI machines are too noisy for timings.
+                  route, three modes, route after a new gust zone (blocked + regions rebuilt), snapshot load,
+                  load_map one call per round. Prints min / avg / max per call and arena usage, exits 1 when
+                  an average is over a budget (route and route after gust 10 ms, three modes 30 ms, snapshot
+                  load 5 ms). Not run by the hook or CI: CI machines are too noisy for timings.
   measured 2026-11-21, Linux on Apple M2 (Asahi), profile config, timer resolution ~42 ns:
                   wind_at / gust_at / cloud_at ~3.6 ns per call (~10-15 cycles: two float divides, clamps,
                   4 loads from L1, ~20 flops; estimate 3-5 ns). An earlier run on the branch gave ~10 ns,

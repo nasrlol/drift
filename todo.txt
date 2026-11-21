@@ -60,7 +60,8 @@ LARS: ROUTING + NAVIGATION
 [ ] path cleanup: skip redundant nodes, Chaikin, ramp to tower top, 40 m terrain clearance
 [ ] metrics: time, kWh, gust index, vs straight-line baseline
 [ ] record expanded-node order into a flat array (for the scan animation)
-[~] lars: user-reported gust zones (fixed array, max 4), reroute around them
+[x] user-reported gust zones (fixed array, max 4), reroute around them
+[ ] gust report: put a zone on the path ahead of the ship (needs navigation state), then reroute
 [ ] reroute: > 190 m off path for 1.2 s -> route from current position, same buffers
 [ ] maneuvers: computed once per route into a flat array (depart, turn, climb/descend, arrive)
 [ ] navigation state: next maneuver, distance, then-card, ETA, all derived from path index

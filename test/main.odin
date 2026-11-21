@@ -21,6 +21,8 @@ CASES :: [?]Case {
 	{"calm_routes", "test/data/calm.snap", "test/data/routes.txt", "test/data/calm_routes.expected"},
 	// A hub inside a no-fly zone gets no route, a zone above or next to a hub does not stop it.
 	{"no_fly", "test/data/calm.snap", "test/data/no_fly.txt", "test/data/no_fly.expected"},
+	// A reported gust zone is avoided, closes every layer, and applies together with the no-fly zones.
+	{"gust", "test/data/calm.snap", "test/data/gust.txt", "test/data/gust.expected"},
 	// A NaN in the wind field must reject the snapshot, not reach the router.
 	{"nan_wind", "test/data/nan_wind.snap", "test/data/routes.txt", ""},
 }

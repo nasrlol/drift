@@ -43,6 +43,7 @@ TERRAIN_MARGIN_M :: 75
 // highest sample is the highest point of the bilinear terrain inside the cell.
 TERRAIN_SAMPLES :: 5
 MAX_NO_FLY :: 8
+MAX_GUST_ZONES :: 4
 // Route end points snap to the closest free node at most this many cells away from the hub.
 FREE_NODE_CELLS :: 5
 
@@ -54,6 +55,13 @@ No_Fly_Zone :: struct {
 	center:  [2]f32, // km
 	radius:  f32, // km
 	ceiling: f32, // m, every layer below it is blocked
+}
+
+// A gust cell reported in flight. Closed at every altitude: the spec gives a reported zone only a
+// centre and a radius, no ceiling. radius 0 marks an unused slot.
+Gust_Zone :: struct {
+	center: [2]f32, // km
+	radius: f32, // km
 }
 
 // Search state per node, fixed size inside World: allocated once with it, reused by every route.
@@ -69,11 +77,13 @@ Grid :: struct {
 	slot:          [GRID_NODES]u32, // index in heap while open, HEAP_CLOSED once expanded
 	heap:          [GRID_NODES]Heap_Item, // binary min-heap on f, the open set of A*
 	// Bit n set: node n can not be entered. terrain is the edge ring and the cells too close to the ground,
-	// blocked is terrain plus blocked_zones. Two sets because terrain costs 1.7M height_at calls and only
-	// changes with the library (game_hot_reloaded clears terrain_built), the zones change at runtime.
+	// blocked is terrain plus blocked_zones and blocked_gusts. Two sets because terrain costs 1.7M height_at
+	// calls and only changes with the library (game_hot_reloaded clears terrain_built), the zones change
+	// at runtime.
 	terrain:       [GRID_BLOCKED_WORDS]u64,
 	blocked:       [GRID_BLOCKED_WORDS]u64,
 	blocked_zones: [MAX_NO_FLY]No_Fly_Zone,
+	blocked_gusts: [MAX_GUST_ZONES]Gust_Zone,
 	// Connected free region of each node (A* steps), 0 for a blocked node. Built with blocked.
 	region:        [GRID_NODES]u32,
 	terrain_built: bool,
@@ -160,7 +170,7 @@ grid_free_node_near :: proc(g: ^Grid, pos: [3]f32) -> (n: Node, ok: bool) {
 
 // from, to: x km, y km, altitude m. Hub i is at w.m.hubs[i].pos, its tower top at HUB_TOWER_M.
 // Returns the path in the same units, or ok = false when no safe route exists with this wind
-// or an end point has no free node near it (outside the grid, in a no-fly zone).
+// or an end point has no free node near it (outside the grid, in a no-fly or gust zone).
 // The path lives in the route arena until the next route call.
 route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path: [][3]f32, ok: bool) {
 	virtual.arena_free_all(&w.route_mem)
@@ -205,16 +215,25 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 		logf(w, "route", "terrain set built: %v of %d nodes per layer blocked", count, GRID_LAYER_CELLS)
 	}
 
-	if !g.blocked_built || g.blocked_zones != w.no_fly {
+	if !g.blocked_built || g.blocked_zones != w.no_fly || g.blocked_gusts != w.gust_zones {
 		// Not rebuilt per forecast hour: neither terrain nor the zones depend on it.
 		g.blocked = g.terrain
 		g.blocked_zones = w.no_fly
+		g.blocked_gusts = w.gust_zones
 		g.blocked_built = true
-		zones, added := 0, 0
-		for z in g.blocked_zones {
+		// A gust zone blocks like a no-fly zone without a ceiling.
+		zones: [MAX_NO_FLY + MAX_GUST_ZONES]No_Fly_Zone
+		copy(zones[:], g.blocked_zones[:])
+		for z, i in g.blocked_gusts do zones[MAX_NO_FLY + i] = {z.center, z.radius, math.inf_f32(1)}
+		no_fly, gusts, added := 0, 0, 0
+		for z, i in zones {
 			// Written as !(valid) so NaN and Inf skip the zone, radius 0 is an unused slot.
 			if !(z.radius > 0 && z.radius < 1e6 && abs(z.center.x) < 1e6 && abs(z.center.y) < 1e6) do continue
-			zones += 1
+			if i < MAX_NO_FLY {
+				no_fly += 1
+			} else {
+				gusts += 1
+			}
 			lo := linalg.floor((z.center - z.radius) / GRID_CELL_KM)
 			hi := linalg.floor((z.center + z.radius) / GRID_CELL_KM)
 			for y in max(int(lo.y), 0) ..= min(int(hi.y), GRID_H - 1) {
@@ -265,8 +284,9 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 		logf(
 			w,
 			"route",
-			"no-fly zones applied: %d zones block %d nodes beyond the terrain set, %d free regions",
-			zones,
+			"%d no-fly and %d gust zones block %d nodes beyond the terrain set, %d free regions",
+			no_fly,
+			gusts,
 			added,
 			regions,
 		)
