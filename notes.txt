@@ -226,11 +226,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Colors (render.odin): every drawn color comes from Palette = the design token table
                   (docs/drift-design.pdf "Kleuren": surface, surface_2, surface_3, text, text_2, line, accent,
                   accent_strong, green, banner, banner_2, red, warning, reroute, arrived, sheet, chip, bubble,
-                  bubble_text, pill), one per Theme in PALETTES. Night is zero (the design default), key T and the
-                  toolbar switch. palette(w) -> ^Palette returns w.palette, a copy of PALETTES[w.theme] made at the
-                  start of every frame: no pointer into this library's constants, so hot reload is safe. Map line
-                  colors go to the line shader as a uniform, switching rebuilds nothing. The profiler overlay keeps
-                  its own fixed colors.
+                  bubble_text, pill), the light values in PALETTE. Light only (Lars, 2026-11-21: "alleen light mode,
+                  doe de dark mode overal weg"): no night palette, no T key, no theme button, the loading screen and
+                  the street view are light too. palette(w) -> ^Palette returns w.palette, a copy of PALETTE made at
+                  the start of every frame: no pointer into this library's constants, so hot reload is safe. Map line
+                  colors go to the line shader as a uniform. The profiler overlay keeps its own fixed colors.
                   Map colors (same Palette, design "Kaart" table): land, city, park, farmland, marsh, beach, water,
                   roof, wall, motorway / main_road / street / track with their _casing, route / alt_route with their
                   _casing, sky, horizon. Used now: land (clear color), water (rivers), motorway; the border has no
@@ -850,7 +850,7 @@ Files and owners
   street.odin, collide.odin                       Lars    street view, building collision
   (owners of the 2026-11-21 files are our guess from the split above, to confirm in the PR)
 
-World fields (zero = the design default: plan screen, night theme, nothing chosen)
+World fields (zero = the design default: plan screen, nothing chosen)
   screen: Screen                       nasr    Screen :: enum u8 {Plan, Navigate}
   plan:   Plan                         Andrei  from, to: int (hub id), has_from, has_to: bool, mode: Route_Mode,
                                                hour: int (0..8), layers: Layers

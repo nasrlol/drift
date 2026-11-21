@@ -160,8 +160,7 @@ clouds_draw :: proc(w: ^World) {
 	}
 	slice.sort_by(clouds[:], proc(a, b: Cloud) -> bool {return a.depth > b.depth})
 
-	night := w.theme == .Night
-	shadow_c := rl.Color{0, 0, 0, night ? 40 : 34}
+	shadow_c := rl.Color{0, 0, 0, 34}
 	src := rl.Rectangle{0, 0, CLOUD_TEX, CLOUD_TEX}
 	// Shadows first: all on the ground, under every cloud.
 	for c in clouds {
@@ -171,8 +170,8 @@ clouds_draw :: proc(w: ^World) {
 		col.a = u8(f32(col.a) * c.alpha)
 		rl.DrawTexturePro(s.puff, src, {centre.x - r, centre.y - r * 0.7, 2 * r, 1.4 * r}, {}, 0, col)
 	}
-	lit := night ? rl.Color{150, 162, 190, 255} : rl.Color{255, 255, 255, 255}
-	shade := night ? rl.Color{110, 120, 150, 255} : rl.Color{226, 231, 240, 255}
+	lit := rl.Color{255, 255, 255, 255}
+	shade := rl.Color{226, 231, 240, 255}
 	for c in clouds {
 		centre, r, ok := cloud_px(w, c.pos, c.size)
 		if !ok || r < 1.5 do continue
@@ -188,7 +187,7 @@ clouds_draw :: proc(w: ^World) {
 			oy := base ? 0.15 + 0.1 * r1 : -0.1 - 0.45 * r1
 			pr := r * (base ? 0.7 + 0.3 * r2 : 0.55 + 0.4 * r2)
 			col := base ? shade : lit
-			col.a = u8(255 * a * (night ? 0.6 : 0.92))
+			col.a = u8(255 * a * 0.92)
 			p := centre + [2]f32{ox, oy} * r
 			sq: f32 = base ? 0.6 : 0.9 // base puffs are flat
 			rl.DrawTexturePro(

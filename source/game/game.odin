@@ -73,8 +73,7 @@ World :: struct {
 	fonts:           Fonts,
 	line_meshes:     Line_Meshes,
 	labels:          Map_Labels,
-	theme:           Theme, // zero = night (the design default), T toggles
-	palette:         Palette, // PALETTES[theme], copied every frame, read through palette(w)
+	palette:         Palette, // PALETTE, copied every frame, read through palette(w)
 	wind:            Wind_Particles,
 	airship:         Airship,
 	buildings:       Buildings,
@@ -203,7 +202,6 @@ game_update :: proc(memory: rawptr) -> bool {
 	typing := w.plan.editing != .None
 
 	if !typing {
-		if key_pressed(w, .T) do w.theme = w.theme == .Night ? .Day : .Night
 		// V: the third-person street view (street.odin), V again or Esc back to the map.
 		if key_pressed(w, .V) do street_toggle(w)
 		// M: free flight without a route (the old drive mode), or back to the plan screen.
@@ -272,8 +270,7 @@ game_update :: proc(memory: rawptr) -> bool {
 	// The keyboard and stick pan only on the plan screen, in navigation they steer the ship.
 	cam_update(w, !ui_mouse_captured(w) && !w.street.on, w.screen == .Plan && !typing)
 
-	palettes := PALETTES
-	w.palette = palettes[w.theme]
+	w.palette = PALETTE
 	pal := palette(w)
 	frame_dt := frame_time(w)
 
@@ -592,21 +589,21 @@ game_update :: proc(memory: rawptr) -> bool {
 	}
 	ui_toast_draw(w)
 
-	// Loading screen (design "Laadscherm"): night sky, a 38 px ring with a cyan top turning once per 0.9 s, then
+	// Loading screen (design "Laadscherm", in the light palette): sky, a 38 px ring with a cyan top turning once per 0.9 s, then
 	// it fades out in 0.4 s. Covers the first frames while the map mesh and the fonts are built.
 	w.loading_s += frame_dt
 	if w.loading_s < LOADING_MIN_S + LOADING_FADE_S {
-		night := PALETTES[.Night]
+		pal := PALETTE
 		alpha := 1 - clamp((w.loading_s - LOADING_MIN_S) / LOADING_FADE_S, 0, 1)
 		screen := w.cam.screen
-		rl.DrawRectangleV({0, 0}, screen, rl.ColorAlpha(night.sky, alpha))
+		rl.DrawRectangleV({0, 0}, screen, rl.ColorAlpha(pal.sky, alpha))
 		c := screen / 2 - {0, 16}
 		angle := w.loading_s / LOADING_TURN_S * 360
-		rl.DrawRing(c, 16, 19, 0, 360, 48, rl.ColorAlpha(night.surface_3, alpha))
-		rl.DrawRing(c, 16, 19, angle - 90, angle, 24, rl.ColorAlpha(night.route, alpha))
+		rl.DrawRing(c, 16, 19, 0, 360, 48, rl.ColorAlpha(pal.surface_3, alpha))
+		rl.DrawRing(c, 16, 19, angle - 90, angle, 24, rl.ColorAlpha(pal.route, alpha))
 		text := "Building the map of Belgium..."
 		size := ui_text_size(w, text, .Roboto_400, 14)
-		ui_text(w, {c.x - size.x / 2, c.y + 34}, text, .Roboto_400, 14, rl.ColorAlpha(night.text_2, alpha))
+		ui_text(w, {c.x - size.x / 2, c.y + 34}, text, .Roboto_400, 14, rl.ColorAlpha(pal.text_2, alpha))
 	}
 	prof_end(w, .Draw, t)
 

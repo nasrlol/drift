@@ -234,7 +234,7 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 [x] BUG: land use and road ribbons did not show in the street view: f32 depth of the km meshes, fixed with
     layered far depth in the ground shader (notes.txt street.odin)
 [ ] residential streets, squares and sidewalks between the houses (not in belgium.bin: below tertiary)
-[ ] always day in the street view, natural greens (no dark mode there)
+[x] always day in the street view, natural greens; light only in the whole app (Lars: dark mode gone everywhere)
 [x] scripted run mode with screenshots (--script: keys per frame, shot, quit) for visual checks
     test/data/street_standard.txt: tower, street, main road, park, countryside
 [ ] headless test cases for free flight: wall stop, roof landing, top speed, crosswind drift, same output twice
@@ -246,7 +246,7 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 
 TOGETHER, AT THE END
 [ ] demo run: plan Brussels -> Gent, pick greenest, Preview, Start, report gust, reroute, dock, Done
-[ ] headless test case for that flow, plus a screenshot of both screens in night and day
+[ ] headless test case for that flow, plus a screenshot of both screens (light only since 2026-11-21)
 
 NOT DOING
 film, procedural world, web stack, touch / responsive layout, speech, shadows on the map (the street view gets them)

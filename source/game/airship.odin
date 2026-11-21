@@ -323,7 +323,6 @@ car_draw :: proc(w: ^World, pos: [2]f32, alt, heading: f32, an: Car_Anim, px: f3
 	light := [3]f32{-0.45, 1.3, 0.3}
 	view := [3]f32{0, cos_t, sin_t}
 	sky, gnd, sun := [3]f32{0.72, 0.82, 0.98}, [3]f32{0.24, 0.26, 0.3}, f32(1)
-	if w.theme == .Night do sky, gnd, sun = {0.2, 0.26, 0.4}, {0.05, 0.06, 0.09}, 0.6
 	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "light_dir"), &light, .VEC3)
 	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "view_dir"), &view, .VEC3)
 	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sky"), &sky, .VEC3)

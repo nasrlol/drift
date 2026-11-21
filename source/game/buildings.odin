@@ -32,8 +32,9 @@ Buildings :: struct {
 	ready:    bool,
 }
 
-// vertexColor.r = light (0..1), .g = 1 on the roof, .b = 1 for a tree clump (nature.odin, same shader). The roof and wall colors come from the palette, so a theme
-// switch rebuilds nothing. height_scale squashes the buildings while they grow in; fog as LINE_VS.
+// vertexColor.r = light (0..1), .g = 1 on the roof, .b = 1 for a tree clump (nature.odin, same shader). The roof
+// and wall colors come from the palette (or the street view's look) as uniforms. height_scale squashes the
+// buildings while they grow in; fog as LINE_VS.
 BUILDINGS_VS :: `#version 330
 in vec3 vertexPosition;
 in vec4 vertexColor;

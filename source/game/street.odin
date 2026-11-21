@@ -120,7 +120,7 @@ void main() {
 }
 `
 
-// Sky, light and the natural colors for day and night (zero theme = night, as the map).
+// Sky, light and the natural colors. Always a bright day (Lars, 2026-11-21: "there is only light mode").
 Street_Look :: struct {
 	zenith, horizon:   rl.Color, // sky; horizon is also the haze
 	sun_dir:           [3]f32, // towards the sun, street space
@@ -134,48 +134,33 @@ Street_Look :: struct {
 	buildings:         Buildings_Look,
 }
 
-street_look :: proc(w: ^World) -> Street_Look {
-	day := Street_Look {
-		zenith = {92, 138, 196, 255},
-		horizon = {196, 210, 222, 255},
-		sun_dir = linalg.normalize([3]f32{-0.45, 0.7, 0.55}),
-		sun = 1,
-		sky_amb = {0.66, 0.76, 0.9},
-		gnd_amb = {0.3, 0.29, 0.25},
-		tone = {1, 1, 1},
-		land = {106, 122, 78, 255},
-		areas = {
-			.City = {132, 130, 124, 255},
-			.Park = {78, 110, 60, 255},
-			.Farmland = {136, 138, 92, 255},
-			.Marsh = {96, 112, 86, 255},
-			.Beach = {206, 192, 156, 255},
-			.Water = {58, 86, 106, 255},
-		},
-		asphalt = {66, 68, 72, 255},
-		motorway = {76, 77, 80, 255},
-		marking = {214, 212, 200, 255},
-		river = {56, 84, 102, 255},
-		buildings = {roof = {0.47, 0.4, 0.37}, wall = {0.74, 0.7, 0.64}, tree = {0.3, 0.4, 0.24}},
-	}
-	if w.theme == .Night {
-		n := day
-		n.zenith = {10, 14, 26, 255}
-		n.horizon = {34, 42, 62, 255}
-		n.sun_dir = linalg.normalize([3]f32{0.3, 0.8, -0.5}) // the moon
-		n.sun = 0.35
-		n.sky_amb = {0.16, 0.2, 0.3}
-		n.gnd_amb = {0.05, 0.05, 0.07}
-		n.tone = {0.3, 0.34, 0.46}
-		n.buildings = {
-			roof = {0.15, 0.15, 0.2},
-			wall = {0.25, 0.27, 0.34},
-			tree = {0.08, 0.12, 0.1},
-		}
-		day = n
-	}
-	day.buildings.fog = rl.ColorNormalize(day.horizon).rgb
-	return day
+STREET_LOOK :: Street_Look {
+	zenith = {92, 138, 196, 255},
+	horizon = {196, 210, 222, 255},
+	sun_dir = {-0.4874, 0.7581, 0.5957}, // normalize(-0.45, 0.7, 0.55)
+	sun = 1,
+	sky_amb = {0.66, 0.76, 0.9},
+	gnd_amb = {0.3, 0.29, 0.25},
+	tone = {1, 1, 1},
+	land = {106, 122, 78, 255},
+	areas = {
+		.City = {132, 130, 124, 255},
+		.Park = {78, 110, 60, 255},
+		.Farmland = {136, 138, 92, 255},
+		.Marsh = {96, 112, 86, 255},
+		.Beach = {206, 192, 156, 255},
+		.Water = {58, 86, 106, 255},
+	},
+	asphalt = {66, 68, 72, 255},
+	motorway = {76, 77, 80, 255},
+	marking = {214, 212, 200, 255},
+	river = {56, 84, 102, 255},
+	buildings = {
+		roof = {0.47, 0.4, 0.37},
+		wall = {0.74, 0.7, 0.64},
+		tree = {0.3, 0.4, 0.24},
+		fog = {196.0 / 255, 210.0 / 255, 222.0 / 255},
+	},
 }
 
 // Map space (x km, y km south, z km down) to street space (m, y up) around origin.
@@ -287,7 +272,7 @@ street_unload :: proc(st: ^Street) {
 // Road ribbons of one tile at their real width, the river beds, and the lane markings (Tile_Build).
 street_road_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	st := &w.street
-	look := street_look(w)
+	look := STREET_LOOK
 	pos := make([dynamic][3]f32, 0, 1 << 14, context.temp_allocator)
 	col := make([dynamic][4]u8, 0, 1 << 14, context.temp_allocator)
 	quad :: proc(
@@ -459,7 +444,7 @@ street_draw :: proc(w: ^World) {
 	st := &w.street
 	street_build(w)
 	street_camera(w)
-	look := street_look(w)
+	look := STREET_LOOK
 	screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 	transform := street_transform(st.origin)
 	centre := w.ship.pos
@@ -520,16 +505,6 @@ street_draw :: proc(w: ^World) {
 			rl.SetShaderValue(sh, st.loc.remap, &remap, .FLOAT)
 			rl.SetShaderValueV(sh, st.loc.map_colors, &map_colors, .VEC3, 6)
 			rl.SetShaderValueV(sh, st.loc.real_colors, &real_colors, .VEC3, 6)
-			if lm.area_theme != w.theme {
-				areas_color(w, lm)
-				rl.UpdateMeshBuffer(
-					lm.areas,
-					3,
-					raw_data(lm.area_colors),
-					i32(len(lm.area_colors) * size_of([4]u8)),
-					0,
-				)
-			}
 			rl.DrawMesh(lm.areas, mat, transform)
 		}
 

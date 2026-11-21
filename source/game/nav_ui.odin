@@ -178,7 +178,7 @@ nav_draw_bubbles :: proc(w: ^World) {
 		bs := ui_text_size(w, bottom, .Roboto_400, 12)
 		leaf: f32 = mode == .Greenest ? 18 : 0
 		box := rl.Rectangle{p.x + 6, p.y - 46, max(ts.x + leaf, bs.x) + 20, 42}
-		bg := chosen ? pal.accent_strong : w.theme == .Night ? pal.surface : rl.WHITE
+		bg := chosen ? pal.accent_strong : rl.WHITE
 		fg := chosen ? rl.WHITE : pal.text
 		id, hot, fired := ui_widget(w, box)
 		ui_shadow(w, box, 10)
