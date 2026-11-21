@@ -88,14 +88,25 @@ town_houses :: proc(w: ^World, lo, hi: [2]f32, out: ^[dynamic]Town_House) {
 		far := linalg.max(linalg.abs(lo - o), linalg.abs(hi - o))
 		if linalg.length(far) < BUILDINGS_RADIUS_KM do return
 	}
+	// Only the City triangles filed in the 1 km cells of the collision data that overlap lo ..< hi (all of them
+	// cost 2.4 ms per tile in the debug build even where there is no town); a triangle in several of those
+	// cells is made in the first one.
+	co := &w.collide
+	if !co.built do collide_build(w)
 	lot := f32(TOWN_LOT_M) / 1000
-	for a, ai in w.m.areas {
-		if Area_Kind(a.kind) != .City do continue
-		pts := w.m.area_points[a.start:][:a.count]
+	cx0 := clamp(int(math.floor(lo.x / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_W - 1)
+	cx1 := clamp(int(math.floor(hi.x / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_W - 1)
+	cy0 := clamp(int(math.floor(lo.y / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_H - 1)
+	cy1 := clamp(int(math.floor(hi.y / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_H - 1)
+	for cy in cy0 ..= cy1 do for cx in cx0 ..= cx1 do for item in co.tri_items[co.tri_cells[cy * COLLIDE_TRI_W + cx]:co.tri_cells[cy * COLLIDE_TRI_W + cx + 1]] {
+		ai := int(item[0])
+		p0, p1, p2 := w.m.area_points[item[1]], w.m.area_points[item[1] + 1], w.m.area_points[item[1] + 2]
+		tri_lo := linalg.min(p0, linalg.min(p1, p2))
+		first := [2]int{max(cx0, int(math.floor(tri_lo.x / COLLIDE_TRI_CELL_KM))), max(cy0, int(math.floor(tri_lo.y / COLLIDE_TRI_CELL_KM)))}
+		if first != {cx, cy} do continue
 		seed, ax, ay := town_lattice(ai)
-		for k := 0; k + 2 < len(pts); k += 3 {
-			p0, p1, p2 := pts[k], pts[k + 1], pts[k + 2]
-			tlo := linalg.max(linalg.min(p0, linalg.min(p1, p2)), lo)
+		{
+			tlo := linalg.max(tri_lo, lo)
 			thi := linalg.min(linalg.max(p0, linalg.max(p1, p2)), hi)
 			if tlo.x >= thi.x || tlo.y >= thi.y do continue
 			// The lots of the overlap box, in lattice units.

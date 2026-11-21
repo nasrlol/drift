@@ -8,7 +8,7 @@ import rl "vendor:raylib"
 // (towns.odin, nature.odin, houses.odin, the street view's roads). A tile is built once when it comes within
 // reach, nearest first: one a frame, more only while the frame's builds stay under TILE_BUILD_MS (the densest
 // house tile of Brussels takes 3.3 ms in the profile build), and dropped when it is well out of reach.
-TILE_SLOTS :: 96
+TILE_SLOTS :: 192
 TILE_BUILDS_PER_FRAME :: 4
 TILE_BUILD_MS :: 1.0
 

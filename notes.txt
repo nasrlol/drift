@@ -643,7 +643,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   the car, its animation and the map's chase camera read it. Drawing the raw state jumped 0, 1 or 2
                   steps per frame with uneven frame times while the cameras eased per frame: buildings and roads
                   shook (Lars: "het flikkert"). A jump of > 200 m or no stepping (plan screen) draws the state as is.
-  houses.odin     (Lars) the street view's buildings, per 1 km tile within 3.4 km (Tile_Cache), real OSM footprints
+  houses.odin     (Lars) the street view's buildings, per 0.5 km tile within 3.4 km (Tile_Cache, 192 slots), real OSM footprints
                   (from the collision data, each once: in the 100 m cell of its first corner) and the generated
                   town lots (town_houses in towns.odin, shared with the map). Mesh in km relative to the tile corner
                   with normals, uv in metres on each surface, lh = (wall length, eave height) and a colour whose
@@ -654,9 +654,13 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   35 % hip roofs on the rest; 0.35 m overhang with undersides and a fascia, chimneys, solar panels
                   on the sunny slope (38 %). Other roofs are flat with a 0.45..1.05 m parapet, coping, roof units,
                   green (45 %) or with rows of solar panels facing south. STREET_FS draws the facades.
-                  Measured (profile build, M-series Mac, 2026-11-21): the densest tile (Brussels centre, 1962
-                  buildings) 305k vertices, 12.8 MB, built in 3.3 ms; most tiles 0.5..1.5 ms. Frame (update + draw,
-                  CPU) 1.9 ms over the roofs of Brussels with shadows, 0.8 ms low in a street; debug build 3.8 / 2.2.
+                  Measured (M-series Mac, 2026-11-21): with 1 km tiles the densest (Brussels centre, 1962 buildings)
+                  had 305k vertices, 12.8 MB, 3.3 ms in the profile build and 31 ms in the debug build, where it
+                  stuttered while flying (Lars: "performantie is slecht"); town_houses then walked every City area
+                  of the map per tile (2.4 ms for an empty tile in debug), now only the 1 km cells of the collision
+                  index. With 0.5 km tiles, debug build over the standard shots: 514 tiles, mean 1.2 ms, worst
+                  8.5 ms. Frame (update + draw, CPU, profile) 1.9 ms over the roofs of Brussels with shadows,
+                  0.8 ms low in a street (debug 3.8 / 2.2); unlimited fps ~1000 frames/s, so the GPU has room.
   shadows         (street.odin) one 4096^2 depth map (rlgl framebuffer with only a depth texture, raylib's own
                   RenderTexture holds no depth texture) over a 420 m square ahead of the camera (0.1 m per texel),
                   drawn each frame from an orthographic sun camera 1500 m up the sun direction, its centre snapped
