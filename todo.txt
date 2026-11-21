@@ -71,7 +71,7 @@ LARS: ROUTING + NAVIGATION
 DARIO: SHIP + CONTROLS
 [ ] Windows smoke test: compile.bat debug, run build\drift.exe from the repo root, rebuild once while it runs
     and check the game reloads ("[host] reloaded game"). Also try compile.bat release. Report what breaks.
-[ ] Controls struct: throttle, turn, climb (-1..1)
+[x] Controls struct: throttle, turn, climb (-1..1)
 [ ] keyboard WASD + R/F, controller sticks (deadzone)
 [ ] ship_step(dt, controls), fixed timestep 60 Hz (accumulator), pure function of state + controls + world
 [ ] limits: accel +1.2 / -1.6 m/s^2, smoothed turn rate, ceiling 900 m, min 28 m above terrain
