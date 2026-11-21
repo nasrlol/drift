@@ -1,0 +1,10 @@
+# A tertiary road through a generated town north of Brussels (5.7 km from the tower), low and from above: the
+# generated houses must keep clear of the road and its sidewalks.
+snapshot test/data/calm.snap
+press 2 V
+ship 100 141.153 73.877 4 264
+shot 260 build/shots/town_low.png
+ship 270 141.153 73.877 120 264
+mouse 280 0 300
+shot 330 build/shots/town_top.png
+quit 331

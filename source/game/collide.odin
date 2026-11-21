@@ -18,6 +18,38 @@ COLLIDE_TRI_W :: int(MAP_W_KM / COLLIDE_TRI_CELL_KM) + 1
 COLLIDE_TRI_H :: int(MAP_H_KM / COLLIDE_TRI_CELL_KM) + 1
 // The most buildings one query looks at (a dense city centre has ~20 within 30 m).
 COLLIDE_MAX_SEEN :: 96
+// Roads and rivers, for keeping the generated buildings off them (town_lot) and for the street view: the map's
+// line segments per COLLIDE_ROAD_CELL_KM cell, each filed in every cell within COLLIDE_ROAD_REACH_M of it, so
+// one cell answers a query.
+COLLIDE_ROAD_CELL_KM :: 0.25
+COLLIDE_ROAD_W :: int(MAP_W_KM / COLLIDE_ROAD_CELL_KM) + 1
+COLLIDE_ROAD_H :: int(MAP_H_KM / COLLIDE_ROAD_CELL_KM) + 1
+// Urban roads get a sidewalk on each side in the street view; a generated building keeps TOWN_ROAD_GAP_M from it
+// (Lars, 2026-11-21: "sommige gebouwen komen in de weg, niet logisch"). Our values.
+ROAD_SIDEWALK_M :: 2.5
+TOWN_ROAD_GAP_M :: 1.5
+// The widest half width, the sidewalk, the gap and the largest lot's half diagonal (0.45 x 30 m x sqrt 2).
+COLLIDE_ROAD_REACH_M :: 14 + ROAD_SIDEWALK_M + TOWN_ROAD_GAP_M + 20
+
+// Half width (m) of a road or river as the street view draws it: OSM draws a motorway per carriageway, the others
+// both directions on one line. 0 for lines that are not roads.
+road_half_width_m :: proc(kind: Map_Kind) -> f32 {
+	#partial switch kind {
+	case .Motorway:
+		return 6.5
+	case .Trunk:
+		return 5.5
+	case .Primary:
+		return 4.5
+	case .Secondary:
+		return 3.8
+	case .Tertiary:
+		return 3.0
+	case .River:
+		return 14
+	}
+	return 0
+}
 
 // Zero = not built yet.
 Collide :: struct {
@@ -35,6 +67,55 @@ Collide :: struct {
 	// City triangles per 1 km cell of the map: area index and first point index in w.m.area_points.
 	tri_cells:  []u32,
 	tri_items:  [][2]u32,
+	// Road and river segments per COLLIDE_ROAD_CELL_KM cell: kind << 24 | index of the first point.
+	road_cells: []u32,
+	road_items: []u32,
+}
+
+// The distance (m) from segment a-b to the box of half sizes h around 0 (all in the box's frame, m): 0 when the
+// segment enters the box.
+segment_box_m :: proc(a, b, h: [2]f32) -> f32 {
+	d := b - a
+	t0, t1: f32 = 0, 1
+	enters := true
+	for pq in ([4][2]f32{{-d.x, a.x + h.x}, {d.x, h.x - a.x}, {-d.y, a.y + h.y}, {d.y, h.y - a.y}}) {
+		if pq[0] == 0 {
+			if pq[1] < 0 do enters = false
+		} else if pq[0] < 0 {
+			t0 = max(t0, pq[1] / pq[0])
+		} else {
+			t1 = min(t1, pq[1] / pq[0])
+		}
+	}
+	if enters && t0 <= t1 do return 0
+	box :: proc(p, h: [2]f32) -> f32 {return linalg.length(linalg.max(linalg.abs(p) - h, 0))}
+	best := min(box(a, h), box(b, h))
+	l2 := linalg.dot(d, d)
+	for c in ([4][2]f32{{-h.x, -h.y}, {-h.x, h.y}, {h.x, h.y}, {h.x, -h.y}}) {
+		t := l2 > 0 ? clamp(linalg.dot(c - a, d) / l2, 0, 1) : 0
+		best = min(best, linalg.length(a + d * t - c))
+	}
+	return best
+}
+
+// True when the box of half sizes half (m) around c (km), turned to the axes ax / ay, keeps clear of every road
+// and river with its sidewalk and TOWN_ROAD_GAP_M.
+town_lot_clear :: proc(w: ^World, c, ax, ay, half: [2]f32) -> bool {
+	co := &w.collide
+	if !co.built do collide_build(w)
+	if len(co.road_cells) == 0 do return true
+	cx := clamp(int(c.x / COLLIDE_ROAD_CELL_KM), 0, COLLIDE_ROAD_W - 1)
+	cy := clamp(int(c.y / COLLIDE_ROAD_CELL_KM), 0, COLLIDE_ROAD_H - 1)
+	cell := cy * COLLIDE_ROAD_W + cx
+	for item in co.road_items[co.road_cells[cell]:co.road_cells[cell + 1]] {
+		k := int(item & 0xffffff)
+		need := road_half_width_m(Map_Kind(item >> 24)) + ROAD_SIDEWALK_M + TOWN_ROAD_GAP_M
+		pa, pb := (w.m.points[k] - c) * 1000, (w.m.points[k + 1] - c) * 1000
+		a := [2]f32{linalg.dot(pa, ax), linalg.dot(pa, ay)}
+		b := [2]f32{linalg.dot(pb, ax), linalg.dot(pb, ay)}
+		if segment_box_m(a, b, half) < need do return false
+	}
+	return true
 }
 
 // What a circle of radius_m around pos (km) touches with its underside at hag m above the ground. push (m, x east,
@@ -135,7 +216,7 @@ collide_car :: proc(w: ^World, pos: [2]f32, hag, radius_m: f32) -> (push: [2]f32
 							lots[lots_n] = {seed, i, j}
 							lots_n += 1
 						}
-						corners, height, ok := town_lot(co.cities[:co.city_count], seed, ax, ay, i, j)
+						corners, height, ok := town_lot(w, seed, ax, ay, i, j)
 						if !ok do continue
 						clear(&ring)
 						for p in corners do append(&ring, (p - pos) * 1000)
@@ -188,6 +269,43 @@ collide_build :: proc(w: ^World) {
 				co.tri_cells = counts
 				co.tri_items = make([][2]u32, counts[len(counts) - 1], perm)
 				counts = make([]u32, COLLIDE_TRI_W * COLLIDE_TRI_H + 1, context.temp_allocator)
+			}
+		}
+	}
+
+	// Road and river segments into every road cell within COLLIDE_ROAD_REACH_M of them. Two passes again.
+	{
+		counts := make([]u32, COLLIDE_ROAD_W * COLLIDE_ROAD_H + 1, perm)
+		reach := f32(COLLIDE_ROAD_REACH_M) / 1000
+		for pass in 0 ..< 2 {
+			for l in w.m.lines {
+				if road_half_width_m(Map_Kind(l.kind)) == 0 do continue
+				for k := l.start; k + 1 < l.start + l.count; k += 1 {
+					a, b := w.m.points[k], w.m.points[k + 1]
+					lo := linalg.min(a, b) - reach
+					hi := linalg.max(a, b) + reach
+					x0 := clamp(int(lo.x / COLLIDE_ROAD_CELL_KM), 0, COLLIDE_ROAD_W - 1)
+					x1 := clamp(int(hi.x / COLLIDE_ROAD_CELL_KM), 0, COLLIDE_ROAD_W - 1)
+					y0 := clamp(int(lo.y / COLLIDE_ROAD_CELL_KM), 0, COLLIDE_ROAD_H - 1)
+					y1 := clamp(int(hi.y / COLLIDE_ROAD_CELL_KM), 0, COLLIDE_ROAD_H - 1)
+					for y in y0 ..= y1 {
+						for x in x0 ..= x1 {
+							c := y * COLLIDE_ROAD_W + x
+							if pass == 0 {
+								counts[c + 1] += 1
+							} else {
+								co.road_items[co.road_cells[c] + counts[c]] = l.kind << 24 | k
+								counts[c] += 1
+							}
+						}
+					}
+				}
+			}
+			if pass == 0 {
+				for c in 1 ..< len(counts) do counts[c] += counts[c - 1]
+				co.road_cells = counts
+				co.road_items = make([]u32, counts[len(counts) - 1], perm)
+				counts = make([]u32, COLLIDE_ROAD_W * COLLIDE_ROAD_H + 1, context.temp_allocator)
 			}
 		}
 	}
@@ -314,10 +432,11 @@ collide_build :: proc(w: ^World) {
 	logf(
 		w,
 		"collide",
-		"%d buildings in %d cities, %d cell entries, %d town triangle entries",
+		"%d buildings in %d cities, %d cell entries, %d town triangle entries, %d road entries",
 		total_b,
 		co.city_count,
 		len(co.city_items),
 		len(co.tri_items),
+		len(co.road_items),
 	)
 }

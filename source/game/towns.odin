@@ -36,11 +36,11 @@ town_lattice :: proc(area: int) -> (seed: u32, ax, ay: [2]f32) {
 }
 
 // The building on lot (i, j) of a lattice, if the lot keeps one: its ring (km) and its real height (km, the map
-// draws it BUILDINGS_HEIGHT_X taller). Lots within BUILDINGS_RADIUS_KM of a city with real buildings (cities)
-// stay empty. Drawing (towns_build_tile) and collision (collide.odin) both use this, so a wall stops the car
-// where it shows.
+// draws it BUILDINGS_HEIGHT_X taller). Lots within BUILDINGS_RADIUS_KM of a city with real buildings stay empty,
+// and so does a lot whose building would stand on a road or river or its sidewalk (town_lot_clear). Drawing
+// (town_houses) and collision (collide.odin) both use this, so a wall stops the car where it shows.
 town_lot :: proc(
-	cities: [][2]f32,
+	w: ^World,
 	seed: u32,
 	ax, ay: [2]f32,
 	i, j: i32,
@@ -57,8 +57,11 @@ town_lot :: proc(
 	r2 := f32((h >> 16) & 0xff) / 255
 	r3 := f32(h >> 24) / 255
 	if r0 > TOWN_FILL do return
-	for o in cities do if linalg.length(c - o) < BUILDINGS_RADIUS_KM do return
+	co := &w.collide
+	if !co.built do collide_build(w)
+	for o in co.cities[:co.city_count] do if linalg.length(c - o) < BUILDINGS_RADIUS_KM do return
 	half := [2]f32{0.25 + 0.2 * r1, 0.25 + 0.2 * r2} * lot
+	if !town_lot_clear(w, c, ax, ay, half * 1000) do return
 	height = (5 + 9 * r3 * r3 + (r1 > 0.97 ? 20 * r2 : 0)) / 1000
 	// Counter-clockwise on the map (y south): the lattice axes are a rotation, so -u-v, -u+v, +u+v, +u-v turns
 	// the same way as the ground quads.
@@ -122,7 +125,7 @@ town_houses :: proc(w: ^World, lo, hi: [2]f32, out: ^[dynamic]Town_House) {
 					c := (ax * (f32(i) + 0.5) + ay * (f32(j) + 0.5)) * lot
 					if c.x < lo.x || c.y < lo.y || c.x >= hi.x || c.y >= hi.y do continue
 					if !in_triangle(c, p0, p1, p2) do continue
-					ring, height, ok := town_lot(b.origins[:b.count], seed, ax, ay, i, j)
+					ring, height, ok := town_lot(w, seed, ax, ay, i, j)
 					if !ok do continue
 					h := hash_u32(u32(i) * 2246822519 ~ u32(j) * 3266489917 ~ seed)
 					append(out, Town_House{ring, height * 1000, h})

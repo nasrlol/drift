@@ -759,27 +759,12 @@ street_road_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 		mid := (a + b) / 2
 		if mid.x < lo.x || mid.y < lo.y || mid.x >= hi.x || mid.y >= hi.y do continue
 		a, b = a - lo, b - lo
-		// Half widths in m: OSM draws a motorway carriageway, the others both directions on one line.
-		hw: f32
-		lanes := 0
-		color := look.asphalt
+		hw := road_half_width_m(kind)
+		if hw == 0 do continue
+		lanes := kind == .Motorway ? 3 : 2
+		color := kind == .Motorway ? look.motorway : look.asphalt
 		layer: u8 = 2
-		#partial switch kind {
-		case .Motorway:
-			hw, lanes, color = 6.5, 3, look.motorway
-		case .Trunk:
-			hw, lanes = 5.5, 2
-		case .Primary:
-			hw, lanes = 4.5, 2
-		case .Secondary:
-			hw, lanes = 3.8, 2
-		case .Tertiary:
-			hw, lanes = 3.0, 2
-		case .River:
-			hw, color, layer = 14, look.river, 1
-		case:
-			continue
-		}
+		if kind == .River do lanes, color, layer = 0, look.river, 1
 		d := b - a
 		l := linalg.length(d)
 		if l <= 0 do continue

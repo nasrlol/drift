@@ -717,6 +717,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   with a 100 m cell list per city (2.4 km square), generated town buildings made again from the City
                   triangles around the point (town_lot, shared with towns.odin) with a 1 km cell list. Built on first
                   use from the perm arena. 2026-11-21: 70582 buildings, 99243 cell entries, 76009 triangle entries.
+                  Roads and rivers per 250 m cell (road_cells / road_items, every segment within 38.5 m of a cell is
+                  filed in it: 744063 entries): town_lot_clear drops a generated building whose box comes within
+                  road_half_width_m + ROAD_SIDEWALK_M 2.5 + TOWN_ROAD_GAP_M 1.5 of a road or river (Lars: "sommige
+                  gebouwen komen in de weg, niet logisch"); road_half_width_m is the one home of the widths the
+                  street view draws (motorway 6.5 per carriageway, trunk 5.5, primary 4.5, secondary 3.8, tertiary
+                  3, river 14). test/data/street_town.txt shows a town road north of Brussels.
   free flight     (ship.odin) ship_free_step, used in the street view when nobody else flies (not the autopilot):
                   velocity with momentum, thrust 8 m/s^2, quadratic drag to 70 m/s, sideways grip 2.4/s against the
                   air (crabs in a crosswind), turn 1.4 rad/s hovering .. 0.55 at top speed, altitude hold (climbs
