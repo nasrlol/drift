@@ -79,7 +79,7 @@ DARIO: SHIP + CONTROLS
 [ ] ship drifts with wind_at, battery drain from Lars's energy model, solar charging
 [x] warnings as flags in the ship state (terrain, no-fly), UI only reads them
 [x] docking: within 30 m horizontal, 25 m vertical of the hub tower
-[ ] sim speed 1x / 5x / 15x / 40x = more fixed steps per frame, never a bigger dt
+[x] sim speed 1x / 5x / 15x / 40x = more fixed steps per frame, never a bigger dt
 [ ] camera follows ship
 [ ] record Controls per step for replay (flat array, a few bytes per step)
 [ ] bench: ship_step cost per step

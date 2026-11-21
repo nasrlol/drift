@@ -52,6 +52,9 @@ Measured (2026-11-21, macOS arm64): one fetch ~400 ms, ~1.2 MB scratch (json val
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
   game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing
+                  Sim speed: keys 1..4 set w.sim_speed = 1x / 5x / 15x / 40x (SIM_SPEEDS). The frame time (capped at
+                  0.25 s) is multiplied before it goes into the accumulator, so 40x runs up to 40 steps per 60 fps frame
+                  (600 at most after a hitch) and every step still has dt = 1 / 60.
                   Map drawing: a Camera2D per frame fits 0..MAP_W_KM x 0..MAP_H_KM (286 x 237 km) to 95% of the
                   window, zoom = px per km, map centre on screen centre. Each Map_Line is one rl.DrawLineStrip
                   straight from w.m.points ([2]f32 km has the rl.Vector2 layout, no copy, no allocation).
