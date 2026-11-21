@@ -227,10 +227,13 @@ World memory
 
 BUILD
 compile.sh [debug|profile|release] [extra odin flags], build.sh wraps it with build-notify
+  Linux and macOS. macOS has bash 3.2 and BSD tools: raylib is copied only when newer with [ -nt ]
+  (no cp -u), the build time comes from perl Time::HiRes (no date %N), no mold, game.dylib + libraylib.620.dylib,
+  rpath @loader_path (the dylib's install name is @rpath/libraylib.620.dylib).
 compile.bat same modes on Windows (no mold, raylib.dll copied to build\, random pdb name per build
   so a loaded pdb never blocks the next build, host not rebuilt while drift.exe runs,
   release uses -subsystem:windows). format.bat / check.bat run the .sh versions with Git for Windows sh.
-  all modes: -vet -vet-cast -strict-style -warnings-as-errors -linker:mold, prints build time
+  all modes: -vet -vet-cast -strict-style -warnings-as-errors, -linker:mold on Linux, prints build time
   debug:   host + game.so, -debug -o:none -use-separate-modules (~900 ms for both, 2026-11-21 after
            profiler / headless / log / dump: 874-917 ms, main before them 767-875 ms; limit 2 s)
            game.so uses raylib as a shared lib (RAYLIB_SHARED), copied to build/, rpath $ORIGIN,
