@@ -82,7 +82,7 @@ DARIO: SHIP + CONTROLS
 [x] sim speed 1x / 5x / 15x / 40x = more fixed steps per frame, never a bigger dt
 [x] map mode: Controls pan / zoom the camera while there is no ship (WASD, R/F, sticks)
 [ ] drive mode: Controls go to ship_step, camera follows ship, key to switch back to map mode
-[ ] record Controls per step for replay (flat array, a few bytes per step)
+[x] record Controls per step for replay (flat array, a few bytes per step)
 [ ] bench: ship_step cost per step
 
 ANDREI: WEATHER + NETWORK
