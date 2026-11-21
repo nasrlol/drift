@@ -27,7 +27,7 @@ FIRST, TOGETHER (so everyone can work in parallel)
 
 NASR: MAP + RENDERING + UI
 [x] load belgium.bin and draw lines (km -> px: scale + offset)
-[ ] camera: pan + zoom to cursor (mouse wheel / controller)
+[x] camera: pan + zoom to cursor (mouse wheel / controller)
 [ ] draw cities + names
 [ ] "(c) OpenStreetMap contributors" on screen
 [ ] download Copernicus GLO-90 tiles N49-N51, E002-E006 (sea tiles 404, fine)
@@ -80,7 +80,8 @@ DARIO: SHIP + CONTROLS
 [ ] warnings as flags in the ship state (terrain, no-fly), UI only reads them
 [ ] docking: within 30 m horizontal, 25 m vertical of the hub tower
 [ ] sim speed 1x / 5x / 15x / 40x = more fixed steps per frame, never a bigger dt
-[ ] camera follows ship
+[x] map mode: Controls pan / zoom the camera while there is no ship (WASD, R/F, sticks)
+[ ] drive mode: Controls go to ship_step, camera follows ship, key to switch back to map mode
 [ ] record Controls per step for replay (flat array, a few bytes per step)
 [ ] bench: ship_step cost per step
 
@@ -91,10 +92,10 @@ ANDREI: WEATHER + NETWORK
 [x] validate everything (ranges, NaN, missing), reject bad snapshots
 [x] save snapshot to disk with its hash, load on startup, refresh every 15 min (thread, timeout)
 [x] wind_at(x, y, layer, hour), gust_at, cloud_at: bilinear, no allocation
-[ ] bench: wind_at cost, snapshot load time
+[x] bench: wind_at cost, snapshot load time
 network + carpooling (after routing works):
 [x] ed25519 key pair per user (core:crypto)
-[ ] signed message format: offer, request, accept, review (fixed-size binary, not JSON)
+[x] signed message format: offer, request, accept, review (fixed-size binary, not JSON)
 [ ] offers include hub ids, times, seats, weather snapshot hash
 [ ] simple relay: store messages, forward to subscribers
 [ ] publish weather snapshot to relay, fetch by hash

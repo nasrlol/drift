@@ -52,8 +52,15 @@ Measured (2026-11-21, macOS arm64): one fetch ~400 ms, ~1.2 MB scratch (json val
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
   game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing
-                  Map drawing: a Camera2D per frame fits 0..MAP_W_KM x 0..MAP_H_KM (286 x 237 km) to 95% of the
-                  window, zoom = px per km, map centre on screen centre. Each Map_Line is one rl.DrawLineStrip
+                  Camera: w.view (View) = pan (km from the map centre to the screen centre) + zoom (log2 relative
+                  to the fitted view, ZOOM_MIN -1 .. ZOOM_MAX 7). Zero = the whole map fitted to 95% of the window.
+                  Each frame it becomes a Camera2D, zoom = px per km. Map mode (the only mode until there is a
+                  ship): the camera reads w.controls, throttle / turn pan (600 px/s), climb zooms (2 per s) around
+                  the screen centre. So WASD and the left stick pan, R/F and right stick Y zoom. Mouse (camera
+                  only, not in Controls): left drag pans, wheel zooms (0.25 per notch) around the cursor. Pan is
+                  clamped so the screen centre stays on the map. Drive mode comes with ship_step: Controls go
+                  to the ship and the camera follows it.
+                  Map drawing: each Map_Line is one rl.DrawLineStrip
                   straight from w.m.points ([2]f32 km has the rl.Vector2 layout, no copy, no allocation).
                   Colors: border dark grey, rivers blue, motorways orange. 10872 strips, 36k points per frame.
   map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
@@ -86,6 +93,17 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     Present but wrong size or invalid: logged and left alone (it is the user's reputation),
                     w.identity stays zero and network features stay off. w.identity_pub = public key,
                     logged as the first 8 bytes in hex. Moves to the user data folder with the release item.
+                  Carpool messages: Message is 184 bytes, fixed size, little endian, no implicit padding
+                    (#assert). Header: magic "DRMS", version 1, kind (Offer / Request / Accept / Review),
+                    time (unix s, set by the author), author (ed25519 public key). Body is a raw union:
+                      Offer   from_hub, to_hub, seats 1..8, mode, depart, arrive, weather snapshot hash, energy_kwh
+                      Request offer id, from_hub, to_hub, seats 1..8
+                      Accept  offer id, request id
+                      Review  subject public key, accept id, stars 1..5
+                    sig = ed25519 over bytes 0..119. Message id = sha256 of all 184 bytes.
+                    msg_sign(w, m) fills magic, version, author, sig (start from a zeroed Message).
+                    msg_read(w, bytes) for anything from outside: size, header, field ranges, then signature.
+                    Measured (macOS arm64, -o:speed): sign ~33 us, read + verify ~44 us.
                   The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
   debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
                   Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =
@@ -112,7 +130,8 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   and arena used / reserved. No timings, so two dumps
                   of the same run are identical. F5 in the app prints it to stdout, --dump in headless mode.
                   Windows release is -subsystem:windows and has no console: use the debug or profile exe there.
-  ship.odin       Controls struct: throttle, turn, climb, each -1..1, zero = neutral. Filled by input, read by ship_step.
+  ship.odin       Controls struct: throttle, turn, climb, each -1..1, zero = neutral. Filled by input, read by the
+                  camera in map mode (game.odin), by ship_step in drive mode.
                   Ship: pos (km, map space), alt (m), heading (rad clockwise from north), speed (m/s). ship_step(s, c, dt)
                   runs once per fixed 60 Hz step in game_update, a pure function of ship + controls. Plain version:
                   speed = max(throttle, 0) * 35 m/s, turn 0.6 rad/s, climb 5 m/s. Limits, wind and battery come later.
