@@ -28,6 +28,19 @@ belgium.bin format (version 1, all little endian, 4-byte aligned)
   points  x, y (2 x f32, km)
   cities  pos (2 x f32), name (32 bytes, 0-terminated)
 
+WEATHER DATA
+
+Source: Open-Meteo forecast API v1 (CC BY 4.0, free for non-commercial use, no key)
+  https://api.open-meteo.com/v1/forecast
+  one request for all 63 grid points: latitude=..&longitude=.. (comma lists),
+  hourly=wind_speed_{975,950,925}hPa,wind_direction_{975,950,925}hPa,
+  forecast_hours=9&wind_speed_unit=ms&timezone=GMT&timeformat=unixtime
+  hour 0 = the current UTC hour. Open-Meteo counts every location as one call (10000 / day free),
+  so 63 points refreshed every 15 min = ~6000 / day. A finer grid needs a slower refresh.
+Grid: 9 x 7 points every 40 km from the map origin (lon 2.38, lat 51.56), covers the 285 x 229 km map.
+  lat = 51.56 - y / 111.32, lon = 2.38 + x / (111.32 cos 50.5), same projection as the bake tool.
+Measured (2026-11-21, macOS arm64): one fetch ~360 ms, ~0.9 MB scratch (json values).
+
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
   game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing
@@ -37,6 +50,10 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   weather.odin    wind_at(w, x, y, layer, hour) -> [2]f32 m/s, direction the wind blows toward, x east, y south
                   gust_at(w, x, y, layer, hour) -> 0..1, cloud_at(w, x, y, hour) -> 0..1. Stubs: 0
                   3 layers = 975 / 950 / 925 hPa ~ LAYER_ALT 300 / 550 / 800 m, hours 0..8 from snapshot start
+                  Weather struct: start (unix s) + wind [hour][layer][cell][2]f32, fixed size 13.6 KB, zero = calm
+  net.odin        fetch_weather(out, scratch) -> ok: blocking Open-Meteo request with curl (15 s timeout,
+                  max 1 MB), converts the json into a Weather. Writes out only if every value is present.
+                  Run it on a thread, never in the frame loop. Not called yet (snapshot + refresh todo).
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hubs = map cities for now.
                   Stub: straight line. Path lives in w.route_mem until the next call.

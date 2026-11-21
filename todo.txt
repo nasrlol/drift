@@ -84,7 +84,7 @@ DARIO: SHIP + CONTROLS
 [ ] bench: ship_step cost per step
 
 ANDREI: WEATHER + NETWORK
-[ ] Open-Meteo hourly forecast, next 9 hours, grid over Belgium, pressure levels 975/950/925 hPa
+[x] Open-Meteo hourly forecast, next 9 hours, grid over Belgium, pressure levels 975/950/925 hPa
 [ ] also fetch gusts and cloud cover
 [ ] store as flat arrays [hour][layer][cell], changing departure hour is an index, not a recompute
 [ ] validate everything (ranges, NaN, missing), reject bad snapshots
