@@ -49,6 +49,21 @@ Validation (reject the whole response, keep the old snapshot): 63 locations, 9 v
   Checked by feeding edited responses (null, out of range, shifted time, short series, 62 locations, Inf, html).
 Measured (2026-11-21, macOS arm64): one fetch ~400 ms, ~1.2 MB scratch (json values).
 
+ELEVATION DATA
+
+Source: Copernicus DEM GLO-90 (3 arc seconds, ~90 m), public release on AWS Open Data, tiles Last-Modified 2022-05-09
+  https://copernicus-dem-90m.s3.amazonaws.com/Copernicus_DSM_COG_30_N<lat>_00_E<lon>_00_DEM/<same name>.tif
+  license: free and open (Copernicus DEM licence), attribution required:
+  "(c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS
+  by the European Union and ESA; all rights reserved"
+tools/download_dem.sh (from anywhere): 15 tiles N49..N51 x E002..E006 (named after their south-west corner,
+  map spans lat 49.43..51.56, lon 2.38..6.42) into assets/raw/dem/ (60 MB, not in git), skips tiles it has,
+  treats 404 as a sea tile, then checks every file against tools/dem_tiles.sha256 (pins the exact data,
+  the bucket has no versioned paths). All 15 exist, none is sea only. ~7 s on a fast line.
+Tiles: float32 GeoTIFF (COG), heights in m above EGM2008, AREA_OR_POINT=Point. 1200 x 1200 below 50 N,
+  800 x 1200 from 50 N (longitude spacing doubles to 4.5 arc seconds). A surface model: buildings and
+  forest are in the heights. Checked: coast tile N51 E002 -5.7..41 m, Ardennes N50 E005 max 668 m.
+
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
   game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing

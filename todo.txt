@@ -30,7 +30,7 @@ NASR: MAP + RENDERING + UI
 [x] camera: pan + zoom to cursor (mouse wheel / controller)
 [x] draw cities + names
 [ ] "(c) OpenStreetMap contributors" on screen
-[ ] download Copernicus GLO-90 tiles N49-N51, E002-E006 (sea tiles 404, fine)
+[x] download Copernicus GLO-90 tiles N49-N51, E002-E006 (sea tiles 404, fine): tools/download_dem.sh
 [ ] gdalbuildvrt + gdalwarp to our projection, 250 m cells, raw i16
     (eqc, lat_ts=50.5, lon_0=2.38, R=6378137 so it matches the bin)
 [ ] bake heightmap block into belgium.bin, MAP_VERSION 3
