@@ -88,6 +88,7 @@ World :: struct {
 	cruise:          f32,
 	cruise_on_road:  bool,
 	car_anim:        Car_Anim,
+	car_skin:        Car_Skin, // the player's car body, car_models.odin
 	// Other cars from the presence gossip (presence.odin), copied from the node table every PRESENCE_COPY_S.
 	others:          [PRESENCE_SLOTS]Other_Car,
 	other_count:     int,
@@ -139,6 +140,7 @@ game_init :: proc() -> rawptr {
 
 	if !weather_load_snapshot(w, SNAPSHOT_PATH) do weather_load_fallback(w)
 	identity_load_or_create(w)
+	car_skin_load(w)
 	if rl.IsWindowReady() {
 		airship_build(w)
 		buildings_build(w)
