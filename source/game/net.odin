@@ -398,6 +398,147 @@ identity_load_or_create :: proc(w: ^World) {
 	logf(w, "net", "identity %016x", key_short(w.identity_pub))
 }
 
+// Carpool messages. Every message is exactly size_of(Message) bytes on the wire and on disk, little endian,
+// no implicit padding, so the relay can store and forward them without parsing.
+// The signature covers every byte before sig. A message id is the sha256 of all its bytes, sig included.
+MSG_MAGIC :: 0x534d5244 // "DRMS"
+MSG_VERSION :: 1
+MSG_MAX_SEATS :: 8
+
+Msg_Kind :: enum u8 {
+	None,
+	Offer,
+	Request,
+	Accept,
+	Review,
+}
+
+// A driver offers seats from one hub to another, flown with this weather snapshot.
+Msg_Offer :: struct {
+	from_hub, to_hub: u16le,
+	seats:            u8, // free seats, 1..MSG_MAX_SEATS
+	mode:             Route_Mode,
+	_:                [2]u8,
+	depart, arrive:   i64le, // unix seconds
+	weather:          [32]u8, // Weather snapshot hash the route was planned with
+	energy_kwh:       f32le, // whole trip, so others can recompute and compare
+	_:                [4]u8,
+}
+
+// A passenger asks for seats on an offer, possibly boarding / leaving at other hubs (detour).
+Msg_Request :: struct {
+	offer:            [32]u8, // message id
+	from_hub, to_hub: u16le,
+	seats:            u8,
+	_:                [3]u8,
+}
+
+// The driver accepts one request.
+Msg_Accept :: struct {
+	offer, request: [32]u8, // message ids
+}
+
+// After a trip, one side rates the other. accept proves the trip was agreed between them.
+Msg_Review :: struct {
+	subject: [32]u8, // public key of the rated user
+	accept:  [32]u8, // message id
+	stars:   u8, // 1..5
+	_:       [7]u8,
+}
+
+Message :: struct {
+	magic:   u32le,
+	version: u8,
+	kind:    Msg_Kind,
+	_:       [2]u8,
+	time:    i64le, // unix seconds, set by the author
+	author:  [32]u8, // ed25519 public key
+	using _: struct #raw_union {
+		offer:   Msg_Offer,
+		request: Msg_Request,
+		accept:  Msg_Accept,
+		review:  Msg_Review,
+	},
+	sig:     [64]u8,
+}
+#assert(size_of(Msg_Offer) == 64 && size_of(Msg_Request) == 40 && size_of(Msg_Accept) == 64)
+#assert(size_of(Msg_Review) == 72 && size_of(Message) == 184 && offset_of(Message, sig) == 120)
+
+// Fills magic, version, author and sig. The caller sets kind, time and the body, starting from a zeroed
+// Message so unused body bytes are zero. False when this user has no identity yet.
+msg_sign :: proc(w: ^World, m: ^Message) -> bool {
+	if w.identity_pub == {} {
+		logf(w, "net", "cannot sign: no identity")
+		return false
+	}
+	m.magic = MSG_MAGIC
+	m.version = MSG_VERSION
+	m.author = w.identity_pub
+	bytes := mem.ptr_to_bytes(m)
+	ed25519.sign(&w.identity, bytes[:offset_of(Message, sig)], m.sig[:])
+	return true
+}
+
+// For anything that comes from outside. Checks the size, header, field ranges, then the signature.
+msg_read :: proc(w: ^World, b: []u8) -> (m: Message, ok: bool) {
+	if len(b) != size_of(Message) {
+		logf(w, "net", "message is %d bytes, want %d", len(b), size_of(Message))
+		return
+	}
+	mem.copy(&m, raw_data(b), size_of(Message))
+	if m.magic != MSG_MAGIC || m.version != MSG_VERSION {
+		logf(
+			w,
+			"net",
+			"message magic %x version %d, want %x version %d",
+			m.magic,
+			m.version,
+			MSG_MAGIC,
+			MSG_VERSION,
+		)
+		return
+	}
+	fields_ok := false
+	#partial switch m.kind {
+	case .Offer:
+		o := m.offer
+		fields_ok =
+			o.from_hub != o.to_hub &&
+			o.seats >= 1 &&
+			o.seats <= MSG_MAX_SEATS &&
+			o.mode <= max(Route_Mode) &&
+			o.arrive > o.depart &&
+			o.energy_kwh >= 0 &&
+			o.energy_kwh < 1000
+	case .Request:
+		r := m.request
+		fields_ok = r.from_hub != r.to_hub && r.seats >= 1 && r.seats <= MSG_MAX_SEATS
+	case .Accept:
+		fields_ok = true
+	case .Review:
+		fields_ok = m.review.stars >= 1 && m.review.stars <= 5
+	}
+	if !fields_ok {
+		logf(w, "net", "message kind %d from %016x: bad fields", u8(m.kind), key_short(m.author))
+		return
+	}
+	pub: ed25519.Public_Key
+	if !ed25519.public_key_set_bytes(&pub, m.author[:]) {
+		logf(w, "net", "%v message author %016x is not a valid public key", m.kind, key_short(m.author))
+		return
+	}
+	if !ed25519.verify(&pub, b[:offset_of(Message, sig)], m.sig[:]) {
+		logf(w, "net", "%v message from %016x has a bad signature", m.kind, key_short(m.author))
+		return
+	}
+	return m, true
+}
+
+msg_id :: proc(m: ^Message) -> (id: [32]u8) {
+	hash.hash_bytes_to_buffer(.SHA256, mem.ptr_to_bytes(m), id[:])
+	return
+}
+
 // First 8 bytes of a public key as one number, for logs: "%016x".
 key_short :: proc(k: [32]u8) -> (v: u64) {
 	for i in 0 ..< 8 do v = v << 8 | u64(k[i])
