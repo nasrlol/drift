@@ -63,6 +63,12 @@ Street :: struct {
 	roads:      Tile_Cache,
 	road_cells: []u32,
 	road_segs:  []u32,
+	road_s:     []f32, // metres along its line at each map point, modulo 1200 (a whole number of dash periods)
+	road:       rl.Material, // STREET_ROAD_VS / FS
+	road_loc:   struct {
+		layer: i32,
+		light: Street_Light_Locs,
+	},
 	// The ground plane, the land use triangles and the roads share one shader.
 	ground:     rl.Mesh,
 	material:   rl.Material,
@@ -241,29 +247,79 @@ out vec4 finalColor;
 ` +
 	STREET_GLSL +
 	`
+vec2 hash22(vec2 p) { return vec2(hash12(p), hash12(p + 19.19)); }
+// The patchwork of fields: cells of about size metres around jittered points; x = the cell's hash, y = metres
+// to its border.
+vec2 fields(vec2 p, float size) {
+	vec2 g0 = floor(p / size), f = p / size - g0;
+	float md = 8.0;
+	vec2 mr = vec2(0.0), mg = vec2(0.0);
+	for (int j = -1; j <= 1; j++) {
+		for (int i = -1; i <= 1; i++) {
+			vec2 g = vec2(float(i), float(j));
+			vec2 r = g + 0.15 + 0.7 * hash22(g0 + g) - f;
+			float d = dot(r, r);
+			if (d < md) { md = d; mr = r; mg = g; }
+		}
+	}
+	float bd = 8.0;
+	for (int j = -2; j <= 2; j++) {
+		for (int i = -2; i <= 2; i++) {
+			vec2 g = mg + vec2(float(i), float(j));
+			vec2 r = g + 0.15 + 0.7 * hash22(g0 + g) - f;
+			vec2 dd = r - mr;
+			if (dot(dd, dd) > 1e-5) bd = min(bd, dot(0.5 * (mr + r), normalize(dd)));
+		}
+	}
+	return vec2(hash12(g0 + mg), bd * size);
+}
 void main() {
 	vec3 c = color.rgb;
+	int kind = -1;
 	if (remap > 0.5) {
 		for (int i = 0; i < 6; i++) {
-			if (distance(c, map_colors[i]) < 0.01) c = real_colors[i];
+			if (distance(c, map_colors[i]) < 0.01) {
+				c = real_colors[i];
+				kind = i;
+			}
 		}
 	}
 	c = lin(c);
-	// Inside a circle of real OSM buildings the open ground is streets and squares: paving, not grass. Parks are
-	// a later layer and stay green.
-	if (layer < 0.5) {
+	vec2 q = world.xz + origin;
+	float gw = max(length(fwidth(world.xz)), 1e-4);
+	// Inside a circle of real OSM buildings the open land and the City areas are streets and squares (paving);
+	// City areas elsewhere are the gardens of the towns. Parks are their own layer and stay green.
+	if (layer < 0.5 || kind == 0) {
 		float city = 0.0;
 		for (int i = 0; i < 16; i++) {
 			if (cities[i].z > 0.0) city = max(city, 1.0 - smoothstep(cities[i].z * 0.85, cities[i].z, distance(world.xz, cities[i].xy)));
 		}
 		vec2 pv = world.xz;
-		float pw = max(length(fwidth(pv)), 1e-4);
-		float stones = 1.0 - smoothstep(0.004, 0.004 + pw * 1.5, min(abs(fract(pv.x / 0.3) - 0.5), abs(fract(pv.y / 0.15 + 0.5 * floor(pv.x / 0.3)) - 0.5)) * 0.1);
-		vec3 paving = vec3(0.16, 0.155, 0.145) * (0.9 + 0.2 * fnoise(pv, 0.8, pw)) * (1.0 - 0.15 * stones * thin(0.03, pw));
+		float stones = 1.0 - smoothstep(0.004, 0.004 + gw * 1.5, min(abs(fract(pv.x / 0.3) - 0.5), abs(fract(pv.y / 0.15 + 0.5 * floor(pv.x / 0.3)) - 0.5)) * 0.1);
+		vec3 paving = vec3(0.16, 0.155, 0.145) * (0.9 + 0.2 * fnoise(pv, 0.8, gw)) * (1.0 - 0.15 * stones * thin(0.03, gw));
+		if (kind == 0) {
+			float g = fnoise(q, 0.08, gw);
+			vec3 garden = mix(vec3(0.05, 0.095, 0.025), vec3(0.078, 0.12, 0.035), g);
+			garden = mix(garden, vec3(0.13, 0.12, 0.1), smoothstep(0.72, 0.8, fnoise(q + 31.0, 0.05, gw)) * 0.7);
+			c = garden;
+		}
 		c = mix(c, paving, city);
 	}
-	vec2 q = world.xz + origin;
-	float gw = max(length(fwidth(world.xz)), 1e-4);
+	if (kind == 2) {
+		// Fields of ~160 m, each with its crop and the direction it was sown in: rows 0.75 m apart, tractor
+		// tramlines every 20 m, a hedge or ditch along the border.
+		vec2 fd = fields(q, 160.0);
+		float h = fd.x;
+		vec3 crop = h < 0.3 ? vec3(0.22, 0.19, 0.075) : h < 0.55 ? vec3(0.05, 0.1, 0.025) : h < 0.75 ? vec3(0.085, 0.058, 0.04) : h < 0.93 ? vec3(0.065, 0.115, 0.03) : vec3(0.36, 0.31, 0.03);
+		float ang = hash12(vec2(h * 97.0, 3.1)) * 3.14159;
+		float across = dot(q, vec2(-sin(ang), cos(ang)));
+		float row = smoothstep(0.25, 0.45, abs(fract(across / 0.75) - 0.5)) * thin(0.37, gw);
+		float tm = mod(across, 20.0);
+		float tram = max(box(tm - 9.1, 0.2, gw), box(tm - 10.9, 0.2, gw)) * thin(0.4, gw);
+		c = crop * (1.0 - 0.28 * row - 0.35 * tram) * (0.9 + 0.2 * fnoise(q, 0.02, gw));
+		c = mix(c, vec3(0.03, 0.07, 0.02), (1.0 - smoothstep(1.2, 2.6, fd.y)) * thin(2.0, gw));
+	}
+	if (kind == 1) c *= 0.85 + 0.3 * fnoise(q, 0.12, gw);
 	float n = fnoise(q, 1.0 / 9.0, gw) * 0.6 + fnoise(q, 1.0 / 41.0, gw) * 0.4;
 	float fine = fnoise(world.xz, 1.7, gw);
 	c *= 1.0 + (n - 0.5) * 0.22 + (fine - 0.5) * 0.12;
@@ -482,6 +538,106 @@ void main() {
 }
 `
 
+// Roads, sidewalks, rivers and zebra crossings (street_road_tile): uv = (metres along the line, metres from its
+// centre), hk.x = the road's half width, colour r = kind (0 asphalt, 1 motorway, 2 sidewalk, 3 water, 4 zebra),
+// g = lanes, b = 2 for edge lines, a = layer as in the ground shader. Markings are drawn here, filtered by the
+// pixel's footprint like the facades, so dashes do not sparkle in the distance.
+STREET_ROAD_VS :: `#version 330
+in vec3 vertexPosition;
+in vec2 vertexTexCoord;
+in vec2 vertexTexCoord2;
+in vec4 vertexColor;
+uniform mat4 mvp;
+uniform mat4 matModel;
+out vec3 world;
+out vec2 uv;
+out vec2 hk;
+out vec4 color;
+void main() {
+	gl_Position = mvp * vec4(vertexPosition, 1.0);
+	world = (matModel * vec4(vertexPosition, 1.0)).xyz;
+	uv = vertexTexCoord;
+	hk = vertexTexCoord2;
+	color = vertexColor;
+}
+`
+
+STREET_ROAD_FS ::
+	`#version 330
+in vec3 world;
+in vec2 uv;
+in vec2 hk;
+in vec4 color;
+uniform float layer;
+out vec4 finalColor;
+` +
+	STREET_GLSL +
+	`
+// A square wave of period p that is on for the first on metres, box filtered over w metres (exact average).
+float dash(float x, float p, float on, float w) {
+	w = max(w, 0.001);
+	float a = x - w * 0.5, b = x + w * 0.5;
+	float fa = floor(a / p) * on + min(mod(a, p), on);
+	float fb = floor(b / p) * on + min(mod(b, p), on);
+	return (fb - fa) / w;
+}
+void main() {
+	int mat = int(color.r * 255.0 + 0.5);
+	int lanes = int(color.g * 255.0 + 0.5);
+	int flags = int(color.b * 255.0 + 0.5);
+	float hw = hk.x;
+	float u = uv.x, v = uv.y;
+	vec2 fv = fwidth(uv);
+	float fw = max(length(fv), 1e-4);
+	vec3 V = normalize(cam - world);
+	vec3 base;
+	float water = 0.0;
+	if (mat <= 1) {
+		base = mat == 1 ? vec3(0.07, 0.072, 0.076) : vec3(0.058, 0.06, 0.064);
+		base *= 0.86 + 0.18 * fnoise(uv, 0.35, fw) + 0.12 * (fnoise(uv, 7.0, fw) - 0.5);
+		float lane_w = 2.0 * hw / float(max(lanes, 1));
+		float lp = mod(v + hw, lane_w) - lane_w * 0.5;
+		base *= 1.0 - 0.1 * box(abs(lp) - 0.8, 0.28, fv.y) * thin(0.4, fv.y);
+		float m = 0.0;
+		for (int i = 1; i < 4; i++) {
+			if (i >= lanes) break;
+			float line = box(v - (-hw + lane_w * float(i)), 0.065, fv.y);
+			m = max(m, line * dash(u, 12.0, 3.0, fv.x) * thin(0.13, fv.y));
+		}
+		if ((flags & 2) != 0) m = max(m, box(abs(v) - (hw - 0.35), 0.075, fv.y) * thin(0.15, fv.y));
+		base = mix(base, vec3(0.62, 0.62, 0.6), m * 0.9);
+	} else if (mat == 2) {
+		float av = abs(v);
+		vec2 t = vec2(u, av - hw) / 0.3;
+		float detail = thin(0.03, fw);
+		vec2 j = abs(fract(t) - 0.5);
+		float joints = smoothstep(0.47 - fw / 0.3, 0.5, max(j.x, j.y));
+		base = vec3(0.2, 0.196, 0.185) * (0.93 + 0.14 * hash12(floor(t)) * detail) * (1.0 - 0.22 * joints * detail);
+		float kerb = box(av - (hw + 0.08), 0.08, fv.y);
+		base = mix(base, vec3(0.3, 0.3, 0.28), kerb);
+		base *= 1.0 - 0.35 * box(av - hw, 0.04, fv.y) * thin(0.08, fv.y);
+	} else if (mat == 3) {
+		base = vec3(0.012, 0.025, 0.03);
+		water = 1.0;
+	} else {
+		base = vec3(0.058, 0.06, 0.064) * (0.9 + 0.2 * fnoise(uv, 3.0, fw));
+		float stripe = dash(v + hw, 1.0, 0.5, fv.y) * box(u, 1.5, fv.x);
+		base = mix(base, vec3(0.62, 0.62, 0.6), stripe * thin(0.5, fv.y) * 0.9);
+	}
+	float sh = sun_shadow(world, vec3(0.0, 1.0, 0.0));
+	vec3 c = base * (sun_col * max(sun_dir.y, 0.0) * sh + amb_sky);
+	if (water > 0.0) {
+		vec2 q = world.xz;
+		vec3 n = normalize(vec3((fnoise(q, 1.3, fw) - 0.5) * 0.12, 1.0, (fnoise(q + 17.0, 1.1, fw) - 0.5) * 0.12));
+		vec3 r = reflect(-V, n);
+		float fres = 0.03 + 0.97 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
+		c = mix(c, sky_col(r), fres) + sun_col * 2.0 * pow(max(dot(r, sun_dir), 0.0), 200.0) * sh;
+	}
+	finalColor = vec4(tonemap(aerial(c, world)), 1.0);
+	gl_FragDepth = 1.0 - (layer + floor((1.0 - color.a) * 4.0 + 0.5)) * 2e-7;
+}
+`
+
 // The shadow pass draws only depth.
 STREET_DEPTH_VS :: `#version 330
 in vec3 vertexPosition;
@@ -546,10 +702,10 @@ STREET_LOOK :: Street_Look {
 	sky_amb = {0.66, 0.76, 0.9},
 	gnd_amb = {0.3, 0.29, 0.25},
 	tone = {1, 1, 1},
-	land = {80, 106, 50, 255},
+	land = {68, 86, 44, 255},
 	areas = {
 		.City = {118, 116, 108, 255},
-		.Park = {66, 100, 44, 255},
+		.Park = {58, 84, 38, 255},
 		.Farmland = {128, 130, 78, 255},
 		.Marsh = {84, 104, 70, 255},
 		.Beach = {206, 192, 156, 255},
@@ -641,6 +797,16 @@ street_build :: proc(w: ^World) {
 		}
 		logf(w, "street", "%d road segments in %d cells", len(st.road_segs), STREET_ROAD_W * STREET_ROAD_H)
 	}
+	if st.road_s == nil {
+		st.road_s = make([]f32, len(w.m.points), perm)
+		for l in w.m.lines {
+			s: f32
+			for k in l.start ..< l.start + l.count {
+				st.road_s[k] = math.mod(s, 1200)
+				if k + 1 < l.start + l.count do s += linalg.length(w.m.points[k + 1] - w.m.points[k]) * 1000
+			}
+		}
+	}
 	ground: {
 		// The land under everything: a quad of 9 x 9 km, drawn under the car in street space.
 		R :: 4500
@@ -685,6 +851,14 @@ street_build :: proc(w: ^World) {
 	}
 	st.depth = rl.LoadMaterialDefault()
 	st.depth.shader = rl.LoadShaderFromMemory(STREET_DEPTH_VS, STREET_DEPTH_FS)
+	road := rl.LoadShaderFromMemory(STREET_ROAD_VS, STREET_ROAD_FS)
+	if !rl.IsShaderValid(road) do logf(w, "street", "road shader did not compile")
+	st.road = rl.LoadMaterialDefault()
+	st.road.shader = road
+	st.road_loc = {
+		layer = rl.GetShaderLocation(road, "layer"),
+		light = street_light_locs(road),
+	}
 	shadow: {
 		st.shadow_fbo = rlgl.LoadFramebuffer()
 		if st.shadow_fbo == 0 do break shadow
@@ -717,37 +891,48 @@ street_unload :: proc(st: ^Street) {
 	rl.UnloadShader(st.lit.shader)
 	rl.UnloadShader(st.sky)
 	rl.UnloadShader(st.depth.shader)
+	rl.UnloadShader(st.road.shader)
 	if st.shadow_fbo != 0 do rlgl.UnloadFramebuffer(st.shadow_fbo)
 	st.shadow_fbo, st.shadow_tex = 0, 0
 	st.ready = false
 }
 
-// Road ribbons of one tile at their real width, the river beds, and the lane markings (Tile_Build), relative
-// to lo.
+// One road tile (Tile_Build), relative to lo: for every road and river segment whose middle lies in lo ..< hi a
+// ribbon at its real width, uv = (metres along the line from road_s, metres from the centre line), sidewalks with
+// a kerb under the roads in towns (a lower layer, so a crossing road always lies on top of them), and zebra
+// crossings on each arm of a town junction of the road graph. Shaded by STREET_ROAD_FS.
 street_road_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	st := &w.street
-	look := STREET_LOOK
-	pos := make([dynamic][3]f32, 0, 1 << 14, context.temp_allocator)
-	col := make([dynamic][4]u8, 0, 1 << 14, context.temp_allocator)
-	quad :: proc(
-		pos: ^[dynamic][3]f32,
-		col: ^[dynamic][4]u8,
-		a, b: [2]f32,
-		hw: f32,
-		c: rl.Color,
-		layer: u8,
-	) {
-		d := b - a
+	Ribbons :: struct {
+		pos:    [dynamic][3]f32,
+		uv, hk: [dynamic][2]f32,
+		col:    [dynamic][4]u8,
+	}
+	r: Ribbons
+	r.pos = make([dynamic][3]f32, 0, 1 << 14, context.temp_allocator)
+	r.uv = make([dynamic][2]f32, 0, 1 << 14, context.temp_allocator)
+	r.hk = make([dynamic][2]f32, 0, 1 << 14, context.temp_allocator)
+	r.col = make([dynamic][4]u8, 0, 1 << 14, context.temp_allocator)
+	// A strip from a to b (km, relative to lo) reaching half m to each side, longer by ext m at both ends; u from
+	// u0 at a, v = metres from the centre (positive on the left of a -> b on the map).
+	strip :: proc(r: ^Ribbons, a, b: [2]f32, half, ext, u0, hw: f32, mat, lanes, flags, layer: u8) {
+		d := (b - a) * 1000
 		l := linalg.length(d)
 		if l <= 0 do return
-		d /= l
-		n := [2]f32{-d.y, d.x} * hw
-		// Counter-clockwise on the map, like the other ground meshes.
-		p0, p1, p2, p3 := a - n, a + n, b + n, b - n
-		append(pos, [3]f32{p0.x, p0.y, 0}, [3]f32{p1.x, p1.y, 0}, [3]f32{p2.x, p2.y, 0})
-		append(pos, [3]f32{p0.x, p0.y, 0}, [3]f32{p2.x, p2.y, 0}, [3]f32{p3.x, p3.y, 0})
-		v := [4]u8{c.r, c.g, c.b, 255 - layer * 64}
-		append(col, v, v, v, v, v, v)
+		dir := d / l
+		n := [2]f32{-dir.y, dir.x} * half / 1000
+		e := dir * ext / 1000
+		p0, p1, p2, p3 := a - e - n, a - e + n, b + e + n, b + e - n
+		ua, ub := u0 - ext, u0 + l + ext
+		c := [4]u8{mat, lanes, flags, 255 - layer * 64}
+		for k in ([6]int{0, 1, 2, 0, 2, 3}) {
+			p := [4][2]f32{p0, p1, p2, p3}[k]
+			uvk := [4][2]f32{{ua, -half}, {ua, half}, {ub, half}, {ub, -half}}[k]
+			append(&r.pos, [3]f32{p.x, p.y, 0})
+			append(&r.uv, uvk)
+			append(&r.hk, [2]f32{hw, 0})
+			append(&r.col, c)
+		}
 	}
 	cx := clamp(int(lo.x / STREET_ROAD_CELL_KM), 0, STREET_ROAD_W - 1)
 	cy := clamp(int(lo.y / STREET_ROAD_CELL_KM), 0, STREET_ROAD_H - 1)
@@ -755,42 +940,53 @@ street_road_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	for item in st.road_segs[st.road_cells[c]:st.road_cells[c + 1]] {
 		k := int(item & 0xffffff)
 		kind := Map_Kind(item >> 24)
+		hw := road_half_width_m(kind)
+		if hw == 0 do continue
 		a, b := w.m.points[k], w.m.points[k + 1]
 		mid := (a + b) / 2
 		if mid.x < lo.x || mid.y < lo.y || mid.x >= hi.x || mid.y >= hi.y do continue
-		a, b = a - lo, b - lo
-		hw := road_half_width_m(kind)
-		if hw == 0 do continue
-		lanes := kind == .Motorway ? 3 : 2
-		color := kind == .Motorway ? look.motorway : look.asphalt
-		layer: u8 = 2
-		if kind == .River do lanes, color, layer = 0, look.river, 1
-		d := b - a
-		l := linalg.length(d)
-		if l <= 0 do continue
-		dir := d / l
-		// Longer by half a width at both ends, so the joints between segments are covered.
-		ext := dir * hw / 1000
-		quad(&pos, &col, a - ext, b + ext, hw / 1000, color, layer)
-		if lanes == 0 do continue
-		// Markings: dashed lines between the lanes (3 m dash, 9 m gap), solid edge lines on the motorway.
-		side := [2]f32{-dir.y, dir.x}
-		length_m := l * 1000
-		for lane in 1 ..< lanes {
-			off := (f32(lane) / f32(lanes) * 2 - 1) * (hw - 0.4) / 1000
-			for s: f32 = 0; s + 3 < length_m; s += 12 {
-				p := a + side * off + dir * (s / 1000)
-				quad(&pos, &col, p, p + dir * 0.003, 0.00007, look.marking, 3)
-			}
+		u0 := st.road_s[k]
+		if kind == .River {
+			strip(&r, a - lo, b - lo, hw, hw, u0, hw, 3, 0, 0, 0)
+			continue
 		}
-		if kind == .Motorway {
-			for edge in ([2]f32{-1, 1}) {
-				off := side * edge * (hw - 0.5) / 1000
-				quad(&pos, &col, a + off, b + off, 0.0001, look.marking, 3)
-			}
+		lanes: u8 = kind == .Motorway ? 3 : 2
+		flags: u8 = kind == .Motorway || kind == .Trunk || kind == .Primary ? 2 : 0
+		if kind != .Motorway && kind != .Trunk && urban_at(w, mid) {
+			strip(&r, a - lo, b - lo, hw + ROAD_SIDEWALK_M, hw, u0, hw, 2, lanes, flags, 1)
+		}
+		strip(&r, a - lo, b - lo, hw, min(hw, 6), u0, hw, kind == .Motorway ? 1 : 0, lanes, flags, 2)
+	}
+	// Zebra crossings: on every arm of a junction (3 or more roads) in town, a few metres out from the middle.
+	for node in w.m.road_nodes {
+		if node.count < 3 do continue
+		p := node.pos
+		if p.x < lo.x || p.y < lo.y || p.x >= hi.x || p.y >= hi.y || !urban_at(w, p) do continue
+		widest: f32
+		for e in w.m.road_edges[node.first:][:node.count] do widest = max(widest, road_half_width_m(Map_Kind(e.kind)))
+		for e in w.m.road_edges[node.first:][:node.count] {
+			hw := road_half_width_m(Map_Kind(e.kind))
+			if hw == 0 || e.count < 2 || Map_Kind(e.kind) == .Motorway do continue
+			next := w.m.road_points[e.start + 1]
+			d := next - p
+			if linalg.length(d) * 1000 < widest + 8 do continue
+			dir := linalg.normalize(d)
+			at := p + dir * (widest + 4) / 1000
+			strip(&r, at - lo, at + dir * 0.003 - lo, hw, 0, -1.5, hw, 4, 0, 0, 3)
 		}
 	}
-	return tile_mesh(pos[:], col[:])
+	if len(r.pos) == 0 do return {}
+	mesh := rl.Mesh {
+		vertexCount   = i32(len(r.pos)),
+		triangleCount = i32(len(r.pos) / 3),
+		vertices      = ([^]f32)(raw_data(r.pos)),
+		texcoords     = ([^]f32)(raw_data(r.uv)),
+		texcoords2    = ([^]f32)(raw_data(r.hk)),
+		colors        = ([^]u8)(raw_data(r.col)),
+	}
+	rl.UploadMesh(&mesh, false)
+	mesh.vertices, mesh.texcoords, mesh.texcoords2, mesh.colors = nil, nil, nil, nil
+	return mesh
 }
 
 // Once per frame while on: looking around, the chase camera and the raylib camera. Drawing only, frame time is
@@ -971,17 +1167,17 @@ street_draw :: proc(w: ^World) {
 			rl.DrawMesh(lm.areas, mat, place_at(place, {}))
 		}
 
-		// 3: rivers, roads and markings (layers 2, 3, 4).
-		layer, remap = 1, 0
-		rl.SetShaderValue(sh, st.loc.layer, &layer, .FLOAT)
-		rl.SetShaderValue(sh, st.loc.remap, &remap, .FLOAT)
+		// 3: rivers, sidewalks, roads and zebra crossings (layers 1 .. 4, STREET_ROAD_FS).
+		road_layer: f32 = 1
+		rl.SetShaderValue(st.road.shader, st.road_loc.layer, &road_layer, .FLOAT)
+		street_light_set(w, st.road.shader, st.road_loc.light, st.view.position)
 		tiles_update_draw(
 			w,
 			&st.roads,
 			STREET_ROAD_TILE_KM,
 			STREET_REACH_KM,
 			street_road_tile,
-			mat,
+			st.road,
 			centre,
 			place,
 		)

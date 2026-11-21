@@ -683,6 +683,19 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   index. With 0.5 km tiles, debug build over the standard shots: 514 tiles, mean 1.2 ms, worst
                   8.5 ms. Frame (update + draw, CPU, profile) 1.9 ms over the roofs of Brussels with shadows,
                   0.8 ms low in a street (debug 3.8 / 2.2); unlimited fps ~1000 frames/s, so the GPU has room.
+  roads           (street.odin street_road_tile, STREET_ROAD_FS) per 1 km tile: each road and river segment is a strip
+                  at road_half_width_m with uv = (metres along its line, road_s: per map point, modulo 1200 so the
+                  12 m dash period stays whole; metres from the centre line). In towns (urban_at: a circle of real
+                  buildings or a City triangle) a sidewalk strip 2.5 m wider each side lies one layer below every
+                  carriageway, so a crossing road always covers it. Zebra crossings on each arm of a road graph
+                  junction (3+ edges) in town, a few metres out. The shader draws asphalt grain and patches, tyre
+                  tracks, dashed lane lines (3 on, 9 off, an exact box filter over the pixel), edge lines on
+                  motorway / trunk / primary, sidewalk tiles 30 cm with a kerb and its shadow, zebra stripes, and
+                  rivers as water with rippled sky reflections.
+  ground          (street.odin STREET_GROUND_FS) City areas: paving inside the circles of real buildings, gardens in
+                  the towns; farmland: a patchwork of ~160 m fields (Voronoi cells of the absolute position), each
+                  with its crop (wheat, green crop, ploughed soil, grass, rapeseed) and sowing direction, rows
+                  0.75 m apart, tramlines every 20 m, a hedge or ditch along the border; parks a little varied.
   shadows         (street.odin) one 4096^2 depth map (rlgl framebuffer with only a depth texture, raylib's own
                   RenderTexture holds no depth texture) over a 420 m square ahead of the camera (0.1 m per texel),
                   drawn each frame from an orthographic sun camera 1500 m up the sun direction, its centre snapped

@@ -238,6 +238,8 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 [x] BUG: land use and road ribbons did not show in the street view: f32 depth of the km meshes, fixed with
     layered far depth in the ground shader (notes.txt street.odin)
 [ ] residential streets, squares and sidewalks between the houses (not in belgium.bin: below tertiary)
+[x] roads with sidewalks, kerbs, zebra crossings, filtered markings; water; generated houses off the roads
+[x] ground: gardens in towns, a patchwork of striped fields with hedges
 [x] always day in the street view, natural greens; light only in the whole app (Lars: dark mode gone everywhere)
 [x] scripted run mode with screenshots (--script: keys per frame, shot, quit) for visual checks
     test/data/street_standard.txt: tower, street, main road, park, countryside

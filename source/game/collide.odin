@@ -98,6 +98,21 @@ segment_box_m :: proc(a, b, h: [2]f32) -> f32 {
 	return best
 }
 
+// Inside a town or city: within a circle of real buildings or in a City triangle of the land use map.
+urban_at :: proc(w: ^World, p: [2]f32) -> bool {
+	co := &w.collide
+	if !co.built do collide_build(w)
+	for c in co.cities[:co.city_count] do if linalg.length(p - c) < BUILDINGS_RADIUS_KM do return true
+	cx := clamp(int(p.x / COLLIDE_TRI_CELL_KM), 0, COLLIDE_TRI_W - 1)
+	cy := clamp(int(p.y / COLLIDE_TRI_CELL_KM), 0, COLLIDE_TRI_H - 1)
+	cell := cy * COLLIDE_TRI_W + cx
+	for item in co.tri_items[co.tri_cells[cell]:co.tri_cells[cell + 1]] {
+		a, b, c := w.m.area_points[item[1]], w.m.area_points[item[1] + 1], w.m.area_points[item[1] + 2]
+		if in_triangle(p, a, b, c) do return true
+	}
+	return false
+}
+
 // True when the box of half sizes half (m) around c (km), turned to the axes ax / ay, keeps clear of every road
 // and river with its sidewalk and TOWN_ROAD_GAP_M.
 town_lot_clear :: proc(w: ^World, c, ax, ay, half: [2]f32) -> bool {
