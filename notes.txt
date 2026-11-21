@@ -49,12 +49,45 @@ Validation (reject the whole response, keep the old snapshot): 63 locations, 9 v
   Checked by feeding edited responses (null, out of range, shifted time, short series, 62 locations, Inf, html).
 Measured (2026-11-21, macOS arm64): one fetch ~400 ms, ~1.2 MB scratch (json values).
 
+ELEVATION DATA
+
+Source: Copernicus DEM GLO-90 (3 arc seconds, ~90 m), public release on AWS Open Data, tiles Last-Modified 2022-05-09
+  https://copernicus-dem-90m.s3.amazonaws.com/Copernicus_DSM_COG_30_N<lat>_00_E<lon>_00_DEM/<same name>.tif
+  license: free and open (Copernicus DEM licence), attribution required:
+  "(c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS
+  by the European Union and ESA; all rights reserved"
+tools/download_dem.sh (from anywhere): 15 tiles N49..N51 x E002..E006 (named after their south-west corner,
+  map spans lat 49.43..51.56, lon 2.38..6.42) into assets/raw/dem/ (60 MB, not in git), skips tiles it has,
+  treats 404 as a sea tile, then checks every file against tools/dem_tiles.sha256 (pins the exact data,
+  the bucket has no versioned paths). All 15 exist, none is sea only. ~7 s on a fast line.
+Tiles: float32 GeoTIFF (COG), heights in m above EGM2008, AREA_OR_POINT=Point. 1200 x 1200 below 50 N,
+  800 x 1200 from 50 N (longitude spacing doubles to 4.5 arc seconds). A surface model: buildings and
+  forest are in the heights. Checked: coast tile N51 E002 -5.7..41 m, Ardennes N50 E005 max 668 m.
+
+FONT
+
+Three families from the design ("Typografie"), static TTFs copied unchanged into assets/fonts, each with its
+license (SIL OFL 1.1) next to it. Raw downloads in assets/raw/fonts (not in git). Embedded with #load (~1 MB).
+  Roboto v3.016 (googlefonts/roboto-3-classic release, zip sha256 1653dbe1...e334f), web/static/:
+    Roboto-Regular a6ec0ffa...fe523690, Roboto-Medium 71f5e045...f22b462d, Roboto-Bold 07ee011e...cdee3772,
+    license Roboto-OFL.txt
+  Figtree v2.0.3 (github.com/erikdkennedy/figtree, tag v2.0.3, fonts/ttf/): Medium e605259d...28c8b3fd,
+    SemiBold a63306f1...075eb574, Bold 2a33fa55...e26c563e, ExtraBold 31990321...80f4234b,
+    Italic 5983a032...06599439, license Figtree-OFL.txt
+  Roboto Mono v3.001 (github.com/googlefonts/RobotoMono, tag v3.001, fonts/ttf/): Regular af0bff75...1be17cb4,
+    Bold 3ecf35e5...aa95c4db (no static SemiBold exists, Font.Mono_600 uses Bold), license RobotoMono-OFL.txt
+
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
   game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing
                   Sim speed: keys 1..4 set w.sim_speed = 1x / 5x / 15x / 40x (SIM_SPEEDS). The frame time (capped at
                   0.25 s) is multiplied before it goes into the accumulator, so 40x runs up to 40 steps per 60 fps frame
                   (600 at most after a hitch) and every step still has dt = 1 / 60.
+                  w.font: Roboto rasterized by raylib on the first frame (needs a window, so never in headless),
+                  FONT_PX 14, codepoints 32..255. Falls back to the raylib font with a log line if loading fails.
+                  Unloaded in game_shutdown. The profiler overlay still uses the raylib font.
+                  "(c) OpenStreetMap contributors" (with a real copyright sign) bottom right on a white box,
+                  required by the ODbL wherever the map is shown.
                   Camera: w.view (View) = pan (km from the map centre to the screen centre) + zoom (log2 relative
                   to the fitted view, ZOOM_MIN -1 .. ZOOM_MAX 7). Zero = the whole map fitted to 95% of the window.
                   Each frame it becomes a Camera2D, zoom = px per km. Pan is clamped so the screen centre stays on
@@ -65,15 +98,63 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   step and nothing is recorded.
                   Drive mode: Controls go to ship_step and the replay record, the camera sits on the ship, only the
                   wheel zooms. The ship is drawn as an 8 px red triangle pointing along its heading in both modes.
-                  Map drawing: each Map_Line is one rl.DrawLineStrip
-                  straight from w.m.points ([2]f32 km has the rl.Vector2 layout, no copy, no allocation).
-                  Colors: border dark grey, rivers blue, motorways orange. 10872 strips, 36k points per frame.
-                  Measured 2026-11-21 (Asahi M2, 800 x 450): draw 8.7 ms debug, 7.3 ms profile, over the 4 ms budget.
-                  The cost is raylib pushing 36k vertices one by one through its batch every frame. Fix: the
-                  "static map meshes" todo (upload once at startup, one draw call per kind).
-                  Cities: after EndMode2D, each w.m.cities pos goes through GetWorldToScreen2D, black 3 px dot +
-                  name (default font, 10 px) right of it, so both keep their pixel size at every zoom. No overlap
-                  culling yet (labels todo). The default font covers Latin-1, "Liege" with e grave draws correctly.
+                  Start: game_init puts the ship on the Brussels tower (hub named "Bruxelles - Brussel", looked up
+                  by name since hub ids follow the bake order), alt = height_at + HUB_TOWER_M, heading north.
+                  Only on a fresh World, a hot reload keeps the ship where it is. Missing hub: log line, map corner.
+                  Colors (render.odin): every drawn color comes from Palette = the design token table
+                  (docs/drift-design.pdf "Kleuren": surface, surface_2, surface_3, text, text_2, line, accent,
+                  accent_strong, green, banner, banner_2, red, warning, reroute, arrived, sheet, chip, bubble,
+                  bubble_text, pill), one per Theme in PALETTES. Night is zero (the design default), key T and the
+                  toolbar switch. palette(w) -> ^Palette returns w.palette, a copy of PALETTES[w.theme] made at the
+                  start of every frame: no pointer into this library's constants, so hot reload is safe. Map line
+                  colors go to the line shader as a uniform, switching rebuilds nothing. The profiler overlay keeps
+                  its own fixed colors.
+                  Map colors (same Palette, design "Kaart" table): land, city, park, farmland, marsh, beach, water,
+                  roof, wall, motorway / main_road / street / track with their _casing, route / alt_route with their
+                  _casing, sky, horizon. Used now: land (clear color), water (rivers), motorway; the border has no
+                  design color and uses text_2. Wind trails use text: the design names a speed ramp (white < 6 m/s,
+                  mint < 10, yellow < 14, coral above) without values, open question.
+                  Line meshes (Line_Meshes in render.odin, built inline in game_update): map lines and wind trails
+                  are meshes drawn by one shader (LINE_VS, GLSL 330), built on the first frame (needs the window,
+                  never in headless). Each segment is 6 vertices (2 triangles, no index buffer: raylib indices are
+                  u16). Every vertex carries both ends (vertexPosition = A, vertexNormal.xy = B); the shader picks
+                  the corner from gl_VertexID % 6 and pushes it along the screen space normal, so lines are 1 px at
+                  every zoom. vertexColor.r = index into a uniform color array (Map_Kind colors, then WIND_COLOR),
+                  vertexColor.a scales the alpha. The CPU arrays live in the frame arena; after UploadMesh the mesh
+                  pointers are set to nil, so UnloadMesh only frees GPU buffers. Rebuilt after a hot reload (the
+                  shader may have changed), unloaded in game_shutdown.
+                  Map: static, 25493 segments, 152958 vertices, 4.1 MB on the GPU, one DrawMesh.
+                  Wind: dynamic mesh, rewritten every frame with 3 UpdateMeshBuffer calls, one DrawMesh.
+                  Measured 2026-11-21 (Asahi M2, 800 x 450, debug): map draw 8.6 ms with DrawLineStrip -> 0.55 ms
+                  with the mesh. The first frame takes ~34 ms (mesh build).
+                  Wind particles (Wind_Particles in render.odin, w.wind): WIND_PARTICLES 600, SoA arrays x, y, vx, vy,
+                  age in World. Drawing only, never read by the simulation, so frame time is used. Spread over the
+                  visible part of the map, respawned there when they leave the view or reach WIND_LIFE_S 3 s; the
+                  first frame (seeded = false) gives them random ages. Seeded LCG (wind_rand), same picture every
+                  run. Velocity = wind_at of layer 0 (until the layer toggles) at the forecast hour of w.tick,
+                  shown at WIND_PX_PER_MS 4 px/s per m/s at every zoom. Trail = 0.4 s of travel, fades in and out
+                  (sin of age), not drawn under WIND_CALM_MS 0.5. No snapshot = calm = no particles.
+                  Measured (same machine, draw ms, map + wind + labels): debug 1.8, -o:speed 0.7. With 1500
+                  particles: DrawLineV per particle cost 0.5 ms (-o:speed); the mesh writes cost ~3.4 ms in debug,
+                  so the count went down to 600, which still shows the wind clearly.
+                  Labels (Label in render.odin): after EndMode2D, each city goes through GetWorldToScreen2D into a
+                  flat [dynamic]Label in the frame arena: dot, text rect (LABEL_GAP_PX 2 px bigger on every side),
+                  text. Cities with dot and text off screen are dropped. A label whose rect overlaps an earlier shown
+                  one keeps only its dot. Earlier = first in the bake: there is no population to rank by yet. Then one
+                  pass draws dots (3 px) and texts (default font, LABEL_PX 10). Pixel size stays the same at every
+                  zoom. The default font covers Latin-1, "Liege" with e grave draws correctly. 15 cities: O(n^2)
+                  overlap test, fine until there are hundreds of labels.
+  ui.odin         Fonts: Font enum (Figtree 500/600/700/800 + italic 400, Roboto 400/500/700, Mono 400/600),
+                  font_get rasterizes each (font, px) pair on first use (codepoints 32..255, up to 64 pairs in
+                  w.fonts), fonts_unload in game_shutdown. ui_text(w, pos, text, font, px, color) draws at the
+                  top-left pos, ui_text_size measures. The OSM credit and the toolbar use them.
+                  Immediate mode UI, our own (raygui needs a system library on Linux, it is not in the build).
+                  A widget is a proc call that draws itself and returns what happened this frame; nothing is kept
+                  between frames. ui_button(rect, text, on, pal) -> clicked: on = button_on color, mouse over =
+                  button_hot, default font 10 px. Toolbar top right (TOOLBAR_W x TOOLBAR_H, laid out in
+                  game_update before the camera so the mouse does not pan or zoom the map under it, drawn after the
+                  labels): Map / Drive, sim speeds (names from SIM_SPEEDS), Day / Night. Keys M, 1-4, T still work.
+                  A click changes the state after the frame's update, so it shows from the next frame.
   map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
                   load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
                   Hubs are copied into a fixed array w.m.hubs[:w.m.hub_count], hub id = index.
@@ -104,17 +185,113 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     Present but wrong size or invalid: logged and left alone (it is the user's reputation),
                     w.identity stays zero and network features stay off. w.identity_pub = public key,
                     logged as the first 8 bytes in hex. Moves to the user data folder with the release item.
-                  Carpool messages: Message is 184 bytes, fixed size, little endian, no implicit padding
-                    (#assert). Header: magic "DRMS", version 1, kind (Offer / Request / Accept / Review),
+                  Carpool messages: Message is 208 bytes, fixed size, little endian, no implicit padding
+                    (#assert). Header: magic "DRMS", version 2, kind (Offer / Request / Accept / Review),
                     time (unix s, set by the author), author (ed25519 public key). Body is a raw union:
                       Offer   from_hub, to_hub, seats 1..8, mode, depart, arrive, weather snapshot hash, energy_kwh
-                      Request offer id, from_hub, to_hub, seats 1..8
-                      Accept  offer id, request id
+                      Request offer id, from_hub, to_hub, seats 1..8, passenger x25519 public key (not zero)
+                      Accept  offer id, request id, driver x25519 public key (not zero)
                       Review  subject public key, accept id, stars 1..5
-                    sig = ed25519 over bytes 0..119. Message id = sha256 of all 184 bytes.
+                    sig = ed25519 over bytes 0..143. Message id = sha256 of all 208 bytes. Version 2 since the
+                    trip key exchange; node hello version 2 too, so old nodes are refused.
                     msg_sign(w, m) fills magic, version, author, sig (start from a zeroed Message).
-                    msg_read(w, bytes) for anything from outside: size, header, field ranges, then signature.
+                    msg_read(bytes) -> (m, why) for anything from outside: msg_check (size, header, field
+                    ranges) then the signature. why is "" or a constant reason, the caller logs it (network
+                    threads have no World). msg_check alone is for the store file.
                     Measured (macOS arm64, -o:speed): sign ~33 us, read + verify ~44 us.
+                  Message store: w.store (Store, ~0.9 MB in World) holds up to STORE_MAX = 4096 messages and
+                    their ids, unordered, removal moves the last one into the hole. Bounded so one key cannot
+                    fill a node: STORE_PER_AUTHOR = 64, an author over it loses its oldest message (by time).
+                    Expiry: an offer at its depart time, the rest 30 days after their time. Times more than
+                    1 h ahead are refused (they would never expire). Full store: drop expired, then the one
+                    that expires first, or refuse m (.Full) when m itself expires first.
+                    store_add(s, m, now) -> Added / Duplicate / Expired / Future / Full, memory only, m must
+                    have passed msg_read. Every access takes s.lock (sync.Mutex, zero is unlocked): the
+                    network thread writes, the frame loop reads.
+                    cache/messages.log: messages back to back, append-only while running (store_append).
+                    store_load(s, path, now, scratch) at start: header + field check per message (no
+                    signatures: only verified messages are ever written), then store_rewrite writes it again without
+                    expired / dropped ones (temp file + rename). Also rewritten when it reaches 2 x STORE_MAX
+                    messages. A size that is not a multiple of 208 (killed mid-append, or a v1 file) moves to
+                    messages.log.bad and the store starts empty; peers send the messages again.
+                    Load of a full file ~12 ms (linear dedupe, 4k x 4k id compares), so it runs on the
+                    network thread, not in game_init.
+                  Peer to peer node: every game is one, there is no server. w.node (Net_Node) holds the peers,
+                    the threads and per-thread buffers (2 x 128 KB id lists). node_poll(w) each frame starts it
+                    after start and after every reload, node_stop(w) in game_before_reload / game_shutdown.
+                    Two threads, blocking with timeouts (5 s per send / recv):
+                      serve: listens on NODE_PORT 7419 (w.node.port overrides it, 0 = default), non-blocking
+                        accept every 50 ms so it can stop, one connection at a time, max 30 s each.
+                      sync: loads the store first (store_load), then every SYNC_S = 30 s per peer: asks the
+                        peer's ids since T, gets the missing ones (64 per request, each through msg_read and
+                        checked to be one it asked for), pushes ours it does not list.
+                        T = 0 (all) once an hour per peer, otherwise the last good sync - 10 min.
+                        A failed sync backs off: 30 s x 2^fails, max 32 min.
+                    Protocol, one TCP connection, the dialer asks until it closes:
+                      both: hello = magic "DRNP" u32le, version u8, listen port u16le (0 = not listening),
+                        node id [8]u8 (random per run)
+                      'I' since i64le -> count u32le + ids;  'G' count + ids -> count + messages;
+                      'P' count + messages -> added u32le;  'N' -> count u8 + peers (family u8, address
+                      [16]u8, port u16le). Counts above STORE_MAX / SYNC_BATCH / MAX_PEERS close it.
+                    net_dial (dial_posix.odin / dial_windows.odin): net.dial_tcp has no connect timeout (a
+                    dead address blocks ~75 s), so non-blocking connect + poll, 5 s max, checks the stop flag
+                    every 100 ms. Stop while dialing a dead peer: ~10 ms.
+                    Store writes from both threads: s.file_lock around appends and rewrites.
+                    Peer list (max 32): seeds from SEED_NODES (in code, empty until there is a public node)
+                    and cache/seeds.txt (one "host:port" or "host" per line, # comments, resolved on the
+                    sync thread). Learned: every 'N' answer (peers that synced in the last 24 h) and every
+                    node that dials us (its address + the listen port from its hello). Learned peers are
+                    saved to cache/peers.txt (text) and read back at start. A learned peer that fails 8
+                    syncs in a row (~5 h with the back off) is forgotten, seeds stay. A full list drops the
+                    learned peer that failed most, never one that works. A hello with our own node id
+                    means we dialed ourselves (our address came back through others): dropped, and that
+                    address is never added again this run.
+                    Measured (localhost): two nodes with 120 + 80 messages both end with 200 in one sync.
+                    Three nodes where B and C only know A: after one round each knows the other two.
+                  Weather between peers: Snapshot = Snapshot_Header + Weather, the exact file / wire bytes.
+                    snapshot_check(bytes) -> (^Snapshot, why): size, magic, version, sha256, weather_valid.
+                    The one check for disk (weather_load_snapshot, cache/snaps) and network.
+                    cache/snaps/<sha256 hex>.snap, max SNAP_KEEP = 32 (~730 KB): the node's own snapshot
+                    (fetch thread after every fetch, cache/weather.snap at start) and every snapshot a live
+                    offer in the store names (offer.weather). After each sync the node asks that peer
+                    ('W' + sha256) for up to 4 it does not have; a peer that lacks one answers 0 and it
+                    does not count. Kept only when snapshot_check passes and the hash is the one asked
+                    for. Full: drop the oldest (fetched_at) that no live offer names, else the oldest.
+                    Names are written from the hash digit by digit, never from peer text. Files that fail
+                    the check at start are deleted. snap_read(sha256, out) for the game: a passenger
+                    recomputes an offer's route with the driver's weather (matching / verify items).
+                    Weather still only reaches the simulation through a file and snapshot_check.
+                  Trip and live position (w.trip, one trip at a time, zero = none, frame loop only):
+                    trip_keypair(w) -> x25519 public key, fresh per trip, goes into the signed Request
+                      (passenger) or Accept (driver), so the key exchange is authenticated by ed25519.
+                    trip_start(w, request, accept, driver): checks accept answers that request and offer and
+                      that this user is the author of its side, x25519 shared secret (all zero = low order
+                      point, refused), key = HKDF-SHA256(salt accept id, ikm shared, info "drift live position
+                      v1"), wipes the private half. Trip id = accept id. trip_end(w) wipes it.
+                    Live_Packet (88 bytes): trip id, seq, from_driver, Live_Position (x, y km, alt m, time)
+                      encrypted with ChaCha20-Poly1305, header bytes as aad. Nonce = seq + direction byte, so
+                      both directions share the key but never a nonce. live_seal / live_open; open drops the
+                      own direction, seq <= last accepted (replay) and anything that does not verify.
+                    Game side: live_send(w, pos) seals and leaves the packet in w.node.live_out, live_poll(w)
+                      opens the newest one the node thread found. No network in the frame loop.
+                    Through peers (node_live, sync thread, every 1 s while live_out is set): the packet goes
+                      to this node's own table and to up to 8 peers that synced in the last minute ('L'),
+                      and each is asked for the other direction's latest ('M'); the highest seq wins. Not
+                      gossiped: it reaches the other side through any node both talk to. Nodes keep the
+                      latest packet per trip and direction, 1024 slots, 60 s, memory only, never on disk,
+                      and cannot read them. A node cannot tell garbage with a higher seq from a real packet,
+                      so someone who knows a trip id can spoil it at one node; the receiver asks every node
+                      it reaches and only keeps what verifies.
+                    Tested: two processes, offer -> request -> accept through sync, both started the same
+                      trip, positions both ways every second (heard 19 of 24, only the newest is kept).
+                      The 21 checks from #25 (replay, flipped ciphertext, changed seq, own direction, guessed
+                      key, low order point, a third user claiming the passenger role) pass on the node table.
+                  Headless node: drift --headless --node [--port <n>] (debug host and release exe). game_init,
+                    then node_poll, no window and no frame loop, runs until killed. Same store, sync, peer
+                    files and cache/ as the game, so run it in its own directory. Exits 1 when it cannot
+                    listen (a node nobody can reach helps nobody). "[node] 120 messages, 3 peers,
+                    2 reachable" every 5 min. Killed mid-append the store file can end in a partial
+                    message: the next start moves it to messages.log.bad and starts empty, peers resend.
                   The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
   debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
                   Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =
@@ -162,12 +339,18 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   height_at is only called for a hub that is within 30 m horizontally, not for all 15, because the real
                   height_at will cost more than the stub.
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
-                  R/F climb up / down, gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
+                  R/F climb up / down (arrows = W/A/S/D, PgUp / PgDn = R / F), gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
+  airship.odin    Airship (in World): low-poly model from docs/drift-design.pdf built once in game_init (airship_build, flat
+                  shaded vertex colors, ~900 triangles, 3 prop meshes spin with speed) and uploaded to the GPU; the GL objects
+                  live in raylib so they survive hot reload. airship_draw(w, cam): soft shadow, then the model through an
+                  orthographic Camera3D (1 unit = 1 px, tilt 0.7 rad from the south) moved so it lands on the ship, 80 px
+                  long at every zoom. Nose follows ship.heading (so the crab against the wind shows), banks with turn_rate.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
-                  Path lives in w.route_mem until the next call: from, the centres of the grid nodes
-                  in between, to. A* never enters a blocked node (see below).
+                  from.z / to.z are the tower tops (headless: height_at + HUB_TOWER_M).
+                  Path lives in w.route_mem until the next call: the smoothed path below, from the tower top
+                  + 6 m at from to the tower top + 6 m at to. A* never enters a blocked node (see below).
                   ok = false also when from or to has no free node within 5 cells (outside the grid,
                   inside a no-fly zone): grid_free_node_near picks the closest free cell centre, lowest free
                   layer first (spec), the altitude of the end point is not used.
@@ -179,17 +362,81 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   w.grid holds the search state as fixed arrays in World (no arena, allocated with World):
                   visit stamp, cost, parent, heap slot and heap item per node. A node's cost and parent only
                   count when visit[n] == grid.search, so a route starts with search += 1, not a 4.9 MB clear.
-                  A*: cost = km flown (1 or sqrt 2 per cell, layer change = altitude difference / 1000).
-                  mode and hour are not used yet (cost per mode and wind are the next todo items).
-                  Estimate (grid_estimate) = octile distance + altitude difference: exact on an empty grid,
-                  never too high, consistent, so an expanded node is never reopened. Weighted x 1.001 to
-                  break the many near-ties of an open grid (paths at most 0.1 % longer than the cheapest).
+                  Cost per mode (spec), edge_cost(g, a, b, mode) for neighbour nodes:
+                    fastest  18 m/s  seconds          dt                                vertical 0.2 x climb m / 3
+                    calmest  13 m/s  seconds          dt x (1 + 7 g^2)                  vertical 0.2 x climb m / 3
+                    greenest 11 m/s  kWh   (P(v, g) - S(c)) dt / 3600 + 0.25 g^2 km   vertical climb_kwh + 0.02
+                  dt = km x 1000 / ground speed, g = gust index, c = cloud cover. Wind, gust and cloud = mean of
+                  the two node centres.
+                  Energy model (spec), in route.odin, also for the ship and the metrics: BATTERY_KWH 180,
+                  BATTERY_START 0.86 (a ship leaves with 154.8 kWh), power_kw(v, g) = 3 + 0.0085 v^3 + 6 g,
+                  solar_kw(c) = 9 x 0.75 x (1 - 0.78 c) (6.75 kW clear, 1.49 kW overcast), climb_kwh(m) =
+                  0.12 kWh per 100 m up, 0.04 per 100 m down (a 250 m layer change: 0.30 / 0.10 kWh).
+                  P(11, 0) = 14.3 kW is above the strongest sun, so greenest edges never cost less than zero.
+                  Calm and clear at 11 m/s: 0.19 kWh per km, overcast 0.32.
+                  Ground speed (spec), ground_speed(v, wind, dir): tailwind + sqrt(v^2 - crosswind^2) along the
+                  edge. Blocked when the crosswind is stronger than v (no retry, as the spec reads). Under
+                  2.5 m/s the edge is flown at v + 6 m/s (that v also goes into P for greenest), still under
+                  1.5 m/s it is blocked. NaN wind blocks the edge.
+                  Wind cache: grid.wind / grid.gust hold wind_at / gust_at at every node centre for one hour
+                  (12 B x 203k = 2.4 MB in World), grid.cloud cloud_at at every cell centre (one layer, 4 B x 68k
+                  = 271 KB), rebuilt when the hour or that hour's forecast changes (compared to a 2.5 KB copy,
+                  so a new snapshot is picked up without a flag). Zero is a calm, clear hour 0. The three modes
+                  and every route in the same hour share it. Build ~2.6 ms -o:speed (406k bilinear samples).
+                  Estimate (grid_estimate) = octile km x lowest cost per km + layer changes x cheapest climb.
+                  Lowest cost per km = the mode's cost at airspeed + the strongest wind of the hour (as a pure
+                  tailwind), its calmest gust and (greenest) its clearest sky; bilinear sampling never leaves the range of the grid points,
+                  so it never overestimates with any snapshot. When the wind can push the ground speed under
+                  2.5 m/s (wind_max > v - 2.5) it also takes the cost at v + 6 with ground speed at most
+                  min(v + 6 + wind_max, 2.5 + sqrt((v + 6)^2 - v^2)), whichever is lower. Consistent, so an expanded node is never reopened.
+                  Weighted x 1.001 to break the many near-ties of an open grid (at most 0.1 % above the cheapest).
+                  Checked: cost equals a plain Dijkstra (estimate 0) within 1e-6 on 126 routes x 3 modes, windy
+                  and random wind snapshots. Again with ground speed: same found / not found and cost within
+                  3.2e-6 relative (f32 sums in another order) on 4455 routes: all hub pairs x 3 modes x hours
+                  0 / 4 / 8 on windy.snap and headwind.snap (1607 found), 405 on random wind up to 35 m/s.
+                  Again with the energy model: 540 routes (180 random hub pairs x 3 modes, calm and clear plus
+                  5 snapshots with random wind up to 36 m/s, gust and cloud 0..1): all found by both, A* at
+                  most 0.0003 % above Dijkstra.
+                  Path cleanup (spec, in this order, in route() once A* reaches the goal):
+                    1. string pulling: from each kept node jump to the farthest of the next 14 nodes (PULL_WINDOW)
+                       in the same layer whose straight line is free and costs at most 0.4 % (PULL_TOLERANCE)
+                       more than the A* path between them (g.cost difference). line_cost(g, a, b, mode) walks
+                       the cells the line crosses (Amanatides-Woo), each piece costs as an edge (flight_cost,
+                       shared with edge_cost) with the weather of its cell; a blocked cell or a blocked piece
+                       makes the line not free. A line through a cell corner does not enter the cells beside
+                       it, the same as a diagonal A* step. Never across a layer change.
+                    2. towers: first and last point at the tower top + 6 m (TOWER_ABOVE_M), with a ramp point
+                       halfway between the tower and the first (last) node, at that node's altitude (nasr, #45).
+                    3. Chaikin x3 (points at 1/4 and 3/4 of every segment, the towers stay), then resampled every
+                       RESAMPLE_KM of horizontal distance, the last point is the end tower. 250 m, not the spec's
+                       20 m (a 5 km map): the heightmap spacing, so the clearance sees every height cell (nasr, #46).
+                       20 m gave ~10.7k points per route and test files over the 1 MB limit.
+                    4. slope limit 0.24 (SLOPE_MAX): a forward pass caps the climb, a backward pass the descent,
+                       both only lower points and leave the towers, then z >= height_at + 40 m
+                       (TERRAIN_CLEARANCE_M).
+                  Oostende -> Liege (213 km): 189 A* nodes -> ~15 kept -> 856 points, route arena 2 -> 14 KB.
+                  Chaikin cuts corners of the pulled lines, so the smooth path can clip blocked cells: on
+                  2700 routes with random zones 3 points were inside a zone, at most 36 m deep (a zone blocks
+                  every cell it overlaps, so the cell margin absorbs most of it). Tower legs (hub -> first node,
+                  up to 5 cells) are not checked against blocked cells, as in the spec: a hub inside a zone
+                  (Mechelen in no_fly.txt) is still reached by its tower leg.
+                  Checked (2700 routes: all modes, calm / windy / headwind / cloudy, random zones): ends on the
+                  tower tops + 6, chord between points <= 250 m, every slope <= 0.24, every point >= ground + 40.
+                  line_cost against a 0.1 m step integration on 19k random lines: cost within 2.1e-6, the free
+                  test agreed except one line through a cell corner (the brute force counts the corner).
+                  Measured (cloud box, -o:speed): cleanup adds ~0.05 ms to Oostende -> Liege (calm route 0.038 ->
+                  0.088 ms), with the height_at stub; estimate ~0.05 ms (~250 lines of ~8 cells x ~20 ns + 856
+                  points). Bench route avg 8.6 -> 8.0 ms, three modes 23.0 -> 22.0 ms (noise, A* dominates).
                   Open set: binary min-heap on f in grid.heap (fixed array, 8 B x 203k) with grid.slot
                   (index in the heap, HEAP_CLOSED once expanded) for decrease-key. No allocation during
-                  the search, the path is the only allocation (route arena). Search state 24 B x 203k = 4.9 MB.
-                  Measured (cloud box, -o:speed): 2025 routes between all city pairs x 3 x 3 layers,
-                  avg 14 us, worst 0.19 ms; corner to corner expands 286 nodes (35k without the weight).
-                  Debug build: avg 0.14 ms, worst 0.6 ms. With test walls the cost matched a plain Dijkstra.
+                  the search, the path is the only allocation (route arena). Search state 28 B x 203k = 5.7 MB.
+                  Scan order (for the A* scan animation): grid.expanded[:grid.expanded_len] holds the nodes in
+                  the order the last route expanded (popped) them, start first, goal last on success. Fixed
+                  array of 203k Node (813 KB) in World: a node is never reopened, so it always fits. Reset to
+                  0 at the start of every route, so a route that fails before A* (no free end node, separate
+                  regions) leaves an empty scan, and one that fails during A* holds every node it searched.
+                  Valid until the next route call. The renderer only reads it, the router does no extra work
+                  beyond one store per expanded node. The state dump prints expanded_len.
                   Blocked nodes (spec): highest ground in the cell + 75 m above the layer, the outer ring of
                   cells, or a no-fly zone below its ceiling. w.no_fly: [8]No_Fly_Zone (centre km, radius km,
                   ceiling m), radius 0 = unused slot, zero = no zones. A zone blocks every cell it overlaps,
@@ -215,6 +462,19 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Checked against a brute force over all 203k nodes (zones overlapping, at the grid edge,
                   partly outside, smaller than a cell, NaN / Inf zones ignored), a whole-grid closest free node,
                   and 135 routes with random zones against a Dijkstra on the blocked grid (same cost within 0.1 %).
+                  Measured before the wind costs (cloud box, -o:speed): 2025 routes between all city pairs
+                  x 3 x 3 layers, avg 14 us, worst 0.19 ms; corner to corner expands 286 nodes.
+                  With wind costs (bench, random wind up to 21 m/s, 4-core cloud box, profile): route avg 6.2 ms
+                  incl. the cache build when the hour changes (max 23 ms), three modes avg 14.8 ms (max 89 ms).
+                  The estimate assumes the strongest wind as tailwind everywhere, so strong wind means a weak
+                  estimate: ~19k expanded nodes per route, ~320 ns each. Without the cache: three modes 33 ms.
+                  With ground speed (same box, 3 runs each, A = before / B = after): route avg 5.7-6.2 /
+                  6.3-6.8 ms, three modes 14.2-14.9 / 17.0-18.6 ms. The crosswind makes edges dearer than the
+                  pure tailwind estimate, so 7-9 % more nodes are visited (fastest 15.3k -> 16.4k, calmest
+                  33.7k -> 36.1k, greenest 25.8k -> 28.1k on random wind up to 21 m/s), plus a sqrt per edge.
+                  With the energy model (4-core cloud box, profile, 2 runs each, before / after): route avg
+                  7.7-8.0 / 8.0-8.2 ms, three modes 20.7-21.5 / 22.2-22.5 ms, within the noise of this box.
+                  The cloud cache adds 68k cloud_at calls (~0.7 ms) when the hour changes.
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
                   Each case = snapshot + inputs through game.headless_run, output compared line by line to the
@@ -223,15 +483,34 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
   test/data/      snapshots in the cache/weather.snap format (valid sha256, fetched_at 1795176600).
                   calm.snap: zero wind / gust / cloud, start 1795176000. nan_wind.snap: same with
                   wind[3][1][20].x = NaN, must be rejected by weather_valid. routes.txt: one route per mode, hours 0 / 4 / 8,
-                  a route to the same hub. calm_routes.expected: A* grid paths (unsmoothed, wind not used yet).
+                  a route to the same hub. calm_routes.expected: smoothed paths (path cleanup).
+                  windy.snap: same start, every hour: 300 m wind (-4, 0), 550 m calm, 800 m (12, 0) m/s; gust 0.1,
+                  0.8 on 800 m at weather grid columns x > 120 km; cloud 0.3. windy_routes.txt: 6 -> 10 in each
+                  mode and 10 -> 6 fastest. Expected: fastest stays on 800 m, calmest leaves it at x 136 km,
+                  greenest at x 149 km on the grid (both where the gust ramp makes 550 m cheaper; the smoothed
+                  path starts down at x 131 / 144 km), westbound stays on 300 m.
                   no_fly.txt: Brussels inside an 8 km zone (no route from or to it), a 3 km zone on the
                   Mechelen - Leuven line (goes around), Antwerpen under a 400 m zone (leaves from layer 1),
                   Mechelen in a 2 km zone (ends at the closest free node outside it).
+                  Greenest flies its east steps on 800 m (23 m/s ground speed) and its diagonals on calm 550 m:
+                  a diagonal on 800 m makes only 15.5 m/s because of the crosswind.
+                  headwind.snap: same start, every layer (-15.54, 0) m/s in hours 0..7, (-20, 0) in hour 8; gust
+                  0.1, cloud 0.3. 15.54 makes every ground speed rule decide a route (table in
+                  headwind_routes.txt): fastest only goes east on the retry, calmest needs the retry and has no
+                  south steps, greenest zigzags on the diagonals (east stays under 1.5 m/s), hour 8 greenest has
+                  no safe route. Dropping the retry, the 1.5 floor or the crosswind each changes the output.
+                  cloudy.snap: same start, calm, no gust; hours 0..7 cloud 1 on the weather points x 80..200 km,
+                  y 80..120 km, 0 elsewhere, hour 8 cloud 1 everywhere. cloudy_routes.txt: greenest Oostende ->
+                  Liege flies north of the clouds (222.1 km smoothed instead of 213.6 km), fastest and
+                  greenest in uniform overcast take the shortest path. Without the solar term all match.
+                  scan_order (code, no .expected): grid.expanded after routes between all 15 x 15 hubs on
+                  calm.snap: starts at the start node, ends at the goal, no node twice, none blocked, every path
+                  node in it; the same route twice gives the same scan; a route that fails before A* leaves 0.
                   gust.txt: a 260 m gust zone on the Mechelen - Leuven line (goes around it, stays at 300 m),
                   a 3 km gust zone over Antwerpen (start moves out of it, every layer is closed), a no-fly
                   and a gust zone in the same route.
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
-                  (copy a cache/weather.snap), the calm one does not exercise the wind.
+                  (copy a cache/weather.snap), the synthetic ones have uniform wind per layer.
 bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.
                   200 rounds; wind_at / gust_at / cloud_at / height_at over 4096 fixed-seed points per round,
                   route, three modes, route after a new gust zone (blocked + regions rebuilt), snapshot load,
@@ -255,6 +534,82 @@ World memory
   Arenas: perm (World, map, long lived), route_mem (reset per route), frame (temp_allocator, reset per frame).
   w.weather is a fixed-size Weather inside World (22.7 KB), so it needs no weather arena.
   game_update sets context.allocator = perm and context.temp_allocator = frame.
+
+DESIGN INTERFACES (planned, not built yet; from docs/drift-design.pdf, the todo items under "design")
+The look and feel is docs/drift-design.pdf (Dutch): screens, sizes, colors, fonts, motion. Only the look:
+names, values and logic come from the code on main. Place, road and river names are the real ones in
+belgium.bin (never the doc's examples), wind layers are LAYER_ALT, zoom is ZOOM_MIN / MAX, and doc features
+on the NOT DOING list in todo.txt (3D buildings, shadows, touch / mobile layout, speech) are not built.
+Each person owns their own files, so the parts do not touch the same lines. The owner adds the World
+field (one line) and the call in the game.odin draw list (one line) in the PR that builds it.
+A signature below changes only with the owner's PR that also updates this section.
+
+Files and owners
+  render.odin, ui.odin, map.odin, terrain.odin   nasr    tokens, fonts, icons, ui kit, map, labels
+  route.odin, nav.odin (simulation), nav_ui.odin  Lars    routes, maneuvers, nav state, route + banner + sheet
+  ship.odin, input.odin, airship.odin,            Dario   ship, keys, airship model, camera,
+    camera.odin, pilot_ui.odin                            flying buttons, control pad
+  weather.odin, net.odin, plan_ui.odin            Andrei  weather, network, plan screen, layers panel, legend
+
+World fields (zero = the design default: plan screen, night theme, nothing chosen)
+  screen: Screen                       nasr    Screen :: enum u8 {Plan, Navigate}
+  plan:   Plan                         Andrei  from, to: int (hub id), has_from, has_to: bool, mode: Route_Mode,
+                                               hour: int (0..8), layers: Layers
+  routes: [Route_Mode]Planned_Route    Lars    filled by plan_routes, path in route_mem
+  nav:    Nav                          Lars
+  cam:    Cam                          Dario   replaces View
+  airship: Airship                     Dario   mesh handles, rebuilt in game_hot_reloaded
+
+Base (nasr)
+  palette(w) -> ^Palette               token fields as in the design: surface, surface_2, surface_3, text, text_2,
+                                       line, accent, accent_strong, green, banner, banner_2, red, warning,
+                                       reroute, arrived, sheet, chip, bubble, bubble_text, pill + map colors
+  Font :: enum u8 {Figtree_500, Figtree_600, Figtree_700, Figtree_800, Roboto_400, Roboto_500, Roboto_700,
+                   Mono_400, Mono_600}
+  Icon :: enum u8                      the icon table of the design (leaf, bolt, waves, tower, ...) + maneuvers
+  ui_text(w, pos: [2]f32, text: string, font: Font, px: f32, color: rl.Color)
+  ui_icon(w, icon: Icon, centre: [2]f32, px: f32, color: rl.Color)
+  ui_card(w, r: rl.Rectangle)                                       18 px corners + shadow
+  ui_round_button(w, r, icon: Icon, on: bool) -> bool               48 px map, 64 px nav
+  ui_pill_button(w, r, text: string, kind: Pill_Kind) -> bool      Primary / Secondary / Danger
+  ui_chip(w, r, icon: Icon, top, bottom: string, on: bool) -> bool
+  ui_toggle(w, r, on: ^bool) -> bool
+  ui_segment(w, r, labels: []string, sel: ^int) -> bool
+  ui_stat_chip(w, r, label, value: string, meter: f32)              meter < 0 = no meter
+  ui_toast(w, text: string)                                         shown 1.6 s, state in World
+  All return true on the frame they are clicked. Hit area at least 44 x 44 px.
+
+Camera (Dario)
+  cam_to_screen(w, pos: [3]f32) -> (px: [2]f32, visible: bool)     everyone projects through this
+  cam_fit(w, lo, hi: [2]f32, screen: rl.Rectangle)                 km box into a screen rect, 0.8 s ease-out
+  cam_chase(w)   cam_overview(w)   cam_preview(w, mode: Route_Mode)   cam_recentre(w)
+
+Routes and navigation (Lars)
+  plan_routes(w, from, to: int, hour: int)                          all three modes into w.routes
+  Planned_Route :: struct {path: [][3]f32, ok: bool, sum: Route_Summary, maneuvers: []Maneuver}
+  Route_Summary :: struct {minutes, km, kmh, net_kwh, wind_ms: f32, tag: Route_Tag, why: [64]u8}
+  route_sample(w, mode: Route_Mode, t: f32) -> (pos: [3]f32, heading: f32)   t 0..1 along the path
+  Maneuver :: struct {kind: Maneuver_Kind, path_index: int, text: [48]u8, sub: [48]u8, road: [32]u8}
+  Maneuver_Kind :: enum u8 {Straight, Slight_Left, Slight_Right, Left, Right, Sharp_Left, Sharp_Right,
+                            Climb, Descend, Depart, Arrive}
+  Nav :: struct {mode: Route_Mode, next: int (maneuver index), next_m: f32, then_visible: bool,
+                 eta_s, remaining_km, used_kwh: f32, banner: Banner_State, warning: [48]u8, manual: bool}
+  Banner_State :: enum u8 {Flying, Rerouting, Arrived}
+  nav_start(w, mode: Route_Mode)   nav_stop(w)   nav_set_manual(w, on: bool)   gust_report(w) -> bool
+  nav_sheet_rect(w) -> rl.Rectangle                                 Dario places Exit, self-fly, speed from it
+
+Plan screen and weather (Andrei)
+  plan_panel_rect(w) -> rl.Rectangle                                for cam_fit (routes go right of it)
+  Layers :: struct {hide_wind, hide_gusts, hide_no_fly, hide_solar: bool, wind_layer: int (index in LAYER_ALT)}
+  layers_draw_ground(w)                                             gust coloring + no-fly hatching
+  wind_note(w, mode: Route_Mode, out: []u8) -> string               one sentence about the wind on the route
+
+Draw order (game.odin, nasr keeps the list; the design's "Tekenvolgorde")
+  1 map fills (nasr)  2 layers_draw_ground (Andrei)  3 road casings, fills (nasr)  4 buildings (nasr)
+  5 routes (Lars)  6 airship shadow + airship (Dario)  7 labels (nasr), bubbles, road sign, pill (Lars)
+  8 screen UI: Plan -> plan_ui (Andrei); Navigate -> nav_ui (Lars) + pilot_ui (Dario); layers panel (Andrei);
+    toasts last (nasr)
+Open question on the design: icon set + the two extra fonts (new dependencies), #64.
 
 BUILD
 compile.sh [debug|profile|release] [extra odin flags], build.sh wraps it with build-notify
