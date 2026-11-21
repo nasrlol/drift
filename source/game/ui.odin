@@ -169,7 +169,6 @@ Icon :: enum u8 {
 	Search,
 	Speaker,
 	Warning,
-	Report_Gust,
 	Steer,
 	Reroute,
 	Straight,
@@ -213,7 +212,6 @@ ICON_CODEPOINTS :: [Icon]rune {
 	.Search       = 0xef7a,
 	.Speaker      = 0xe050, // volume_up
 	.Warning      = 0xe002,
-	.Report_Gust  = 0xe003, // add_alert
 	.Steer        = 0xf135, // stadia_controller
 	.Reroute      = 0xe863, // autorenew
 	.Straight     = 0xeb95,
@@ -271,13 +269,11 @@ ui_icon :: proc(w: ^World, icon: Icon, centre: [2]f32, px: f32, color: rl.Color)
 	case .Leaf ..= .Arrow_Right:
 		codepoints := ICON_CODEPOINTS
 		size := f32(i32(px + 0.5))
-		rl.DrawTextCodepoint(
-			font_get(w, .Icons, size),
-			codepoints[icon],
-			linalg.floor(centre - size / 2),
-			size,
-			color,
-		)
+		font := font_get(w, .Icons, size)
+		// raylib scales by line height (ascent + descent, 1152 units), the icon square is 960 units wide,
+		// so the advance is narrower than size. The line is symmetric around the square, size / 2 centres y.
+		half_w := f32(rl.GetGlyphInfo(font, codepoints[icon]).advanceX) / 2
+		rl.DrawTextCodepoint(font, codepoints[icon], linalg.floor(centre - {half_w, size / 2}), size, color)
 	}
 }
 
@@ -568,11 +564,22 @@ ui_stat_chip :: proc(w: ^World, r: rl.Rectangle, label, value: string, meter: f3
 }
 
 // Input field 44 px: 1 px line border, 10 px corners, text 15 px; editing shows a caret. Returns true on click.
-ui_input :: proc(w: ^World, r: rl.Rectangle, text, placeholder: string, editing: bool) -> bool {
+// error: a red outline, for a field that has to be filled before going on.
+ui_input :: proc(
+	w: ^World,
+	r: rl.Rectangle,
+	text, placeholder: string,
+	editing: bool,
+	error := false,
+) -> bool {
 	pal := palette(w)
 	id, hot, fired := ui_widget(w, r)
 	if editing do round_rect(r, 10, pal.surface_2)
-	round_rect_lines(r, 10, 1, editing || hot ? pal.text_2 : pal.line)
+	if error {
+		round_rect_lines(r, 10, 2, pal.red)
+	} else {
+		round_rect_lines(r, 10, 1, editing || hot ? pal.text_2 : pal.line)
+	}
 	shown := text == "" ? placeholder : text
 	size := ui_text_size(w, shown, .Roboto_400, 15)
 	pos := [2]f32{r.x + 12, r.y + (r.height - size.y) / 2}

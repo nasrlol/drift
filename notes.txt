@@ -294,10 +294,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   nav_ui.odin     (Lars) route strips, time bubbles, start ring + destination pin, banner + Then, road sign,
                   pill under the ship (layer, or the road name while driving), warning pill, sheet,
                   carpool_draw_partner.
-  pilot_ui.odin   (Dario) button column, speed circle, Re-centre, self-fly + Exit / Done,
-                  3 x 3 control pad + key card. No sound button (speech is NOT DOING).
+  pilot_ui.odin   (Dario) button column, speed circle, Re-centre, self-fly + Exit / Done.
+                  No sound button (speech is NOT DOING).
   plan_ui.odin    (Andrei) plan panel (cards A and B, hub search, departure list, route rows, wind note,
-                  Preview / Start), hub menu on the map, map buttons, layers panel + legend, layers_draw_ground.
+                  Preview / Start; without a route they toast what is missing and shake the empty from / to field red,
+                  plan_nudge), hub menu on the map, map buttons, layers panel, layers_draw_ground.
   labels.odin     (nasr) river names and motorway shields: places picked once along the lines (labels_build),
                   projected and culled against each other and the hub names every frame.
   road.odin       (Lars, simulation, no raylib) the airship as a flying car on the road graph (#67, #68 B):
@@ -630,8 +631,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   stays 136; unknown values draw as Concept). Shapes and colours are ours.
   music.odin      (author andrei) the soundtrack, made in code (no audio file): Am F C G, two bars per chord at
                   84 BPM, pad + bass + plucked arpeggio with a ping-pong echo + hi-hat + soft kick. A raylib audio
-                  stream (44100 Hz, f32 stereo) refilled from game_update (music_frame), no callback thread. N turns
-                  it on and off, saved in cache/music.txt. Silent when there is no audio device. Notes and levels are
+                  stream (44100 Hz, f32 stereo) refilled from game_update (music_frame), no callback thread. Off by
+                  default, N or the speaker button (plan map buttons, navigation
+                  button column; music_button) turns it on and off, saved in cache/music.txt. Silent when there is no audio device. Notes and levels are
                   ours.
   presence.odin   (author andrei) other cars on the map, peer-to-peer (Lars: "geen relay service, gossiping"): every
                   PRESENCE_S 2 s the game signs its position (Presence, 136 bytes, ed25519 identity) and the node swaps
@@ -984,7 +986,7 @@ Files and owners
   render.odin, ui.odin, map.odin, terrain.odin   nasr    tokens, fonts, icons, ui kit, map, labels
   route.odin, nav.odin (simulation), nav_ui.odin  Lars    routes, maneuvers, nav state, route + banner + sheet
   ship.odin, input.odin, airship.odin,            Dario   ship, keys, airship model, camera,
-    camera.odin, pilot_ui.odin                            flying buttons, control pad
+    camera.odin, pilot_ui.odin                            flying buttons
   weather.odin, net.odin, plan_ui.odin            Andrei  weather, network, plan screen, layers panel, legend
   presence.odin                                   Andrei  other cars by gossip (network)
   buildings.odin, nature.odin, clouds.odin        nasr    3D buildings, trees, clouds (map rendering)
@@ -1041,8 +1043,11 @@ Routes and navigation (Lars)
 
 Plan screen and weather (Andrei)
   plan_panel_rect(w) -> rl.Rectangle                                for cam_fit (routes go right of it)
-  Layers :: struct {hide_wind, hide_gusts, hide_no_fly, hide_solar, terrain: bool, wind_layer: int}
+  Layers :: struct {show_wind, hide_gusts, hide_no_fly, hide_solar, terrain: bool, wind_layer: int}
                                                                     terrain = the "3D terrain" map type (hillshade)
+                                                                    wind flow off by default, the rest on
+                                                                    (nasr, 2026-11-21); in navigation only
+                                                                    nav_wind counts (also off by default)
   layers_draw_ground(w)                                             gust coloring + no-fly hatching
   wind_note(w, mode: Route_Mode, out: []u8) -> string               one sentence about the wind on the route
 

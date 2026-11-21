@@ -209,13 +209,7 @@ game_update :: proc(memory: rawptr) -> bool {
 	}
 	ui_begin(w)
 	pad_poll(w)
-	keys := read_controls(w)
-	pad := pilot_pad_controls(w)
-	w.controls = {
-		clamp(keys.throttle + pad.throttle, -1, 1),
-		clamp(keys.turn + pad.turn, -1, 1),
-		clamp(keys.climb + pad.climb, -1, 1),
-	}
+	w.controls = read_controls(w)
 	typing := w.plan.editing != .None
 
 	if !typing {
@@ -388,7 +382,7 @@ game_update :: proc(memory: rawptr) -> bool {
 		// Wind particles: the wind layer of the layers panel, forecast hour of the simulated time. Spread over the
 		// ground the camera sees. Update loop over the SoA arrays, then one pass writes the trails into the wind
 		// mesh, colored by speed.
-		show_wind := w.screen == .Plan ? !w.plan.layers.hide_wind : w.nav_wind
+		show_wind := w.screen == .Plan ? w.plan.layers.show_wind : w.nav_wind
 		if show_wind {
 			wp := &w.wind
 			lo, hi := [2]f32{1e9, 1e9}, [2]f32{-1e9, -1e9}
