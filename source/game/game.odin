@@ -29,6 +29,7 @@ World :: struct {
 	identity:     ed25519.Private_Key, // zero until identity_load_or_create succeeds
 	identity_pub: [32]u8,
 	grid:         Grid,
+	controls:     Controls,
 	tick:         u64,
 	accum:        f64,
 	prof:         Profiler,
@@ -97,6 +98,7 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	t := prof_begin()
 	weather_poll(w)
+	w.controls = read_controls()
 
 	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT)
 	for w.accum >= SIM_DT {
