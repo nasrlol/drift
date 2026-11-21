@@ -18,6 +18,30 @@ MODE_AIRSPEED :: [Route_Mode]f32 {
 	.Calmest  = 13,
 }
 
+// Energy model (spec). The battery holds BATTERY_KWH, a ship leaves with BATTERY_START of it.
+BATTERY_KWH :: 180
+BATTERY_START :: 0.86
+
+// Ground speed rules in m/s (spec): below GROUND_RETRY the ship throttles up by GROUND_RETRY_BOOST, below
+// GROUND_MIN even then the edge is blocked.
+GROUND_RETRY :: 2.5
+GROUND_RETRY_BOOST :: 6
+GROUND_MIN :: 1.5
+
+// Path cleanup (spec). String pulling looks at most PULL_WINDOW nodes ahead and accepts a straight line that
+// costs at most PULL_TOLERANCE more than the A* path it replaces.
+PULL_WINDOW :: 14
+PULL_TOLERANCE :: 0.004
+// Routes start and end this far above the tower top (docking is at the top + 3 m).
+TOWER_ABOVE_M :: 6
+CHAIKIN_ITERATIONS :: 3
+// Spacing of the final path points, horizontal. The spec's 20 m was for a 5 km map; on Belgium it is the
+// heightmap spacing, so the terrain clearance still sees every height cell (#46).
+RESAMPLE_KM :: 0.25
+// Highest climb or descent per metre flown horizontally.
+SLOPE_MAX :: 0.24
+TERRAIN_CLEARANCE_M :: 40
+
 // 1 km cells over every point in belgium.bin (x 0.6..285.2 km, y 1.0..236.5 km), one layer per wind layer.
 GRID_CELL_KM :: 1
 GRID_W :: 286
@@ -83,14 +107,16 @@ Grid :: struct {
 	blocked_zones: [MAX_NO_FLY]No_Fly_Zone,
 	// Connected free region of each node (A* steps), 0 for a blocked node. Built with blocked.
 	region:        [GRID_NODES]u32,
-	// wind_at and gust_at at every node centre for weather_hour, shared by the three modes and by every
-	// route in that hour. Rebuilt when the hour or its forecast differs from the copy it was built from.
-	// Zero is a valid cache: a calm hour 0.
+	// wind_at and gust_at at every node centre and cloud_at at every cell centre (cloud cover has no layers)
+	// for weather_hour, shared by the three modes and by every route in that hour. Rebuilt when the hour or
+	// its forecast differs from the copy it was built from. Zero is a valid cache: a calm, clear hour 0.
 	wind:          [GRID_NODES][2]f32,
 	gust:          [GRID_NODES]f32,
+	cloud:         [GRID_LAYER_CELLS]f32,
 	weather_hour:  int,
 	weather_wind:  [WIND_LAYERS][WEATHER_CELLS][2]f32,
 	weather_gust:  [WIND_LAYERS][WEATHER_CELLS]f32,
+	weather_cloud: [WEATHER_CELLS]f32,
 	terrain_built: bool,
 	blocked_built: bool,
 }
@@ -308,10 +334,20 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 	}
 
 	h := clamp(hour, 0, FORECAST_HOURS - 1)
-	if g.weather_hour != h || g.weather_wind != w.weather.wind[h] || g.weather_gust != w.weather.gust[h] {
+	if g.weather_hour != h ||
+	   g.weather_wind != w.weather.wind[h] ||
+	   g.weather_gust != w.weather.gust[h] ||
+	   g.weather_cloud != w.weather.cloud[h] {
 		g.weather_hour = h
 		g.weather_wind = w.weather.wind[h]
 		g.weather_gust = w.weather.gust[h]
+		g.weather_cloud = w.weather.cloud[h]
+		for y in 0 ..< GRID_H {
+			for x in 0 ..< GRID_W {
+				p := grid_node_pos(grid_node({x, y, 0}))
+				g.cloud[y * GRID_W + x] = cloud_at(w, p.x, p.y, h)
+			}
+		}
 		for layer in 0 ..< GRID_LAYERS {
 			for y in 0 ..< GRID_H {
 				for x in 0 ..< GRID_W {
@@ -326,13 +362,28 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 
 	per_km, per_layer: f32
 	{
-		wind_max, gust_min: f32 = 0, 1
+		wind_max, gust_min, cloud_min: f32 = 0, 1, 1
 		for &layer in g.weather_wind do for v in layer do wind_max = max(wind_max, linalg.length(v))
 		for &layer in g.weather_gust do for v in layer do gust_min = min(gust_min, v)
+		for c in g.weather_cloud do cloud_min = min(cloud_min, c)
+		// Bilinear sampling stays between the grid values, so no edge gets more sun than solar_max.
+		solar_max := solar_kw(cloud_min)
+		// Ground speed is at most the airspeed plus the strongest wind as a pure tailwind. The boost only
+		// happens where the ground speed at v, at least v - wind_max, is below GROUND_RETRY. There
+		// sqrt(x + k) <= sqrt(x) + sqrt(k) bounds what the boost adds to sqrt(v^2 - crosswind^2).
 		airspeed := MODE_AIRSPEED
-		per_km = mode_flight_cost(mode, airspeed[mode], airspeed[mode] + wind_max, gust_min, 1)
+		v := airspeed[mode]
+		per_km = mode_flight_cost(mode, v, v + wind_max, gust_min, solar_max, 1)
+		if wind_max > v - GROUND_RETRY {
+			boost := v + GROUND_RETRY_BOOST
+			boost_ground := min(boost + wind_max, GROUND_RETRY + math.sqrt(boost * boost - v * v))
+			per_km = min(per_km, mode_flight_cost(mode, boost, boost_ground, gust_min, solar_max, 1))
+		}
 		per_layer = math.inf_f32(1)
-		for l in 1 ..< GRID_LAYERS do per_layer = min(per_layer, mode_climb_cost(mode, abs(alt[l] - alt[l - 1])))
+		for l in 1 ..< GRID_LAYERS {
+			climb := alt[l] - alt[l - 1]
+			per_layer = min(per_layer, mode_climb_cost(mode, climb), mode_climb_cost(mode, -climb))
+		}
 	}
 	g.visit[start] = g.search
 	g.cost[start] = 0
@@ -363,19 +414,106 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 		}
 
 		if n == goal {
+			route_alloc := virtual.arena_allocator(&w.route_mem)
+			err: mem.Allocator_Error
+
+			// The A* nodes from start to goal.
 			count := 1
 			for p := goal; p != start; p = g.parent[p] do count += 1
-			err: mem.Allocator_Error
-			path, err = make([][3]f32, max(count, 2), virtual.arena_allocator(&w.route_mem))
+			nodes: []Node
+			nodes, err = make([]Node, count, route_alloc)
 			if err != nil do return nil, false
-			i := len(path) - 1
-			for p := goal;; p = g.parent[p] {
-				path[i] = grid_node_pos(p)
-				if p == start do break
-				i -= 1
+			{
+				i := count - 1
+				for p := goal;; p = g.parent[p] {
+					nodes[i] = p
+					if p == start do break
+					i -= 1
+				}
 			}
-			path[0] = from
-			path[len(path) - 1] = to
+
+			// Cost-aware string pulling (spec): from each kept node jump to the farthest node at most
+			// PULL_WINDOW nodes ahead whose straight line stays in free cells of the same layer and costs at
+			// most PULL_TOLERANCE more than the A* path between them. Kept nodes are compacted in place.
+			kept := 1
+			for i := 0; i < len(nodes) - 1; {
+				best := i + 1
+				a := grid_node_pos(nodes[i])
+				layer := grid_cell(nodes[i]).z
+				for j in i + 1 ..= min(i + PULL_WINDOW, len(nodes) - 1) {
+					if grid_cell(nodes[j]).z != layer do break
+					if j == i + 1 do continue
+					limit := (g.cost[nodes[j]] - g.cost[nodes[i]]) * (1 + PULL_TOLERANCE)
+					straight, free := line_cost(g, a, grid_node_pos(nodes[j]), mode)
+					if free && straight <= limit do best = j
+				}
+				nodes[kept] = nodes[best]
+				kept += 1
+				i = best
+			}
+
+			// Start and end above the tower tops (spec). from.z and to.z are the tops. The ramp point between
+			// tower and path lies halfway to the first (last) node, at that node's altitude (#45).
+			points: [][3]f32
+			points, err = make([][3]f32, kept + 4, route_alloc)
+			if err != nil do return nil, false
+			first := grid_node_pos(nodes[0])
+			last := grid_node_pos(nodes[kept - 1])
+			points[0] = {from.x, from.y, from.z + TOWER_ABOVE_M}
+			points[1] = {(from.x + first.x) * 0.5, (from.y + first.y) * 0.5, first.z}
+			for node, i in nodes[:kept] do points[i + 2] = grid_node_pos(node)
+			points[kept + 2] = {(to.x + last.x) * 0.5, (to.y + last.y) * 0.5, last.z}
+			points[kept + 3] = {to.x, to.y, to.z + TOWER_ABOVE_M}
+
+			// Chaikin smoothing (spec): every segment becomes its points at 1/4 and 3/4, the end points stay
+			// on the towers. Linear in each coordinate, so km and m can share a point.
+			for _ in 0 ..< CHAIKIN_ITERATIONS {
+				smooth: [][3]f32
+				smooth, err = make([][3]f32, 2 * len(points), route_alloc)
+				if err != nil do return nil, false
+				smooth[0] = points[0]
+				for i in 0 ..< len(points) - 1 {
+					smooth[2 * i + 1] = points[i] * 0.75 + points[i + 1] * 0.25
+					smooth[2 * i + 2] = points[i] * 0.25 + points[i + 1] * 0.75
+				}
+				smooth[len(smooth) - 1] = points[len(points) - 1]
+				points = smooth
+			}
+
+			// Resample every RESAMPLE_KM of horizontal distance (spec), the last point is the end tower.
+			total: f32
+			for i in 1 ..< len(points) do total += linalg.length(points[i].xy - points[i - 1].xy)
+			path, err = make([][3]f32, max(int(math.ceil(total / RESAMPLE_KM)), 1) + 1, route_alloc)
+			if err != nil do return nil, false
+			{
+				seg := 0
+				seg_start: f32 = 0 // horizontal distance from the start to points[seg]
+				for &p, k in path[:len(path) - 1] {
+					s := f32(k) * RESAMPLE_KM
+					for seg < len(points) - 2 {
+						seg_km := linalg.length(points[seg + 1].xy - points[seg].xy)
+						if seg_start + seg_km > s do break
+						seg_start += seg_km
+						seg += 1
+					}
+					seg_km := linalg.length(points[seg + 1].xy - points[seg].xy)
+					t := seg_km > 0 ? clamp((s - seg_start) / seg_km, 0, 1) : 0
+					p = linalg.lerp(points[seg], points[seg + 1], t)
+				}
+				path[len(path) - 1] = points[len(points) - 1]
+			}
+
+			// Slope limit (spec): a forward pass caps the climb, a backward pass the descent, both only
+			// lower points, the towers stay. Then keep TERRAIN_CLEARANCE_M above the ground.
+			for i in 1 ..< len(path) - 1 {
+				m := linalg.length(path[i].xy - path[i - 1].xy) * 1000
+				path[i].z = min(path[i].z, path[i - 1].z + SLOPE_MAX * m)
+			}
+			for i := len(path) - 2; i > 0; i -= 1 {
+				m := linalg.length(path[i + 1].xy - path[i].xy) * 1000
+				path[i].z = min(path[i].z, path[i + 1].z + SLOPE_MAX * m)
+			}
+			for &p in path do p.z = max(p.z, height_at(w, p.x, p.y) + TERRAIN_CLEARANCE_M)
 			return path, true
 		}
 
@@ -419,29 +557,99 @@ grid_estimate :: proc(a, b: Node, per_km, per_layer: f32) -> f32 {
 }
 
 // Cost of the edge from node a to its neighbour b in the unit of the mode: seconds for Fastest and
-// Calmest, kWh for Greenest. Wind and gust are the mean of the two node centres, the weather grid is
-// 40 km so that is the value halfway. ok = false when the ship makes no headway.
+// Calmest, kWh for Greenest. Wind, gust and cloud cover are the mean of the two node centres, the weather
+// grid is 40 km so that is the value halfway. ok = false when the edge is blocked by the ground speed rules.
 edge_cost :: proc(g: ^Grid, a, b: Node, mode: Route_Mode) -> (cost: f32, ok: bool) {
 	pa := grid_node_pos(a)
 	pb := grid_node_pos(b)
-	if pa.xy == pb.xy do return mode_climb_cost(mode, abs(pb.z - pa.z)), true
+	if pa.xy == pb.xy do return mode_climb_cost(mode, pb.z - pa.z), true
 
-	airspeed := MODE_AIRSPEED
-	v := airspeed[mode]
 	track := pb.xy - pa.xy
 	km := linalg.length(track)
 	wind := (g.wind[a] + g.wind[b]) * 0.5
-	// Placeholder until the ground speed item: airspeed plus the tailwind, crosswind ignored.
-	ground := v + linalg.dot(wind, track) / km
-	// Written as !(headway) so NaN blocks the edge.
-	if !(ground > 0) do return 0, false
-	return mode_flight_cost(mode, v, ground, (g.gust[a] + g.gust[b]) * 0.5, km), true
+	gust := (g.gust[a] + g.gust[b]) * 0.5
+	cloud := (g.cloud[u32(a) % GRID_LAYER_CELLS] + g.cloud[u32(b) % GRID_LAYER_CELLS]) * 0.5
+	return flight_cost(mode, wind, track / km, gust, cloud, km)
 }
 
-// Cost of km flown at airspeed v and ground speed ground (m/s) through gust index gust (spec, per mode).
-// Rises with gust and falls with ground speed, so the calmest gust and the strongest tailwind give the
-// lowest cost per km for the A* estimate.
-mode_flight_cost :: proc(mode: Route_Mode, v, ground, gust, km: f32) -> f32 {
+// Cost of the straight line from a to b (x km, y km, a layer altitude in m) in that layer, in the unit of the
+// mode. Walks the cells the line crosses (Amanatides-Woo): each piece costs as an edge with the weather of
+// its cell. free = false when a crossed cell is blocked or a piece is blocked by the ground speed rules.
+// A line through a cell corner does not enter the two cells beside it, the same as a diagonal A* step.
+line_cost :: proc(g: ^Grid, a, b: [3]f32, mode: Route_Mode) -> (cost: f32, free: bool) {
+	start := grid_node_at(a) or_return
+	layer := grid_cell(start).z
+	cell := grid_cell(start).xy
+	track := b.xy - a.xy
+	total := linalg.length(track)
+	if total == 0 do return 0, !grid_blocked(g, start)
+	dir := track / total
+
+	// Distance along the line to the next cell boundary in x and y, and between two boundaries.
+	step, next, delta: [2]f32
+	for axis in 0 ..< 2 {
+		step[axis] = dir[axis] > 0 ? 1 : -1
+		next[axis] = math.inf_f32(1)
+		delta[axis] = math.inf_f32(1)
+		if dir[axis] != 0 {
+			edge := (f32(cell[axis]) + (dir[axis] > 0 ? 1 : 0)) * GRID_CELL_KM
+			next[axis] = (edge - a[axis]) / dir[axis]
+			delta[axis] = GRID_CELL_KM / abs(dir[axis])
+		}
+	}
+
+	// Two boundaries closer than this along the line are one corner.
+	CORNER_KM :: 1e-4
+	done: f32 = 0
+	for {
+		if cell.x < 0 || cell.x >= GRID_W || cell.y < 0 || cell.y >= GRID_H do return 0, false
+		n := grid_node({cell.x, cell.y, layer})
+		if grid_blocked(g, n) do return 0, false
+		reach := min(next.x, next.y, total)
+		cloud := g.cloud[u32(n) % GRID_LAYER_CELLS]
+		cost += flight_cost(mode, g.wind[n], dir, g.gust[n], cloud, reach - done) or_return
+		if reach >= total do return cost, true
+		done = reach
+		if abs(next.x - next.y) < CORNER_KM {
+			cell += {int(step.x), int(step.y)}
+			next += delta
+		} else if next.x < next.y {
+			cell.x += int(step.x)
+			next.x += delta.x
+		} else {
+			cell.y += int(step.y)
+			next.y += delta.y
+		}
+	}
+}
+
+// Cost of km flown along the unit track dir through wind (m/s), gust index gust and cloud cover cloud at the
+// mode's airspeed, after the ground speed rules (spec). ok = false when they block the flight.
+flight_cost :: proc(mode: Route_Mode, wind, dir: [2]f32, gust, cloud, km: f32) -> (cost: f32, ok: bool) {
+	airspeed := MODE_AIRSPEED
+	v := airspeed[mode]
+	ground := ground_speed(v, wind, dir) or_return
+	if ground < GROUND_RETRY {
+		v += GROUND_RETRY_BOOST
+		ground = ground_speed(v, wind, dir) or_return
+		if ground < GROUND_MIN do return 0, false
+	}
+	return mode_flight_cost(mode, v, ground, gust, solar_kw(cloud), km), true
+}
+
+// Ground speed in m/s along the unit track dir at airspeed v in wind (spec): the tailwind plus what is left
+// of v once it cancels the crosswind. ok = false when the crosswind is stronger than v, also for NaN wind.
+ground_speed :: proc(v: f32, wind, dir: [2]f32) -> (ground: f32, ok: bool) {
+	cross := wind.x * dir.y - wind.y * dir.x
+	rest := v * v - cross * cross
+	if !(rest >= 0) do return 0, false
+	return linalg.dot(wind, dir) + math.sqrt(rest), true
+}
+
+// Cost of km flown at airspeed v and ground speed ground (m/s) through gust index gust under solar kW of
+// sun (spec, per mode). Rises with gust and v, falls with solar (Greenest) and with ground speed, which the
+// A* estimate relies on. power_kw is above the strongest sun at every airspeed, so a cost is never negative.
+mode_flight_cost :: proc(mode: Route_Mode, v, ground, gust, solar, km: f32) -> f32 {
 	dt := km * 1000 / ground
 	switch mode {
 	case .Fastest:
@@ -449,18 +657,31 @@ mode_flight_cost :: proc(mode: Route_Mode, v, ground, gust, km: f32) -> f32 {
 	case .Calmest:
 		return dt * (1 + 7 * gust * gust)
 	case .Greenest:
-		// P(v, g) in kW. Solar yield comes with the energy item.
-		power := 3 + 0.0085 * v * v * v + 6 * gust
-		return power * dt / 3600 + 0.25 * gust * gust * km
+		return (power_kw(v, gust) - solar) * dt / 3600 + 0.25 * gust * gust * km
 	}
 	return 0
 }
 
-// Cost of a vertical edge with climb_m metres of altitude change (spec). Greenest adds the climb and
-// descent energy with the energy item.
+// Cost of a vertical edge that climbs climb_m metres, negative for a descent (spec).
 mode_climb_cost :: proc(mode: Route_Mode, climb_m: f32) -> f32 {
-	if mode == .Greenest do return 0.02
-	return 0.2 * climb_m / 3
+	if mode == .Greenest do return climb_kwh(climb_m) + 0.02
+	return 0.2 * abs(climb_m) / 3
+}
+
+// Power drawn in kW at airspeed v m/s through gust index gust 0..1 (spec P(v, g)).
+power_kw :: proc(v, gust: f32) -> f32 {
+	return 3 + 0.0085 * v * v * v + 6 * gust
+}
+
+// Solar yield in kW under cloud cover 0..1 (spec S(c)): 9 kW of film at 75 %, overcast takes 78 % of it.
+solar_kw :: proc(cloud: f32) -> f32 {
+	return 9 * 0.75 * (1 - 0.78 * cloud)
+}
+
+// Ballonet energy in kWh to change altitude by climb_m metres, negative for a descent (spec):
+// 0.12 kWh per 100 m up, 0.04 kWh per 100 m down.
+climb_kwh :: proc(climb_m: f32) -> f32 {
+	return climb_m > 0 ? 0.0012 * climb_m : -0.0004 * climb_m
 }
 
 // Gives n priority f and moves it up from its slot to its place in the open heap.

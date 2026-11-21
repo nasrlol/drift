@@ -28,6 +28,20 @@ CASES :: [?]Case {
 	},
 	// A hub inside a no-fly zone gets no route, a zone above or next to a hub does not stop it.
 	{"no_fly", "test/data/calm.snap", "test/data/no_fly.txt", "test/data/no_fly.expected"},
+	// A strong headwind: the +6 m/s retry, the 1.5 m/s floor and the crosswind limit each change a route.
+	{
+		"headwind_routes",
+		"test/data/headwind.snap",
+		"test/data/headwind_routes.txt",
+		"test/data/headwind_routes.expected",
+	},
+	// Clouds over the shortest path: greenest flies around them for the sun, fastest does not.
+	{
+		"cloudy_routes",
+		"test/data/cloudy.snap",
+		"test/data/cloudy_routes.txt",
+		"test/data/cloudy_routes.expected",
+	},
 	// A NaN in the wind field must reject the snapshot, not reach the router.
 	{"nan_wind", "test/data/nan_wind.snap", "test/data/routes.txt", ""},
 }
