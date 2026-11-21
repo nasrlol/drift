@@ -85,7 +85,7 @@ DARIO: SHIP + CONTROLS
 
 ANDREI: WEATHER + NETWORK
 [x] Open-Meteo hourly forecast, next 9 hours, grid over Belgium, pressure levels 975/950/925 hPa
-[ ] also fetch gusts and cloud cover
+[x] also fetch gusts and cloud cover
 [ ] store as flat arrays [hour][layer][cell], changing departure hour is an index, not a recompute
 [ ] validate everything (ranges, NaN, missing), reject bad snapshots
 [ ] save snapshot to disk with its hash, load on startup, refresh every 15 min (thread, timeout)
