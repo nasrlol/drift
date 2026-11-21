@@ -59,7 +59,23 @@ pilot_pad_rect :: proc(w: ^World, i: int) -> rl.Rectangle {
 }
 
 // Leaves navigation: back to the plan screen with the routes fitted beside the panel.
+// Steering yourself works like cruise control (Lars, 2026-11-21: "het sturen gaat niet goed": letting go of W,
+// or only turning, stopped the car). W / S move the held throttle up / down by CRUISE_RATE per second, letting
+// go keeps it. Taking over from the autopilot starts at the speed the ship has. Our values.
+CRUISE_RATE :: 0.35
+
+cruise_throttle :: proc(w: ^World, input, dt: f32) -> f32 {
+	s := &w.ship
+	if w.cruise < 0 {
+		top: f32 = s.on_road ? ROAD_MAX_SPEED : SHIP_MAX_SPEED
+		w.cruise = clamp(s.speed / top, 0, 1)
+	}
+	w.cruise = clamp(w.cruise + input * CRUISE_RATE * dt, 0, 1)
+	return w.cruise
+}
+
 pilot_exit :: proc(w: ^World) {
+	w.cruise = -1
 	nav_stop(w)
 	w.screen = .Plan
 	w.cam.dragged = false

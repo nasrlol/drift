@@ -80,6 +80,8 @@ World :: struct {
 	buildings:       Buildings,
 	cloud_sprites:   Cloud_Sprites,
 	nature:          Nature,
+	// Cruise control while steering yourself: the throttle the ship holds, -1 = take the current speed first.
+	cruise:          f32,
 	car_anim:        Car_Anim,
 	// Other cars from the presence gossip (presence.odin), copied from the node table every PRESENCE_COPY_S.
 	others:          [PRESENCE_SLOTS]Other_Car,
@@ -215,7 +217,12 @@ game_update :: proc(memory: rawptr) -> bool {
 	for w.accum >= SIM_DT {
 		if w.screen == .Navigate {
 			c := w.controls
-			if w.nav.active && !w.nav.manual do c = nav_autopilot(w)
+			if w.nav.active && !w.nav.manual {
+				c = nav_autopilot(w)
+				w.cruise = -1
+			} else {
+				c.throttle = cruise_throttle(w, c.throttle, SIM_DT)
+			}
 			step := controls_pack(c)
 			if w.replay.count < len(w.replay.steps) {
 				w.replay.steps[w.replay.count] = step

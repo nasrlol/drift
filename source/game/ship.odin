@@ -77,8 +77,8 @@ ship_battery_kwh :: proc(s: ^Ship) -> f32 {
 // Flying is fast (Lars, 2026-11-21: "ik moet sneller kunnen vliegen en opstijgen"): 70 m/s is 252 km/h, the
 // same car as before reached 126 km/h. On the road it keeps the old limits (road_speed). Our values.
 SHIP_MAX_SPEED :: 70.0
-SHIP_ACCEL :: 3.0
-SHIP_BRAKE :: 4.0
+SHIP_ACCEL :: 5.0
+SHIP_BRAKE :: 6.0
 SHIP_MAX_TURN_RATE :: 0.6
 SHIP_TURN_SMOOTH_S :: 0.5
 SHIP_CLIMB_RATE :: 12.0
