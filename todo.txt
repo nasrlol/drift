@@ -81,7 +81,7 @@ DARIO: SHIP + CONTROLS
 [x] docking: within 30 m horizontal, 25 m vertical of the hub tower
 [x] sim speed 1x / 5x / 15x / 40x = more fixed steps per frame, never a bigger dt
 [ ] camera follows ship
-[ ] record Controls per step for replay (flat array, a few bytes per step)
+[x] record Controls per step for replay (flat array, a few bytes per step)
 [ ] bench: ship_step cost per step
 
 ANDREI: WEATHER + NETWORK

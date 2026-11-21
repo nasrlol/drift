@@ -126,6 +126,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   circle below its ceiling), rebuilt every step. The UI only reads it.
                   Ship.docked / dock_hub: set when within 30 m horizontally and 25 m vertically of a hub's tower top
                   (ground + HUB_TOWER_M), first hub in index order, rebuilt every step.
+                  Replay: every step the controls are packed to Control_Step ([3]i8, 3 bytes) and the ship steps with the
+                  unpacked value, so the recording reproduces the path exactly. w.replay.steps is 60 * 3600 steps (1 h,
+                  648 KB) from the perm arena, w.replay.count says how many are filled, recording stops when full.
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
                   R/F climb up / down, gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
