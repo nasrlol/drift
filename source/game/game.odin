@@ -88,6 +88,7 @@ World :: struct {
 	cruise_on_road:  bool,
 	car_anim:        Car_Anim,
 	car_skin:        Car_Skin, // the player's car body, car_models.odin
+	music:           Soundtrack, // music.odin
 	// Other cars from the presence gossip (presence.odin), copied from the node table every PRESENCE_COPY_S.
 	others:          [PRESENCE_SLOTS]Other_Car,
 	other_count:     int,
@@ -147,6 +148,7 @@ game_init :: proc() -> rawptr {
 		airship_build(w)
 		buildings_build(w)
 		clouds_build(w)
+		music_start(w)
 	}
 	w.replay.steps = make([]Control_Step, REPLAY_MAX_STEPS, virtual.arena_allocator(&w.perm))
 	logf(w, "game", "build %s", BUILD_MODE)
@@ -217,6 +219,7 @@ game_update :: proc(memory: rawptr) -> bool {
 	if !typing {
 		// V: the third-person street view (street.odin), V again or Esc back to the map.
 		if key_pressed(w, .V) do street_toggle(w)
+		if key_pressed(w, .N) do music_toggle(w)
 		// M: free flight without a route (the old drive mode), or back to the plan screen.
 		if key_pressed(w, .M) && !w.street.on {
 			if w.screen == .Plan {
@@ -284,6 +287,7 @@ game_update :: proc(memory: rawptr) -> bool {
 	if !w.script.on {
 		carpool_frame(w, frame_time(w))
 		presence_frame(w, frame_time(w))
+		music_frame(w)
 	}
 	prof_end(w, .Update, t)
 
@@ -743,6 +747,7 @@ game_shutdown :: proc(memory: rawptr) {
 	tiles_unload(&w.nature)
 	tiles_unload(&w.towns)
 	street_unload(&w.street)
+	music_stop(w)
 	virtual.arena_destroy(&w.fetch.mem)
 	virtual.arena_destroy(&w.node.mem)
 	virtual.arena_destroy(&w.frame)
