@@ -8,16 +8,22 @@ import "core:os"
 import "core:slice"
 
 MAP_MAGIC :: 0x54465244
-MAP_VERSION :: 1
+MAP_VERSION :: 2
+MAX_HUBS :: 32
 
 Map_Header :: struct {
 	magic, version:                      u32,
 	line_count, point_count, city_count: u32,
+	hub_count:                           u32,
 }
 Map_Line :: struct {
 	start, count, kind: u32,
 }
 Map_City :: struct {
+	pos:  [2]f32,
+	name: [32]u8,
+}
+Map_Hub :: struct {
 	pos:  [2]f32,
 	name: [32]u8,
 }
@@ -34,6 +40,7 @@ KM_PER_DEG :: 111.32
 lines: [dynamic]Map_Line
 points: [dynamic][2]f32
 cities: [dynamic]Map_City
+hubs: [dynamic]Map_Hub
 
 project :: proc(lon, lat: f64) -> [2]f32 {
 	cos_lat := math.cos(50.5 * math.RAD_PER_DEG)
@@ -103,23 +110,39 @@ main :: proc() {
 	bake_layer("assets/geojson/motorways.geojson", .Motorway)
 	bake_layer("assets/geojson/cities.geojson", .Border)
 
-	h := Map_Header{MAP_MAGIC, MAP_VERSION, u32(len(lines)), u32(len(points)), u32(len(cities))}
+	// Hubs start as the cities. They get their own list so towers can later stand away from city centres.
+	for c in cities do append(&hubs, Map_Hub{c.pos, c.name})
+	if len(hubs) > MAX_HUBS {
+		fmt.eprintfln("%d hubs, the game has room for %d (MAX_HUBS)", len(hubs), MAX_HUBS)
+		os.exit(1)
+	}
+
+	h := Map_Header {
+		MAP_MAGIC,
+		MAP_VERSION,
+		u32(len(lines)),
+		u32(len(points)),
+		u32(len(cities)),
+		u32(len(hubs)),
+	}
 
 	out: [dynamic]u8
 	append(&out, ..mem.ptr_to_bytes(&h))
 	append(&out, ..slice.to_bytes(lines[:]))
 	append(&out, ..slice.to_bytes(points[:]))
 	append(&out, ..slice.to_bytes(cities[:]))
+	append(&out, ..slice.to_bytes(hubs[:]))
 
 	if err := os.write_entire_file("assets/belgium.bin", out[:]); err != nil {
 		fmt.eprintln("can't write assets/belgium.bin", err)
 		os.exit(1)
 	}
 	fmt.printfln(
-		"assets/belgium.bin: %d lines, %d points, %d cities, %d bytes",
+		"assets/belgium.bin: %d lines, %d points, %d cities, %d hubs, %d bytes",
 		h.line_count,
 		h.point_count,
 		h.city_count,
+		h.hub_count,
 		len(out),
 	)
 }

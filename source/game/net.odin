@@ -21,12 +21,7 @@ import curl "vendor:curl"
 // Static raylib drops libcmt (wants the dynamic CRT), vendor:curl drops msvcrt (wants the static one),
 // so a static Windows exe ends up with no CRT at all. Give the dynamic CRT back explicitly.
 when ODIN_OS == .Windows && !#config(RAYLIB_SHARED, false) {
-	@(require)
-	foreign import windows_crt {
-		"system:msvcrt.lib",
-		"system:vcruntime.lib",
-		"system:ucrt.lib",
-	}
+	@(require) foreign import windows_crt {"system:msvcrt.lib", "system:vcruntime.lib", "system:ucrt.lib"}
 }
 
 OPEN_METEO_URL :: "https://api.open-meteo.com/v1/forecast"
@@ -232,41 +227,43 @@ hourly_values :: proc(
 	return v, true
 }
 
-// Called once from game_init. A missing or bad snapshot leaves w.weather zero (calm) and fetches now.
-weather_load_snapshot :: proc(w: ^World) {
+// game_init loads SNAPSHOT_PATH, headless mode its --snapshot file.
+// A missing or bad snapshot leaves w.weather as it was (zero at startup: calm, fetch now) and returns false.
+weather_load_snapshot :: proc(w: ^World, path: string) -> bool {
 	f := &w.fetch
 	defer virtual.arena_free_all(&f.mem)
-	data, err := os.read_entire_file(SNAPSHOT_PATH, virtual.arena_allocator(&f.mem))
+	data, err := os.read_entire_file(path, virtual.arena_allocator(&f.mem))
 	if err != nil {
-		fmt.eprintfln("[weather] no snapshot at %s (%v), fetching", SNAPSHOT_PATH, err)
-		return
+		logf(w, "weather", "no snapshot at %s (%v)", path, err)
+		return false
 	}
 	want := size_of(Snapshot_Header) + size_of(Weather)
 	if len(data) != want {
-		fmt.eprintfln("[weather] %s is %d bytes, want %d, ignored", SNAPSHOT_PATH, len(data), want)
-		return
+		logf(w, "weather", "%s is %d bytes, want %d, ignored", path, len(data), want)
+		return false
 	}
 	h := (^Snapshot_Header)(raw_data(data))
 	if h.magic != SNAPSHOT_MAGIC || h.version != SNAPSHOT_VERSION {
-		fmt.eprintfln("[weather] %s has magic %x version %d, ignored", SNAPSHOT_PATH, h.magic, h.version)
-		return
+		logf(w, "weather", "%s has magic %x version %d, ignored", path, h.magic, h.version)
+		return false
 	}
 	digest: [32]u8
 	hash.hash_bytes_to_buffer(.SHA256, data[size_of(Snapshot_Header):], digest[:])
 	if digest != h.hash {
-		fmt.eprintfln("[weather] %s hash mismatch, file is corrupt, ignored", SNAPSHOT_PATH)
-		return
+		logf(w, "weather", "%s hash mismatch, file is corrupt, ignored", path)
+		return false
 	}
 	snap := (^Weather)(raw_data(data[size_of(Snapshot_Header):]))
 	if !weather_valid(snap) {
-		fmt.eprintfln("[weather] %s has values out of range, ignored", SNAPSHOT_PATH)
-		return
+		logf(w, "weather", "%s has values out of range, ignored", path)
+		return false
 	}
 	w.weather = snap^
 	w.weather_hash = h.hash
 	f.fetched_at = h.fetched_at
 	f.next = h.fetched_at + REFRESH_S
-	fmt.printfln("[weather] loaded %s, start %d, fetched at %d", SNAPSHOT_PATH, w.weather.start, h.fetched_at)
+	logf(w, "weather", "loaded %s, start %d, fetched at %d", path, w.weather.start, h.fetched_at)
+	return true
 }
 
 // Called every frame. Starts a fetch thread when one is due, takes over its result when it is done.
@@ -280,7 +277,7 @@ weather_poll :: proc(w: ^World) {
 		context.allocator = virtual.arena_allocator(&f.mem)
 		f.thread = thread.create(fetch_thread)
 		if f.thread == nil {
-			fmt.eprintln("[weather] cannot create fetch thread")
+			logf(w, "weather", "cannot create fetch thread")
 			f.next = now + RETRY_S
 			return
 		}
@@ -294,14 +291,14 @@ weather_poll :: proc(w: ^World) {
 	virtual.arena_free_all(&f.mem)
 	if !f.ok {
 		f.next = now + RETRY_S
-		fmt.eprintfln("[weather] fetch failed, keep snapshot from %d, retry in %d s", f.fetched_at, RETRY_S)
+		logf(w, "weather", "fetch failed, keep snapshot from %d, retry in %d s", f.fetched_at, RETRY_S)
 		return
 	}
 	w.weather = f.weather
 	w.weather_hash = f.result.hash
 	f.fetched_at = f.result.fetched_at
 	f.next = now + REFRESH_S
-	fmt.printfln("[weather] new snapshot, start %d, saved to %s", w.weather.start, SNAPSHOT_PATH)
+	logf(w, "weather", "new snapshot, start %d, saved to %s", w.weather.start, SNAPSHOT_PATH)
 }
 
 // Fetch, hash and save on the worker thread, so the frame loop never waits on network or disk.
@@ -339,7 +336,7 @@ weather_stop :: proc(w: ^World) {
 		thread.destroy(f.thread)
 		f.thread = nil
 		f.next = 0
-		fmt.printfln("[weather] fetch stopped (reload or shutdown), waited %v", time.tick_since(t))
+		logf(w, "weather", "fetch stopped (reload or shutdown), waited %v", time.tick_since(t))
 	}
 	virtual.arena_free_all(&f.mem)
 }
@@ -354,7 +351,7 @@ identity_load_or_create :: proc(w: ^World) {
 	if os.exists(IDENTITY_PATH) {
 		file, err := os.open(IDENTITY_PATH)
 		if err != nil {
-			fmt.eprintfln("[net] cannot open %s: %v, network off", IDENTITY_PATH, err)
+			logf(w, "net", "cannot open %s: %v, network off", IDENTITY_PATH, err)
 			return
 		}
 		buf: [ed25519.PRIVATE_KEY_SIZE + 1]u8
@@ -363,8 +360,10 @@ identity_load_or_create :: proc(w: ^World) {
 		copy(seed[:], buf[:])
 		crypto.zero_explicit(&buf, size_of(buf))
 		if read_err != nil || n != ed25519.PRIVATE_KEY_SIZE {
-			fmt.eprintfln(
-				"[net] %s: read %d bytes (%v), want %d, network off",
+			logf(
+				w,
+				"net",
+				"%s: read %d bytes (%v), want %d, network off",
 				IDENTITY_PATH,
 				n,
 				read_err,
@@ -373,30 +372,30 @@ identity_load_or_create :: proc(w: ^World) {
 			return
 		}
 		if !ed25519.private_key_set_bytes(&w.identity, seed[:]) {
-			fmt.eprintfln("[net] %s is not a valid ed25519 key, network off", IDENTITY_PATH)
+			logf(w, "net", "%s is not a valid ed25519 key, network off", IDENTITY_PATH)
 			return
 		}
 	} else {
 		if !ed25519.private_key_generate(&w.identity) {
-			fmt.eprintln("[net] no system entropy source, cannot create a key, network off")
+			logf(w, "net", "no system entropy source, cannot create a key, network off")
 			return
 		}
 		ed25519.private_key_bytes(&w.identity, seed[:])
 		if err := os.make_directory("cache"); err != nil && err != .Exist {
-			fmt.eprintln("[net] cannot create cache/:", err)
+			logf(w, "net", "cannot create cache/: %v", err)
 		}
 		// A new temp file gets owner-only permissions, rename keeps them.
 		tmp := IDENTITY_PATH + ".tmp"
 		os.remove(tmp)
 		if err := os.write_entire_file(tmp, seed[:], {.Read_User, .Write_User}); err != nil {
-			fmt.eprintfln("[net] cannot write %s: %v, key only lives until exit", tmp, err)
+			logf(w, "net", "cannot write %s: %v, key only lives until exit", tmp, err)
 		} else if err = os.rename(tmp, IDENTITY_PATH); err != nil {
-			fmt.eprintfln("[net] cannot rename %s to %s: %v", tmp, IDENTITY_PATH, err)
+			logf(w, "net", "cannot rename %s to %s: %v", tmp, IDENTITY_PATH, err)
 		}
-		fmt.printfln("[net] created a new identity in %s", IDENTITY_PATH)
+		logf(w, "net", "created a new identity in %s", IDENTITY_PATH)
 	}
 	ed25519.private_key_public_bytes(&w.identity, w.identity_pub[:])
-	fmt.printfln("[net] identity %016x", key_short(w.identity_pub))
+	logf(w, "net", "identity %016x", key_short(w.identity_pub))
 }
 
 // Carpool messages. Every message is exactly size_of(Message) bytes on the wire and on disk, little endian,
@@ -469,7 +468,7 @@ Message :: struct {
 // Message so unused body bytes are zero. False when this user has no identity yet.
 msg_sign :: proc(w: ^World, m: ^Message) -> bool {
 	if w.identity_pub == {} {
-		fmt.eprintln("[net] cannot sign: no identity")
+		logf(w, "net", "cannot sign: no identity")
 		return false
 	}
 	m.magic = MSG_MAGIC
@@ -481,15 +480,17 @@ msg_sign :: proc(w: ^World, m: ^Message) -> bool {
 }
 
 // For anything that comes from outside. Checks the size, header, field ranges, then the signature.
-msg_read :: proc(b: []u8) -> (m: Message, ok: bool) {
+msg_read :: proc(w: ^World, b: []u8) -> (m: Message, ok: bool) {
 	if len(b) != size_of(Message) {
-		fmt.eprintfln("[net] message is %d bytes, want %d", len(b), size_of(Message))
+		logf(w, "net", "message is %d bytes, want %d", len(b), size_of(Message))
 		return
 	}
 	mem.copy(&m, raw_data(b), size_of(Message))
 	if m.magic != MSG_MAGIC || m.version != MSG_VERSION {
-		fmt.eprintfln(
-			"[net] message magic %x version %d, want %x version %d",
+		logf(
+			w,
+			"net",
+			"message magic %x version %d, want %x version %d",
 			m.magic,
 			m.version,
 			MSG_MAGIC,
@@ -518,16 +519,16 @@ msg_read :: proc(b: []u8) -> (m: Message, ok: bool) {
 		fields_ok = m.review.stars >= 1 && m.review.stars <= 5
 	}
 	if !fields_ok {
-		fmt.eprintfln("[net] message kind %d from %016x: bad fields", u8(m.kind), key_short(m.author))
+		logf(w, "net", "message kind %d from %016x: bad fields", u8(m.kind), key_short(m.author))
 		return
 	}
 	pub: ed25519.Public_Key
 	if !ed25519.public_key_set_bytes(&pub, m.author[:]) {
-		fmt.eprintfln("[net] %v message author %016x is not a valid public key", m.kind, key_short(m.author))
+		logf(w, "net", "%v message author %016x is not a valid public key", m.kind, key_short(m.author))
 		return
 	}
 	if !ed25519.verify(&pub, b[:offset_of(Message, sig)], m.sig[:]) {
-		fmt.eprintfln("[net] %v message from %016x has a bad signature", m.kind, key_short(m.author))
+		logf(w, "net", "%v message from %016x has a bad signature", m.kind, key_short(m.author))
 		return
 	}
 	return m, true

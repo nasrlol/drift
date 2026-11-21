@@ -157,13 +157,13 @@ Git
 - Tag every working demo: demo-1, demo-2, ...
 - Odin version is pinned: dev-2026-11a, for everyone and in CI. Upgrading is one agreed commit.
 - Claim before you start: mark the todo item [~] yourname. One person or agent per item.
-- Pull requests: one todo item, under 400 changed lines outside assets/ (CI rejects bigger ones).
+- Pull requests: one todo item, kept small.
 - CI is the real gate. Hooks can be skipped locally, CI cannot. Nothing merges with a red CI.
 - Protected files need the owner's review (.github/CODEOWNERS): rules.txt, AGENTS.md, CI, hooks,
   build scripts, benchmark budgets, expected test results. Never loosen a check to make a change pass.
 - A pull request that claims a speedup includes profile-build bench output for main and the branch.
 - Mechanical rules are checked by ./check.sh: allowed imports, no raylib in simulation code,
-  banned file names, one test file, max file size, pull request size.
+  banned file names, one test file, max file size.
 
 EXTRA: API (future, not now. When we port the core to Swift / Kotlin apps)
 - We only write native code. No web views, no JS, no interpreters.
