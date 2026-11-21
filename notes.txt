@@ -596,7 +596,8 @@ Draw order (game.odin, nasr keeps the list; the design's "Tekenvolgorde")
   5 routes (Lars)  6 airship shadow + airship (Dario)  7 labels (nasr), bubbles, road sign, pill (Lars)
   8 screen UI: Plan -> plan_ui (Andrei); Navigate -> nav_ui (Lars) + pilot_ui (Dario); layers panel (Andrei);
     toasts last (nasr)
-Open question on the design: icon set + the two extra fonts (new dependencies), #64.
+Fonts and icons (nasr, #64): Figtree, Roboto Mono and Material Symbols Rounded are allowed. Each goes in assets/
+  with its license file next to it, embedded like Roboto (#47). Pin the release, record URL, date and sha256 here.
 
 BUILD
 compile.sh [debug|profile|release] [extra odin flags], build.sh wraps it with build-notify
