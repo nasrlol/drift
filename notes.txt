@@ -77,6 +77,15 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hubs = map cities for now.
                   Stub: straight line. Path lives in w.route_mem until the next call.
+                  ok = false also when from or to lies outside the routing grid.
+                  Grid: 286 x 237 cells of 1 km x 3 layers (LAYER_ALT) = 203,346 nodes, covers every point
+                  in belgium.bin (x 0.6..285.2, y 1.0..236.5 km). node = layer * 286 * 237 + y * 286 + x,
+                  each layer a contiguous row-major plane. grid_node_at(pos) snaps to the cell under x, y
+                  and the closest layer, grid_node_pos(n) gives the cell centre, grid_neighbor(n, d) steps
+                  one entry of GRID_DIRS (8 horizontal directions, up, down) and fails past the edge.
+                  w.grid holds the search state as fixed arrays in World (no arena, allocated with World):
+                  visit stamp, cost, parent per node, 12 B x 203k = 2.4 MB. A node's cost and parent only
+                  count when visit[n] == grid.search, so a route starts with search += 1, not a 2.4 MB clear.
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 source/host/      debug host: loads build/game.so (game.dll on Windows), checks its mtime every frame, copies it to
                   build/game_N.so and loads the copy, unloads the old one after. Compares memory_size,
