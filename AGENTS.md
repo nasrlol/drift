@@ -8,12 +8,16 @@ Read these three files before you change anything:
 
 ## Workflow
 
-1. Pick one unclaimed item in todo.txt. Claim it: `[~] yourname: task`. Work on that item only.
-2. Work on a branch: `yourname/short-topic`. Never commit to main.
-3. Keep the change small. One todo item per pull request.
-4. Before committing: `./format.sh`, `./check.sh`, `./compile.sh debug`. The pre-commit hook runs them too.
-5. Never skip the hook (`--no-verify`). If a check fails, fix the code, not the check.
-6. When done: tick the item in todo.txt, describe what was built in notes.txt.
+1. Always pull main first: `git checkout main && git pull origin main`. Others change World and shared
+   files often, so start from the latest main, never from an old local copy.
+2. Pick one unclaimed item in todo.txt. Claim it: `[~] yourname: task`. Work on that item only.
+3. Work on a branch made from that fresh main: `yourname/short-topic`. Never commit to main.
+4. Keep the change small. One todo item per pull request.
+5. Before committing: `./format.sh`, `./check.sh`, `./compile.sh debug`. The pre-commit hook runs them too.
+6. Never skip the hook (`--no-verify`). If a check fails, fix the code, not the check.
+7. Before pushing or opening the pull request, pull main again: `git fetch origin && git merge origin/main`.
+   Fix any conflicts on your branch, rebuild and rerun the tests, then push.
+8. When done: tick the item in todo.txt, describe what was built in notes.txt.
 
 ## Do not change without a human owner's approval
 
