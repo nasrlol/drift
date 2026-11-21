@@ -15,7 +15,7 @@ DONE
 
 FIRST, TOGETHER (so everyone can work in parallel)
 [ ] weather arena in World (when the snapshot loader exists)
-[ ] in-app profiler: timed blocks per system, on-screen overlay in debug builds
+[x] in-app profiler: timed blocks per system, on-screen overlay in debug builds
     (frame ms, update / draw split, route ms, weather load ms, arena usage, last 120 frames graph)
 [ ] headless mode: --headless --snapshot <file> --inputs <file>, prints result as text and exits
 [ ] state dump to text (key + flag) and plain text log with system name and tick

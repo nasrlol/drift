@@ -66,6 +66,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   net.odin        fetch_weather(out, scratch) -> ok: blocking Open-Meteo request with curl (15 s timeout,
                   max 1 MB), converts the json into a Weather. Writes out only if every value is valid.
                   Run it on a thread, never in the frame loop. Not called yet (snapshot + refresh todo).
+  debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
+                  Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =
+                  DRIFT_DEBUG || DRIFT_PROFILE). Overlay drawn in game_update, F3 toggles: frame ms with
+                  update / draw split, worst of the last 120 frames, route and weather load ms, perm / route
+                  arena used / reserved, frame arena use, 120 frame graph (yellow line = 4 ms budget, red bars
+                  over it). Frame ms excludes EndDrawing (vsync wait) and the overlay itself.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   Stub: straight line. Path lives in w.route_mem until the next call.

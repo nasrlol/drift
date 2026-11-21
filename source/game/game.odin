@@ -22,6 +22,7 @@ World :: struct {
 	weather:   Weather,
 	tick:      u64,
 	accum:     f64,
+	prof:      Profiler,
 }
 
 @(export)
@@ -76,16 +77,72 @@ game_update :: proc(memory: rawptr) -> bool {
 	context.temp_allocator = virtual.arena_allocator(&w.frame)
 	defer virtual.arena_free_all(&w.frame)
 
+	t := prof_begin()
 	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT)
 	for w.accum >= SIM_DT {
 		w.tick += 1
 		w.accum -= SIM_DT
 	}
+	prof_end(w, .Update, t)
 
 	rl.BeginDrawing()
+	t = prof_begin()
 	rl.ClearBackground(rl.RAYWHITE)
 	rl.DrawText("hello raylib", 190, 200, 20, rl.DARKGRAY)
+	prof_end(w, .Draw, t)
+
+	// Profiler overlay, F3 toggles it. It shows the previous frame and is not counted in draw ms.
+	when PROFILING {
+		p := &w.prof
+		if rl.IsKeyPressed(.F3) do p.hidden = !p.hidden
+		if !p.hidden {
+			worst: f32
+			for ms in p.frame_ms do worst = max(worst, ms)
+			MB :: f32(1 << 20)
+			rl.DrawRectangle(8, 8, 300, 132, {0, 0, 0, 170})
+			lines := [?]cstring {
+				fmt.ctprintf(
+					"frame %.2f ms (update %.2f, draw %.2f)",
+					p.ms[.Update] + p.ms[.Draw],
+					p.ms[.Update],
+					p.ms[.Draw],
+				),
+				fmt.ctprintf("worst of %d frames %.2f ms, budget %d", PROF_FRAMES, worst, FRAME_BUDGET_MS),
+				fmt.ctprintf("route %.2f ms, weather load %.2f ms", p.ms[.Route], p.ms[.Weather_Load]),
+				fmt.ctprintf(
+					"perm %.2f / %.2f MB, route %.2f / %.2f MB",
+					f32(w.perm.total_used) / MB,
+					f32(w.perm.total_reserved) / MB,
+					f32(w.route_mem.total_used) / MB,
+					f32(w.route_mem.total_reserved) / MB,
+				),
+				fmt.ctprintf("frame arena %.1f KB", f32(p.frame_used) / 1024),
+			}
+			for line, i in lines do rl.DrawText(line, 14, 14 + i32(i) * 12, 10, rl.RAYWHITE)
+
+			// 2 px per frame, oldest on the left, 10 px per ms, the yellow line is the budget.
+			base :: 134
+			rl.DrawLine(
+				14,
+				base - FRAME_BUDGET_MS * 10,
+				14 + PROF_FRAMES * 2,
+				base - FRAME_BUDGET_MS * 10,
+				rl.YELLOW,
+			)
+			for i in 0 ..< PROF_FRAMES {
+				ms := p.frame_ms[(p.head + i) % PROF_FRAMES]
+				h := clamp(i32(ms * 10), 1, 60)
+				rl.DrawRectangle(14 + i32(i) * 2, base - h, 2, h, ms > FRAME_BUDGET_MS ? rl.RED : rl.GREEN)
+			}
+		}
+	}
 	rl.EndDrawing()
+
+	when PROFILING {
+		w.prof.frame_ms[w.prof.head] = w.prof.ms[.Update] + w.prof.ms[.Draw]
+		w.prof.head = (w.prof.head + 1) % PROF_FRAMES
+		w.prof.frame_used = w.frame.total_used
+	}
 
 	return !rl.WindowShouldClose()
 }
