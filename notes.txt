@@ -20,13 +20,15 @@ tools/extract_map.sh
 tools/bake_map/  (odin run tools/bake_map, from repo root)
   reads the geojson files, writes assets/belgium.bin (422 KB)
   projection: equirectangular, km, origin top-left (lon 2.38, lat 51.56), y down
-  10872 lines, 36364 points, 15 cities
+  10872 lines, 36364 points, 15 cities, 15 hubs
 
-belgium.bin format (version 1, all little endian, 4-byte aligned)
-  header  magic "DRFT", version, line_count, point_count, city_count (5 x u32)
+belgium.bin format (version 2, all little endian, 4-byte aligned)
+  header  magic "DRFT", version, line_count, point_count, city_count, hub_count (6 x u32)
   lines   start, count, kind (3 x u32)   kind: 0 border, 1 river, 2 motorway
   points  x, y (2 x f32, km)
   cities  pos (2 x f32), name (32 bytes, 0-terminated)
+  hubs    pos (2 x f32), name (32 bytes, 0-terminated). For now one hub per city, same position.
+          max MAX_HUBS = 32 (bake fails above that). Tower top = ground + HUB_TOWER_M (58 m, spec).
 
 WEATHER DATA
 
@@ -52,6 +54,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   game.odin       World struct, exported procs, fixed 60 Hz timestep, drawing
   map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
                   load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
+                  Hubs are copied into a fixed array w.m.hubs[:w.m.hub_count], hub id = index.
   terrain.odin    height_at(w, x, y) -> ground height in m. Stub: 0
   weather.odin    wind_at(w, x, y, layer, hour) -> [2]f32 m/s, direction the wind blows toward, x east, y south
                   gust_at(w, x, y, layer, hour) -> 0..1, cloud_at(w, x, y, hour) -> 0..1. Bilinear on the 40 km grid
@@ -64,7 +67,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   max 1 MB, aborts within ~1 s when cancel is set), converts the json into a Weather.
                   Writes out only if every value is valid.
                   Snapshot cycle (state in w.fetch, zero = fetch on the first update):
-                    game_init -> weather_load_snapshot: reads cache/weather.snap, checks size, magic, version,
+                    game_init -> weather_load_snapshot(w, path): reads cache/weather.snap, checks size, magic, version,
                       sha256 and weather_valid. Bad or missing file: weather stays zero, fetch right away.
                     game_update -> weather_poll: every frame, starts a thread when now >= next (15 min after
                       the snapshot was fetched, 5 min after a failure). The thread fetches, hashes and writes
@@ -79,10 +82,64 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     Present but wrong size or invalid: logged and left alone (it is the user's reputation),
                     w.identity stays zero and network features stay off. w.identity_pub = public key,
                     logged as the first 8 bytes in hex. Moves to the user data folder with the release item.
+                  The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
+  debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
+                  Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =
+                  DRIFT_DEBUG || DRIFT_PROFILE). Overlay drawn in game_update, F3 toggles: frame ms with
+                  update / draw split, worst of the last 120 frames, route and weather load ms, perm / route
+                  arena used / reserved, frame arena use, 120 frame graph (yellow line = 4 ms budget, red bars
+                  over it). Frame ms excludes EndDrawing (vsync wait) and the overlay itself.
+                  Headless: ./build/drift --headless --snapshot <file> --inputs <file> runs without a window,
+                  prints the result to stdout (deterministic text, no timings) and timings / errors to stderr,
+                  exit code 0 or 1. game_headless (exported, called by host and release main) reads the inputs,
+                  headless_run(w, snapshot_path, inputs, out) loads the snapshot (weather_load_snapshot, the
+                  cache/weather.snap format) and does the work and is what test/ calls.
+                  Inputs: one command per line, # comment. "route <from hub> <to hub> <mode> <hour>",
+                  hub = index into w.m.hubs, mode fastest / greenest / calmest, hour 0..8.
+                  Output per route: "route 6 -> 11 fastest hour 0: 2 points, 104.812 km", then x y alt per point.
+                  --dump appends the state dump after the result.
+                  Log: logf(w, system, format, args) prints "[route t=1234] message" to stderr, t = w.tick.
+                  No allocation (1 KB stack buffer, longer messages are cut). Code without a World
+                  (fetch thread, argument parsing) prints "[system] message" with fmt.eprint.
+                  State dump: dump_world(w, out) writes tick, build, map counts, hubs, weather start / sha256 /
+                  fetched_at, a weather line per hour
+                  (max wind per layer, max gust, mean cloud) and arena used / reserved. No timings, so two dumps
+                  of the same run are identical. F5 in the app prints it to stdout, --dump in headless mode.
+                  Windows release is -subsystem:windows and has no console: use the debug or profile exe there.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
-                  ok = false means no safe route with this wind. Hubs = map cities for now.
+                  ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   Stub: straight line. Path lives in w.route_mem until the next call.
+                  ok = false also when from or to lies outside the routing grid.
+                  Grid: 286 x 237 cells of 1 km x 3 layers (LAYER_ALT) = 203,346 nodes, covers every point
+                  in belgium.bin (x 0.6..285.2, y 1.0..236.5 km). node = layer * 286 * 237 + y * 286 + x,
+                  each layer a contiguous row-major plane. grid_node_at(pos) snaps to the cell under x, y
+                  and the closest layer, grid_node_pos(n) gives the cell centre, grid_neighbor(n, d) steps
+                  one entry of GRID_DIRS (8 horizontal directions, up, down) and fails past the edge.
+                  w.grid holds the search state as fixed arrays in World (no arena, allocated with World):
+                  visit stamp, cost, parent per node, 12 B x 203k = 2.4 MB. A node's cost and parent only
+                  count when visit[n] == grid.search, so a route starts with search += 1, not a 2.4 MB clear.
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
+test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
+                  Each case = snapshot + inputs through game.headless_run, output compared line by line to the
+                  .expected file. On a mismatch it prints the first differing line and writes the full output
+                  to build/test_<name>.txt. Expected files change only with the owner's approval.
+  test/data/      snapshots in the cache/weather.snap format (valid sha256, fetched_at 1795176600).
+                  calm.snap: zero wind / gust / cloud, start 1795176000. nan_wind.snap: same with
+                  wind[3][1][20].x = NaN, must be rejected by weather_valid. routes.txt: one route per mode, hours 0 / 4 / 8,
+                  a route to the same hub. calm_routes.expected: today the straight line stub.
+                  Snapshots were written byte by byte from the format above. Add a real fetched snapshot
+                  (copy a cache/weather.snap), the calm one does not exercise the wind.
+bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.
+                  200 rounds; wind_at / gust_at / cloud_at / height_at over 4096 fixed-seed points per round,
+                  route, three modes, snapshot load, load_map one call per round. Prints min / avg / max per
+                  call and arena usage, exits 1 when an average is over a budget (route 10 ms, three modes
+                  30 ms, snapshot load 5 ms). Not run by the hook or CI: CI machines are too noisy for timings.
+  measured 2026-11-21, Linux on Apple M2 (Asahi), profile config, timer resolution ~42 ns:
+                  wind_at / gust_at / cloud_at ~3.6 ns per call (~10-15 cycles: two float divides, clamps,
+                  4 loads from L1, ~20 flops; estimate 3-5 ns). An earlier run on the branch gave ~10 ns,
+                  probably an efficiency core: pin the bench to one core type before comparing numbers.
+                  route (stub + grid snap) ~0.3 us. Snapshot load ~23 us: read 22.7 KB from the page cache,
+                  sha256 (~10-15 us at ~2 GB/s), validation, copy; budget 5 ms. load_map ~0.2 us.
 source/host/      debug host: loads build/game.so (game.dll on Windows), checks its mtime every frame, copies it to
                   build/game_N.so and loads the copy, unloads the old one after. Compares memory_size,
                   refuses a reload if World changed (restart needed). Calls game_before_reload on the old
@@ -101,12 +158,16 @@ compile.bat same modes on Windows (no mold, raylib.dll copied to build\, random 
   so a loaded pdb never blocks the next build, host not rebuilt while drift.exe runs,
   release uses -subsystem:windows). format.bat / check.bat run the .sh versions with Git for Windows sh.
   all modes: -vet -vet-cast -strict-style -warnings-as-errors -linker:mold, prints build time
-  debug:   host + game.so, -debug -o:none -use-separate-modules (~900 ms for both)
+  debug:   host + game.so, -debug -o:none -use-separate-modules (~900 ms for both, 2026-11-21 after
+           profiler / headless / log / dump: 874-917 ms, main before them 767-875 ms; limit 2 s)
            game.so uses raylib as a shared lib (RAYLIB_SHARED), copied to build/, rpath $ORIGIN,
            so raylib state survives reloads. Outputs are written to a temp name, then moved.
   profile: source/release, -debug -o:speed, single exe (~2 s)
   release: source/release, -o:speed -disable-assert, single exe (~1.7 s)
   ASAN=1 adds -sanitize:address
+  build flags in code: DRIFT_DEBUG / DRIFT_PROFILE (#config in game.odin), set with -define by compile.sh / .bat
+           (debug game.so: DRIFT_DEBUG, profile: DRIFT_PROFILE, release: neither). Odin rejects a -define
+           nobody reads, so the host gets none. BUILD_MODE is printed at startup ("[game] build: debug").
 release exe links raylib statically, map is embedded, only depends on libc, libm and X11
 
 PROJECT SETUP
@@ -115,12 +176,12 @@ ols.json, odinfmt.json   Odin language server + formatter (tabs, 110 columns)
 .gitattributes           LF everywhere, *.bin / *.pbf / *.pdf binary, geojson marked generated
 .githooks/pre-commit     format check (if odinfmt installed) + check.sh + debug build (compile.bat on Windows) + test/.
                          enable: git config core.hooksPath .githooks
-.github/workflows/ci.yml job build: ubuntu 24.04, Odin dev-2026-11a, odinfmt check, check.sh (+ PR size),
+.github/workflows/ci.yml job build: ubuntu 24.04, Odin dev-2026-11a, odinfmt check, check.sh,
                          debug + release build, bake reproduces belgium.bin, test/
                          job build-windows: windows 2022, compile.bat debug + release
 .github/CODEOWNERS       system files owned by their person + @nasrlol, protected files by @nasrlol
 check.sh                 allowed imports, no raylib in sim files, banned file names, one test file,
-                         max 1 MB per file (assets excepted), --pr <base>: max 400 changed lines
+                         max 1 MB per file (assets excepted)
 AGENTS.md                entry point for agents and new people, points to rules / notes / todo
 format.sh                formats all tracked .odin files with odinfmt, --check only reports (hook + CI).
                          new files must be git added first

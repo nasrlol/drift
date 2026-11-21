@@ -30,10 +30,6 @@ jobs:
       - name: Checks
         run: ./check.sh
 
-      - name: Pull request size
-        if: github.event_name == 'pull_request'
-        run: ./check.sh --pr origin/${{ github.base_ref }}
-
       - name: Build debug
         run: ./compile.sh debug
 

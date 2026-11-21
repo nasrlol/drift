@@ -16,6 +16,7 @@ Game_API :: struct {
 	update:          proc(memory: rawptr) -> bool,
 	shutdown:        proc(memory: rawptr),
 	shutdown_window: proc(),
+	headless:        proc(args: []string) -> bool,
 	__handle:        dynlib.Library,
 }
 
@@ -46,6 +47,13 @@ main :: proc() {
 		os.exit(1)
 	}
 	version += 1
+
+	if len(os.args) > 1 && os.args[1] == "--headless" {
+		ok = api.headless(os.args[1:])
+		dynlib.unload_library(api.__handle)
+		os.remove(fmt.tprintf("build/game_0.%s", dynlib.LIBRARY_FILE_EXTENSION))
+		os.exit(ok ? 0 : 1)
+	}
 
 	api.init_window()
 	memory := api.init()
