@@ -38,13 +38,14 @@ Car_Part :: struct {
 }
 
 Airship :: struct {
-	parts:      [CAR_MAX_PARTS]Car_Part,
-	part_count: int,
-	glow:       rl.Mesh, // thruster disc under a folded wheel
-	material:   rl.Material,
-	ready:      bool,
-	skins:      [Car_Skin]Skin_Mesh, // generated bodies (car_models.odin), Concept unused
-	preview:    rl.RenderTexture2D, // the plan panel's skin preview
+	parts:       [CAR_MAX_PARTS]Car_Part,
+	part_count:  int,
+	glow:        rl.Mesh, // thruster disc under a folded wheel
+	material:    rl.Material,
+	ready:       bool,
+	skins:       [Car_Skin]Skin_Mesh, // generated bodies (car_models.odin), Concept unused
+	preview:     rl.RenderTexture2D, // the plan panel's skin preview
+	preview_yaw: f32, // its turn, from frame_time so scripted runs draw the same frames
 }
 
 CAR_VS :: `#version 330

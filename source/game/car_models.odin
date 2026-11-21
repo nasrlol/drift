@@ -606,7 +606,8 @@ car_skin_picker :: proc(w: ^World, r: rl.Rectangle) {
 		car_shader_light(w, {-0.45, 1.3, 0.3}, {0, math.cos(tilt), math.sin(tilt)})
 		scale := f32(pw) * 0.84 / CAR_LEN
 		m := linalg.matrix4_scale_f32({scale, scale, scale})
-		m = m * linalg.matrix4_rotate_f32(f32(rl.GetTime()) * 0.7, {0, 1, 0})
+		a.preview_yaw = math.mod(a.preview_yaw + frame_time(w) * 0.7, math.TAU)
+		m = m * linalg.matrix4_rotate_f32(a.preview_yaw, {0, 1, 0})
 		m = m * linalg.matrix4_translate_f32({0, -0.6, 0})
 		mat := a.material
 		mat.maps[0].color = rl.WHITE
