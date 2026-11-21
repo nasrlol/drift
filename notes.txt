@@ -117,7 +117,8 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   ship_step(w, controls, dt) runs once per fixed 60 Hz step in game_update on w.ship, reads only the
                   ship, the controls and height_at. Limits: speed follows max(throttle, 0) * 35 m/s with +1.2 / -1.6
                   m/s^2, turn rate follows turn * 0.6 rad/s with a 0.5 s time constant, climb 5 m/s, altitude clamped
-                  to height_at + 28 m .. 900 m. Wind and battery come later.
+                  to height_at + 28 m .. 900 m. Wind: ground velocity = heading * speed + wind_at of the layer nearest
+                  to the altitude, hour = tick / (60 * 3600). Battery comes later.
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
                   R/F climb up / down, gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
