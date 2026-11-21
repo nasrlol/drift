@@ -131,7 +131,7 @@ design (airship.odin = model + drawing, camera.odin = camera, pilot_ui.odin = fl
 [ ] chase camera: 53 deg tilt behind the ship, turns with heading, small lag; Start dives in 1.2 s
 [ ] preview: camera flies the chosen route in 9 s, ease in + out (uses Lars's route_sample)
 [ ] cam_to_screen(w, pos) -> px, visible: everyone projects with this (labels, bubbles, pills)
-[~] dario: keys: arrows = WASD, PgUp / PgDn = R / F (done, #PR); any of them in navigation calls nav_set_manual(w, true) (waiting: Lars nav_set_manual)
+[~] dario: keys: arrows = WASD, PgUp / PgDn = R / F (done, #69); any of them in navigation calls nav_set_manual(w, true) (waiting: Lars nav_set_manual)
 [ ] pilot_ui: button column (compass, overview, sound, wind, report gust), 64 px, right middle
 [ ] pilot_ui: speed circle 74 px, Re-centre pill after a map drag, self-fly 66 px + red Exit / Done pill
 [ ] pilot_ui: sim speed chips 1x 5x 15x 40x in the sheet (replaces the toolbar buttons of #57)
