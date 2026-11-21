@@ -61,6 +61,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   (0.25 per notch) around the cursor. Gamepad 0: right stick pans (600 px/s, deadzone 0.15),
                   right / left trigger zoom in / out (2 per s) around the screen centre. Pan is clamped so the
                   screen centre stays on the map. Left stick is left free for the ship controls.
+                  Follow: w.free_camera = false (zero) puts the pan on the ship every frame. A mouse drag or the right
+                  stick sets it true (free camera), C or a click on the right stick sets it false again. The ship is
+                  drawn as an 8 px red triangle pointing along its heading.
                   Map drawing: each Map_Line is one rl.DrawLineStrip
                   straight from w.m.points ([2]f32 km has the rl.Vector2 layout, no copy, no allocation).
                   Colors: border dark grey, rivers blue, motorways orange. 10872 strips, 36k points per frame.
@@ -150,7 +153,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   height_at is only called for a hub that is within 30 m horizontally, not for all 15, because the real
                   height_at will cost more than the stub.
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
-                  R/F climb up / down, gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
+                  R/F climb up / down, gamepad 0: left stick throttle + turn, right / left bumper climb up / down. Keyboard and stick
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
