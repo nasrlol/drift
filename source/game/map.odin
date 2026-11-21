@@ -31,6 +31,8 @@ Map_Header :: struct {
 	name_cell_count, name_run_count:     u32,
 	area_count, area_point_count:        u32,
 	height_w, height_h:                  u32,
+	road_node_count, road_edge_count:    u32,
+	road_point_count:                    u32,
 }
 // name, ref: offsets into Map.names (map_name), 0 = none. ref is the OSM road number, e.g. "E40;A10".
 Map_Line :: struct {
@@ -54,6 +56,22 @@ Area_Kind :: enum u32 {
 	Marsh,
 	Beach,
 	Water,
+}
+// Road graph (motorway, trunk, primary, secondary and their ramps) for driving on the ground. A node is a
+// junction or a dead end; road_edges[first:][:count] are the edges leaving it.
+Road_Node :: struct {
+	pos:          [2]f32,
+	first, count: u32,
+}
+// road_points[start:][:count] runs from -> to, the first and last point are the nodes. A two-way road has one
+// edge per direction; oneway = 1 marks a road that can only be driven this way. kind is a Map_Kind.
+// length_km is measured on the unsimplified OSM way.
+Road_Edge :: struct {
+	from, to:     u32,
+	start, count: u32,
+	length_km:    f32,
+	kind:         u32,
+	oneway:       u32,
 }
 Map_City :: struct {
 	pos:  [2]f32,
@@ -95,6 +113,9 @@ Map :: struct {
 	// Hillshade of heights, light from the north-west at 45 degrees, 4x vertical exaggeration:
 	// 128 = flat, 255 = facing the light, 0 = facing away. Same grid as heights.
 	hillshade:   []u8,
+	road_nodes:  []Road_Node,
+	road_edges:  []Road_Edge,
+	road_points: [][2]f32,
 }
 
 // map_nearest_name ranks a line by distance x weight, so a bigger road wins over a smaller one that is a little
@@ -134,8 +155,11 @@ load_map :: proc() -> (m: Map, ok: bool) {
 		off^ += int(size)
 		return s
 	}
+	// x - x is NaN for NaN and +-Inf, 0 otherwise. One compare per point: this runs over ~800k points at
+	// startup and after every reload.
 	finite :: proc(p: [2]f32) -> bool {
-		return !math.is_nan(p.x) && !math.is_nan(p.y) && !math.is_inf(p.x) && !math.is_inf(p.y)
+		d := p - p
+		return d.x == 0 && d.y == 0
 	}
 
 	m.lines = take(data, &off, h.line_count, Map_Line, &bad)
@@ -150,6 +174,9 @@ load_map :: proc() -> (m: Map, ok: bool) {
 	if h.height_w != HEIGHT_W || h.height_h != HEIGHT_H do return {}, false
 	m.heights = take(data, &off, HEIGHT_W * HEIGHT_H, i16, &bad)
 	m.hillshade = take(data, &off, HEIGHT_W * HEIGHT_H, u8, &bad)
+	m.road_nodes = take(data, &off, h.road_node_count, Road_Node, &bad)
+	m.road_edges = take(data, &off, h.road_edge_count, Road_Edge, &bad)
+	m.road_points = take(data, &off, h.road_point_count, [2]f32, &bad)
 	if bad || off != len(data) do return {}, false
 
 	if len(m.names) == 0 || m.names[0] != 0 || m.names[len(m.names) - 1] != 0 do return {}, false
@@ -171,6 +198,16 @@ load_map :: proc() -> (m: Map, ok: bool) {
 		if a.kind > u32(max(Area_Kind)) do return {}, false
 	}
 	for p in m.area_points do if !finite(p) do return {}, false
+	for n, i in m.road_nodes {
+		if !finite(n.pos) || u64(n.first) + u64(n.count) > u64(len(m.road_edges)) do return {}, false
+		for e in m.road_edges[n.first:][:n.count] do if int(e.from) != i do return {}, false
+	}
+	for e in m.road_edges {
+		if int(e.to) >= len(m.road_nodes) || int(e.from) >= len(m.road_nodes) || e.count < 2 do return {}, false
+		if u64(e.start) + u64(e.count) > u64(len(m.road_points)) do return {}, false
+		if !(e.length_km >= 0 && e.length_km < 1e4) || e.kind > u32(max(Map_Kind)) || e.oneway > 1 do return {}, false
+	}
+	for p in m.road_points do if !finite(p) do return {}, false
 	for p in m.points do if !finite(p) do return {}, false
 	for c in m.cities do if !finite(c.pos) do return {}, false
 	for hub in hubs do if !finite(hub.pos) do return {}, false

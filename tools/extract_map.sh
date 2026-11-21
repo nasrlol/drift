@@ -19,5 +19,9 @@ $OGR $OUT/cities.geojson    -select name $SRC points -where "place='city'"
 # the bake drops what is below AREA_MIN_KM2 after simplifying. 180 MB without the area filter.
 $OGR $OUT/areas.geojson     -select landuse,natural,leisure $SRC multipolygons -where "(landuse IN ('residential','commercial','industrial','retail','forest','farmland','farmyard','orchard','vineyard') OR \"natural\" IN ('wood','wetland','beach','sand','water') OR leisure='park') AND OGR_GEOM_AREA > 0.00005" -simplify 0.001
 gzip -9 -n -f $OUT/areas.geojson
+# Road graph: main roads unsimplified at 6 decimals (~10 cm), so ways that share an OSM node share a coordinate
+# and the bake can find the junctions. oneway and junction (roundabouts are one-way) sit in other_tags.
+$GIS ogr2ogr -f GeoJSON -lco COORDINATE_PRECISION=6 $OUT/road_graph.geojson $SRC -dialect SQLite -sql "SELECT highway, hstore_get_value(other_tags, 'oneway') AS oneway, hstore_get_value(other_tags, 'junction') AS junction, geometry FROM lines WHERE highway IN ('motorway','motorway_link','trunk','trunk_link','primary','primary_link','secondary','secondary_link')"
+gzip -9 -n -f $OUT/road_graph.geojson
 
 ls -lh $OUT

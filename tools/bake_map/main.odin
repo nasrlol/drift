@@ -37,7 +37,27 @@ Map_Header :: struct {
 	name_cell_count, name_run_count:     u32,
 	area_count, area_point_count:        u32,
 	height_w, height_h:                  u32,
+	road_node_count, road_edge_count:    u32,
+	road_point_count:                    u32,
 }
+// Road graph for driving on the ground. edges[first:][:count] are the edges leaving this node.
+Road_Node :: struct {
+	pos:          [2]f32,
+	first, count: u32,
+}
+// road_points[start:][:count] runs from -> to. A two-way road has one edge per direction; oneway = 1 marks a
+// road that can only be driven this way.
+Road_Edge :: struct {
+	from, to:     u32,
+	start, count: u32,
+	length_km:    f32,
+	kind:         u32,
+	oneway:       u32,
+}
+// Smallest road class in the graph. Tertiary would roughly double it (see notes.txt).
+ROAD_MIN_KIND :: Kind.Secondary
+// Douglas-Peucker tolerance for the geometry between two junctions, in km. The junctions themselves stay.
+ROAD_SIMPLIFY_KM :: 0.02
 // Triangles area_points[start:][:count], 3 points each, of one land use polygon.
 Map_Area :: struct {
 	start, count, kind: u32,
@@ -482,6 +502,298 @@ clip_triangle :: proc(out: ^[dynamic][2]f32, tri: [][2]f32) {
 	for k in 1 ..< len(poly) - 1 do append(out, poly[0], poly[k], poly[k + 1])
 }
 
+// Road graph from unsimplified ways. OSM ways that cross at a junction share a node, and an OSM node is one
+// coordinate, so a coordinate used twice (or the end of a way) is a junction. The bake keys coordinates by
+// their 6-decimal value from the geojson, so distinct nodes are only merged when they are within ~10 cm.
+// Bridges do not share a node with the road below, so they do not connect. A way that leaves the map is cut
+// at the last point inside, which becomes a dead end.
+bake_roads :: proc(
+	path: string,
+) -> (
+	nodes: [dynamic]Road_Node,
+	edges: [dynamic]Road_Edge,
+	road_points: [dynamic][2]f32,
+) {
+	Key :: [2]i64
+	Way :: struct {
+		keys:    []Key,
+		kind:    Kind,
+		forward: bool, // can be driven in point order
+		back:    bool, // can be driven against it
+	}
+	key_of :: proc(c: json.Value) -> Key {
+		a := c.(json.Array)
+		return {i64(math.round(num(a[0]) * 1e6)), i64(math.round(num(a[1]) * 1e6))}
+	}
+	pos_of :: proc(k: Key) -> [2]f32 {
+		return project(f64(k.x) / 1e6, f64(k.y) / 1e6)
+	}
+	inside :: proc(p: [2]f32) -> bool {
+		return p.x >= 0 && p.x <= MAP_W_KM && p.y >= 0 && p.y <= MAP_H_KM
+	}
+
+	// Step 1: ways cut to the map, and how often every coordinate is used.
+	ways: [dynamic]Way
+	uses: map[Key]int
+	for f in read_features(path) {
+		feature := f.(json.Object)
+		geom := feature["geometry"].(json.Object)
+		props := feature["properties"].(json.Object)
+		if geom["type"].(json.String) != "LineString" do continue
+
+		highway, _ := props["highway"].(json.String)
+		oneway, _ := props["oneway"].(json.String)
+		junction, _ := props["junction"].(json.String)
+		kind: Kind
+		switch highway {
+		case "motorway", "motorway_link":
+			kind = .Motorway
+		case "trunk", "trunk_link":
+			kind = .Trunk
+		case "primary", "primary_link":
+			kind = .Primary
+		case "secondary", "secondary_link":
+			kind = .Secondary
+		case "tertiary", "tertiary_link":
+			kind = .Tertiary
+		case:
+			fmt.eprintfln("%s: highway=%q is not a road class we bake", path, highway)
+			os.exit(1)
+		}
+		if kind < ROAD_MIN_KIND do continue
+
+		// OSM: motorways, their ramps and roundabouts are one-way unless tagged otherwise.
+		implied :=
+			highway == "motorway" ||
+			highway == "motorway_link" ||
+			junction == "roundabout" ||
+			junction == "circular" ||
+			junction == "turbo_roundabout"
+		forward, back := true, true
+		switch oneway {
+		case "yes", "true", "1":
+			back = false
+		case "-1", "reverse":
+			forward = false
+		case "no", "alternating", "reversible":
+		case:
+			if implied do back = false
+		}
+
+		piece: [dynamic]Key
+		coords := geom["coordinates"].(json.Array)
+		for c, i in coords {
+			k := key_of(c)
+			in_map := inside(pos_of(k))
+			if in_map && (len(piece) == 0 || piece[len(piece) - 1] != k) do append(&piece, k)
+			if (!in_map || i == len(coords) - 1) && len(piece) > 0 {
+				if len(piece) >= 2 {
+					append(&ways, Way{piece[:], kind, forward, back})
+					for p in piece do uses[p] += 1
+					// The ends count twice so they are always nodes, also where nothing else touches them.
+					uses[piece[0]] += 1
+					uses[piece[len(piece) - 1]] += 1
+				}
+				piece = {}
+			}
+		}
+	}
+
+	// Step 2: nodes in order of first use, edges between them. A raw edge is one stretch of a way between two
+	// nodes, with all of its points.
+	Raw_Edge :: struct {
+		from, to:      u32,
+		pts:           [][2]f32,
+		kind:          Kind,
+		forward, back: bool,
+	}
+	node_of: map[Key]u32
+	raw: [dynamic]Raw_Edge
+	for way in ways {
+		node :: proc(node_of: ^map[Key]u32, nodes: ^[dynamic]Road_Node, k: Key, p: [2]f32) -> u32 {
+			if id, ok := node_of[k]; ok do return id
+			id := u32(len(nodes))
+			append(nodes, Road_Node{pos = p})
+			node_of[k] = id
+			return id
+		}
+		pts: [dynamic][2]f32
+		from: u32
+		for k, i in way.keys {
+			p := pos_of(k)
+			append(&pts, p)
+			if i == 0 {
+				from = node(&node_of, &nodes, k, p)
+			} else if uses[k] >= 2 {
+				to := node(&node_of, &nodes, k, p)
+				append(&raw, Raw_Edge{from, to, pts[:], way.kind, way.forward, way.back})
+				pts = {}
+				append(&pts, p)
+				from = to
+			}
+		}
+	}
+
+	// Step 2b: OSM also ends a way at every tag change (speed limit, bridge, lanes), which gives nodes where
+	// just two stretches of one road meet. Those are no junctions: stretches of the same kind and the same
+	// one-way rule are joined through every node that has exactly two stretch ends, then the nodes that are
+	// left are numbered again in order of first use.
+	{
+		degree := make([]int, len(nodes))
+		for e in raw {
+			degree[e.from] += 1
+			degree[e.to] += 1
+		}
+		at := make([][2]int, len(nodes)) // the two stretches at a node of degree 2
+		for &a in at do a = {-1, -1}
+		for e, i in raw {
+			for n in ([2]u32{e.from, e.to}) {
+				if degree[n] != 2 do continue
+				if at[n][0] < 0 do at[n][0] = i
+				else do at[n][1] = i
+			}
+		}
+		flip :: proc(e: Raw_Edge) -> Raw_Edge {
+			r := e
+			r.from, r.to, r.forward, r.back = e.to, e.from, e.back, e.forward
+			rev := slice.clone(e.pts)
+			slice.reverse(rev)
+			r.pts = rev
+			return r
+		}
+		// The stretch that continues e (oriented so it starts where e ends) through e.to, or -1.
+		next :: proc(raw: []Raw_Edge, at: [][2]int, e: Raw_Edge, cur: int) -> (int, bool) {
+			pair := at[e.to]
+			if pair[0] < 0 || pair[1] < 0 || pair[0] == pair[1] do return -1, false
+			j := pair[0] == cur ? pair[1] : pair[0]
+			o := raw[j]
+			flipped := o.from != e.to
+			fwd, back := o.forward, o.back
+			if flipped do fwd, back = back, fwd
+			if o.kind != e.kind || fwd != e.forward || back != e.back do return -1, false
+			return j, flipped
+		}
+
+		used := make([]bool, len(raw))
+		joined: [dynamic]Raw_Edge
+		for i in 0 ..< len(raw) {
+			if used[i] do continue
+			// Walk back to the head of the chain (flip i, follow forward), stop on a closed loop.
+			head := flip(raw[i])
+			head_i := i
+			for {
+				j, flipped := next(raw[:], at, head, head_i)
+				if j < 0 || j == i || used[j] do break
+				head, head_i = flipped ? flip(raw[j]) : raw[j], j
+			}
+			cur := flip(head)
+			cur_i := head_i
+			pts: [dynamic][2]f32
+			append(&pts, ..cur.pts)
+			used[cur_i] = true
+			for {
+				j, flipped := next(raw[:], at, cur, cur_i)
+				if j < 0 || used[j] do break
+				o := flipped ? flip(raw[j]) : raw[j]
+				append(&pts, ..o.pts[1:])
+				cur.to = o.to
+				cur_i = j
+				used[j] = true
+			}
+			cur.pts = pts[:]
+			append(&joined, cur)
+		}
+
+		renumber := make([]u32, len(nodes))
+		for &r in renumber do r = max(u32)
+		kept: [dynamic]Road_Node
+		for &e in joined {
+			for n in ([2]^u32{&e.from, &e.to}) {
+				if renumber[n^] == max(u32) {
+					renumber[n^] = u32(len(kept))
+					append(&kept, Road_Node{pos = nodes[n^].pos})
+				}
+				n^ = renumber[n^]
+			}
+		}
+		raw, nodes = joined, kept
+	}
+
+	// Step 3: per direction one edge with its simplified points, then sorted by from node so the edges of a
+	// node are one run (stable, so the order inside a run follows the input).
+	simplify :: proc(out: ^[dynamic][2]f32, pts: [][2]f32) {
+		keep := make([]bool, len(pts), context.temp_allocator)
+		keep[0], keep[len(pts) - 1] = true, true
+		Span :: [2]int
+		stack := make([dynamic]Span, context.temp_allocator)
+		append(&stack, Span{0, len(pts) - 1})
+		for len(stack) > 0 {
+			sp := pop(&stack)
+			a, b := pts[sp[0]], pts[sp[1]]
+			ab := b - a
+			len2 := ab.x * ab.x + ab.y * ab.y
+			far, far_d2 := -1, f32(ROAD_SIMPLIFY_KM * ROAD_SIMPLIFY_KM)
+			for k in sp[0] + 1 ..< sp[1] {
+				ap := pts[k] - a
+				t := len2 > 0 ? clamp((ap.x * ab.x + ap.y * ab.y) / len2, 0, 1) : 0
+				e := ap - ab * t
+				if d2 := e.x * e.x + e.y * e.y; d2 > far_d2 do far, far_d2 = k, d2
+			}
+			if far < 0 do continue
+			keep[far] = true
+			append(&stack, Span{sp[0], far}, Span{far, sp[1]})
+		}
+		for p, k in pts do if keep[k] do append(out, p)
+	}
+	full_points := 0
+	for e in raw {
+		length: f32
+		for k in 1 ..< len(e.pts) do length += math.sqrt(dist2(e.pts[k - 1], e.pts[k]))
+		oneway := u32(e.forward != e.back)
+		full_points += len(e.pts)
+		if e.forward {
+			start := u32(len(road_points))
+			simplify(&road_points, e.pts)
+			append(
+				&edges,
+				Road_Edge{e.from, e.to, start, u32(len(road_points)) - start, length, u32(e.kind), oneway},
+			)
+		}
+		if e.back {
+			start := u32(len(road_points))
+			rev := slice.clone(e.pts, context.temp_allocator)
+			slice.reverse(rev)
+			simplify(&road_points, rev)
+			append(
+				&edges,
+				Road_Edge{e.to, e.from, start, u32(len(road_points)) - start, length, u32(e.kind), oneway},
+			)
+		}
+		free_all(context.temp_allocator)
+	}
+	slice.stable_sort_by(edges[:], proc(a, b: Road_Edge) -> bool {return a.from < b.from})
+	for e, i in edges {
+		n := &nodes[e.from]
+		if n.count == 0 do n.first = u32(i)
+		n.count += 1
+	}
+	fmt.printfln(
+		"road graph: %d ways, %d nodes, %d edges (%d stretches), %d points (%d before simplifying)",
+		len(ways),
+		len(nodes),
+		len(edges),
+		len(raw),
+		len(road_points),
+		full_points,
+	)
+	return
+}
+
+dist2 :: proc(a, b: [2]f32) -> f32 {
+	d := b - a
+	return d.x * d.x + d.y * d.y
+}
+
 main :: proc() {
 	append(&names, 0)
 	bake_layer("assets/geojson/border.geojson", .Border)
@@ -489,6 +801,7 @@ main :: proc() {
 	bake_layer("assets/geojson/roads.geojson.gz", .Motorway) // kind comes from each road's highway tag
 	bake_layer("assets/geojson/cities.geojson", .Border, is_cities = true)
 	areas, area_points := bake_areas("assets/geojson/areas.geojson.gz")
+	road_nodes, road_edges, road_points := bake_roads("assets/geojson/road_graph.geojson.gz")
 	heights, hillshade := bake_heights("assets/geojson/heights.i16.gz")
 
 	// OSM cuts a road into a new way at every tag change, so most lines are a few points long and the line
@@ -628,6 +941,9 @@ main :: proc() {
 		area_point_count = u32(len(area_points)),
 		height_w         = HEIGHT_W,
 		height_h         = HEIGHT_H,
+		road_node_count  = u32(len(road_nodes)),
+		road_edge_count  = u32(len(road_edges)),
+		road_point_count = u32(len(road_points)),
 	}
 
 	out: [dynamic]u8
@@ -643,6 +959,9 @@ main :: proc() {
 	append(&out, ..slice.to_bytes(area_points[:]))
 	append(&out, ..slice.to_bytes(heights))
 	append(&out, ..hillshade)
+	append(&out, ..slice.to_bytes(road_nodes[:]))
+	append(&out, ..slice.to_bytes(road_edges[:]))
+	append(&out, ..slice.to_bytes(road_points[:]))
 
 	if err := os.write_entire_file("assets/belgium.bin", out[:]); err != nil {
 		fmt.eprintln("can't write assets/belgium.bin", err)
