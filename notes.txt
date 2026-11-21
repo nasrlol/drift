@@ -97,10 +97,13 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Start: game_init puts the ship on the Brussels tower (hub named "Bruxelles - Brussel", looked up
                   by name since hub ids follow the bake order), alt = height_at + HUB_TOWER_M, heading north.
                   Only on a fresh World, a hot reload keeps the ship where it is. Missing hub: log line, map corner.
-                  Colors (render.odin): every drawn color comes from Palette, PALETTES has one per Theme (Day,
-                  Night). w.theme (zero = Day) picks it, key T toggles. World keeps the enum, not a pointer: a pointer
-                  into this library's constants would dangle after a hot reload. The map line colors go to the mesh
-                  shader as a uniform, so switching the theme does not rebuild anything. The profiler overlay keeps
+                  Colors (render.odin): every drawn color comes from Palette = the design token table
+                  (docs/drift-design.pdf "Kleuren": surface, surface_2, surface_3, text, text_2, line, accent,
+                  accent_strong, green, banner, banner_2, red, warning, reroute, arrived, sheet, chip, bubble,
+                  bubble_text, pill), one per Theme in PALETTES. Night is zero (the design default), key T and the
+                  toolbar switch. palette(w) -> ^Palette returns w.palette, a copy of PALETTES[w.theme] made at the
+                  start of every frame: no pointer into this library's constants, so hot reload is safe. Map line
+                  colors go to the line shader as a uniform, switching rebuilds nothing. The profiler overlay keeps
                   its own fixed colors.
                   Line meshes (Line_Meshes in render.odin, built inline in game_update): map lines and wind trails
                   are meshes drawn by one shader (LINE_VS, GLSL 330), built on the first frame (needs the window,

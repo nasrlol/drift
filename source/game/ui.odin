@@ -20,14 +20,14 @@ TOOLBAR_H :: 2 * UI_PAD + UI_BUTTON_H
 // Returns true on the frame the button is clicked. on: the state the button stands for is the current one.
 ui_button :: proc(r: rl.Rectangle, text: cstring, on: bool, pal: ^Palette) -> bool {
 	hot := rl.CheckCollisionPointRec(rl.GetMousePosition(), r)
-	rl.DrawRectangleRec(r, on ? pal.button_on : hot ? pal.button_hot : pal.button)
+	rl.DrawRectangleRec(r, on ? pal.accent : hot ? pal.surface_2 : pal.surface)
 	tw := f32(rl.MeasureText(text, UI_FONT_PX))
 	rl.DrawText(
 		text,
 		i32(r.x + (r.width - tw) / 2),
 		i32(r.y + (r.height - UI_FONT_PX) / 2),
 		UI_FONT_PX,
-		pal.text,
+		on ? pal.surface : pal.text,
 	)
 	return hot && rl.IsMouseButtonPressed(.LEFT)
 }
