@@ -16,6 +16,17 @@ import "core:thread"
 import "core:time"
 import curl "vendor:curl"
 
+// Static raylib drops libcmt (wants the dynamic CRT), vendor:curl drops msvcrt (wants the static one),
+// so a static Windows exe ends up with no CRT at all. Give the dynamic CRT back explicitly.
+when ODIN_OS == .Windows && !#config(RAYLIB_SHARED, false) {
+	@(require)
+	foreign import windows_crt {
+		"system:msvcrt.lib",
+		"system:vcruntime.lib",
+		"system:ucrt.lib",
+	}
+}
+
 OPEN_METEO_URL :: "https://api.open-meteo.com/v1/forecast"
 FETCH_TIMEOUT_MS :: 15_000
 FETCH_MAX_BYTES :: 1 << 20
@@ -295,11 +306,9 @@ fetch_thread :: proc(t: ^thread.Thread) {
 	w := (^World)(t.data)
 	f := &w.fetch
 	if !fetch_weather(&f.weather, virtual.arena_allocator(&f.mem), &f.cancel) do return
-	f.result = {
-		magic      = SNAPSHOT_MAGIC,
-		version    = SNAPSHOT_VERSION,
-		fetched_at = time.time_to_unix(time.now()),
-	}
+	f.result.magic = SNAPSHOT_MAGIC
+	f.result.version = SNAPSHOT_VERSION
+	f.result.fetched_at = time.time_to_unix(time.now())
 	hash.hash_bytes_to_buffer(.SHA256, mem.ptr_to_bytes(&f.weather), f.result.hash[:])
 
 	// Write to a temp file and rename, so a crash never leaves a half written snapshot.

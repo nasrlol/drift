@@ -11,16 +11,16 @@ SIM_DT :: 1.0 / SIM_HZ
 MAX_FRAME_DT :: 0.25
 
 World :: struct {
-	perm:      virtual.Arena,
-	route_mem: virtual.Arena,
-	frame:     virtual.Arena,
-	m:         Map,
-	weather:   Weather,
+	perm:         virtual.Arena,
+	route_mem:    virtual.Arena,
+	frame:        virtual.Arena,
+	m:            Map,
+	weather:      Weather,
 	// sha256 of weather, identifies the snapshot (carpool offers will carry it)
 	weather_hash: [32]u8,
-	fetch:     Fetch,
-	tick:      u64,
-	accum:     f64,
+	fetch:        Fetch,
+	tick:         u64,
+	accum:        f64,
 }
 
 @(export)
