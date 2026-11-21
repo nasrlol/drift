@@ -243,6 +243,80 @@ World memory
   w.weather is a fixed-size Weather inside World (22.7 KB), so it needs no weather arena.
   game_update sets context.allocator = perm and context.temp_allocator = frame.
 
+DESIGN INTERFACES (planned, not built yet; from docs/drift-design.pdf, the todo items under "design")
+The look and feel is docs/drift-design.pdf (Dutch): screens, sizes, colors, fonts, motion.
+Each person owns their own files, so the parts do not touch the same lines. The owner adds the World
+field (one line) and the call in the game.odin draw list (one line) in the PR that builds it.
+A signature below changes only with the owner's PR that also updates this section.
+
+Files and owners
+  render.odin, ui.odin, map.odin, terrain.odin   nasr    tokens, fonts, icons, ui kit, map, labels
+  route.odin, nav.odin (simulation), nav_ui.odin  Lars    routes, maneuvers, nav state, route + banner + sheet
+  ship.odin, input.odin, airship.odin,            Dario   ship, keys, airship model, camera,
+    camera.odin, pilot_ui.odin                            flying buttons, control pad
+  weather.odin, net.odin, plan_ui.odin            Andrei  weather, network, plan screen, layers panel, legend
+
+World fields (zero = the design default: plan screen, night theme, nothing chosen)
+  screen: Screen                       nasr    Screen :: enum u8 {Plan, Navigate}
+  plan:   Plan                         Andrei  from, to: int (hub id), has_from, has_to: bool, mode: Route_Mode,
+                                               hour: int (0..8), layers: Layers
+  routes: [Route_Mode]Planned_Route    Lars    filled by plan_routes, path in route_mem
+  nav:    Nav                          Lars
+  cam:    Cam                          Dario   replaces View
+  airship: Airship                     Dario   mesh handles, rebuilt in game_hot_reloaded
+
+Base (nasr)
+  palette(w) -> ^Palette               token fields as in the design: surface, surface_2, surface_3, text, text_2,
+                                       line, accent, accent_strong, green, banner, banner_2, red, warning,
+                                       reroute, arrived, sheet, chip, bubble, bubble_text, pill + map colors
+  Font :: enum u8 {Figtree_500, Figtree_600, Figtree_700, Figtree_800, Roboto_400, Roboto_500, Roboto_700,
+                   Mono_400, Mono_600}
+  Icon :: enum u8                      the icon table of the design (leaf, bolt, waves, tower, ...) + maneuvers
+  ui_text(w, pos: [2]f32, text: string, font: Font, px: f32, color: rl.Color)
+  ui_icon(w, icon: Icon, centre: [2]f32, px: f32, color: rl.Color)
+  ui_card(w, r: rl.Rectangle)                                       18 px corners + shadow
+  ui_round_button(w, r, icon: Icon, on: bool) -> bool               48 px map, 64 px nav
+  ui_pill_button(w, r, text: string, kind: Pill_Kind) -> bool      Primary / Secondary / Danger
+  ui_chip(w, r, icon: Icon, top, bottom: string, on: bool) -> bool
+  ui_toggle(w, r, on: ^bool) -> bool
+  ui_segment(w, r, labels: []string, sel: ^int) -> bool
+  ui_stat_chip(w, r, label, value: string, meter: f32)              meter < 0 = no meter
+  ui_toast(w, text: string)                                         shown 1.6 s, state in World
+  All return true on the frame they are clicked. Hit area at least 44 x 44 px.
+
+Camera (Dario)
+  cam_to_screen(w, pos: [3]f32) -> (px: [2]f32, visible: bool)     everyone projects through this
+  cam_fit(w, lo, hi: [2]f32, screen: rl.Rectangle)                 km box into a screen rect, 0.8 s ease-out
+  cam_chase(w)   cam_overview(w)   cam_preview(w, mode: Route_Mode)   cam_recentre(w)
+
+Routes and navigation (Lars)
+  plan_routes(w, from, to: int, hour: int)                          all three modes into w.routes
+  Planned_Route :: struct {path: [][3]f32, ok: bool, sum: Route_Summary, maneuvers: []Maneuver}
+  Route_Summary :: struct {minutes, km, kmh, net_kwh, wind_ms: f32, tag: Route_Tag, why: [64]u8}
+  route_sample(w, mode: Route_Mode, t: f32) -> (pos: [3]f32, heading: f32)   t 0..1 along the path
+  Maneuver :: struct {kind: Maneuver_Kind, path_index: int, text: [48]u8, sub: [48]u8, road: [32]u8}
+  Maneuver_Kind :: enum u8 {Straight, Slight_Left, Slight_Right, Left, Right, Sharp_Left, Sharp_Right,
+                            Climb, Descend, Jet, Depart, Arrive}
+  Nav :: struct {mode: Route_Mode, next: int (maneuver index), next_m: f32, then_visible: bool,
+                 eta_s, remaining_km, used_kwh: f32, banner: Banner_State, warning: [48]u8, manual: bool}
+  Banner_State :: enum u8 {Flying, Rerouting, Arrived}
+  nav_start(w, mode: Route_Mode)   nav_stop(w)   nav_set_manual(w, on: bool)   gust_report(w) -> bool
+  nav_sheet_rect(w) -> rl.Rectangle                                 Dario places Exit, self-fly, speed from it
+
+Plan screen and weather (Andrei)
+  plan_panel_rect(w) -> rl.Rectangle                                for cam_fit (routes go right of it)
+  Layers :: struct {terrain_3d, hide_wind, hide_gusts, hide_no_fly, hide_solar: bool, wind_layer: int}
+  layers_draw_ground(w)                                             gust coloring + no-fly hatching
+  wind_note(w, mode: Route_Mode, out: []u8) -> string               one sentence about the wind on the route
+
+Draw order (game.odin, nasr keeps the list; the design's "Tekenvolgorde")
+  1 map fills (nasr)  2 layers_draw_ground (Andrei)  3 road casings, fills (nasr)  4 buildings (nasr)
+  5 routes (Lars)  6 airship shadow + airship (Dario)  7 labels (nasr), bubbles, road sign, pill (Lars)
+  8 screen UI: Plan -> plan_ui (Andrei); Navigate -> nav_ui (Lars) + pilot_ui (Dario); layers panel (Andrei);
+    toasts last (nasr)
+Open questions on the design: place / road names, icon set + fonts, wind layer heights, scope of the
+  "LATER" items in todo.txt. Asked in question issues, see the "waiting" notes in todo.txt.
+
 BUILD
 compile.sh [debug|profile|release] [extra odin flags], build.sh wraps it with build-notify
   Linux and macOS. macOS has bash 3.2 and BSD tools: raylib is copied only when newer with [ -nt ]
