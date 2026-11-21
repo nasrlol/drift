@@ -113,8 +113,26 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                       Review  subject public key, accept id, stars 1..5
                     sig = ed25519 over bytes 0..119. Message id = sha256 of all 184 bytes.
                     msg_sign(w, m) fills magic, version, author, sig (start from a zeroed Message).
-                    msg_read(w, bytes) for anything from outside: size, header, field ranges, then signature.
+                    msg_read(bytes) -> (m, why) for anything from outside: msg_check (size, header, field
+                    ranges) then the signature. why is "" or a constant reason, the caller logs it (network
+                    threads have no World). msg_check alone is for the store file.
                     Measured (macOS arm64, -o:speed): sign ~33 us, read + verify ~44 us.
+                  Message store: w.store (Store, ~0.9 MB in World) holds up to STORE_MAX = 4096 messages and
+                    their ids, unordered, removal moves the last one into the hole. Bounded so one key cannot
+                    fill a node: STORE_PER_AUTHOR = 64, an author over it loses its oldest message (by time).
+                    Expiry: an offer at its depart time, the rest 30 days after their time. Times more than
+                    1 h ahead are refused (they would never expire). Full store: drop expired, then the one
+                    that expires first, or refuse m (.Full) when m itself expires first.
+                    store_add(s, m, now) -> Added / Duplicate / Expired / Future / Full, memory only, m must
+                    have passed msg_read. Every access takes s.lock (sync.Mutex, zero is unlocked): the
+                    network thread writes, the frame loop reads.
+                    cache/messages.log: messages back to back, append-only while running (store_append).
+                    store_load(s, path, now, scratch) at start: header + field check per message (no
+                    signatures: only verified messages are ever written), then store_save rewrites it without
+                    expired / dropped ones (temp file + rename). Also rewritten when it reaches 2 x STORE_MAX
+                    messages. A size that is not a multiple of 184 is logged and left alone, nothing is
+                    appended to it that run. Load of a full file ~12 ms (linear dedupe, 4k x 4k id compares),
+                    so it runs on the network thread, not in game_init.
                   The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
   debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
                   Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =

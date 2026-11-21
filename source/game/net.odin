@@ -479,25 +479,13 @@ msg_sign :: proc(w: ^World, m: ^Message) -> bool {
 	return true
 }
 
-// For anything that comes from outside. Checks the size, header, field ranges, then the signature.
-msg_read :: proc(w: ^World, b: []u8) -> (m: Message, ok: bool) {
-	if len(b) != size_of(Message) {
-		logf(w, "net", "message is %d bytes, want %d", len(b), size_of(Message))
-		return
-	}
+// Size, header and field ranges, no signature. For the store file, which only ever holds messages that
+// passed msg_read before they were written. why is a constant string, "" when ok.
+msg_check :: proc(b: []u8) -> (m: Message, why: string) {
+	if len(b) != size_of(Message) do return m, "wrong size"
 	mem.copy(&m, raw_data(b), size_of(Message))
-	if m.magic != MSG_MAGIC || m.version != MSG_VERSION {
-		logf(
-			w,
-			"net",
-			"message magic %x version %d, want %x version %d",
-			m.magic,
-			m.version,
-			MSG_MAGIC,
-			MSG_VERSION,
-		)
-		return
-	}
+	if m.magic != MSG_MAGIC do return m, "wrong magic"
+	if m.version != MSG_VERSION do return m, "wrong version"
 	fields_ok := false
 	#partial switch m.kind {
 	case .Offer:
@@ -518,20 +506,19 @@ msg_read :: proc(w: ^World, b: []u8) -> (m: Message, ok: bool) {
 	case .Review:
 		fields_ok = m.review.stars >= 1 && m.review.stars <= 5
 	}
-	if !fields_ok {
-		logf(w, "net", "message kind %d from %016x: bad fields", u8(m.kind), key_short(m.author))
-		return
-	}
+	if !fields_ok do return m, "bad fields"
+	return m, ""
+}
+
+// For anything that comes from outside: msg_check, then the signature. Runs on network threads too, so it
+// returns the reason instead of logging it.
+msg_read :: proc(b: []u8) -> (m: Message, why: string) {
+	m, why = msg_check(b)
+	if why != "" do return
 	pub: ed25519.Public_Key
-	if !ed25519.public_key_set_bytes(&pub, m.author[:]) {
-		logf(w, "net", "%v message author %016x is not a valid public key", m.kind, key_short(m.author))
-		return
-	}
-	if !ed25519.verify(&pub, b[:offset_of(Message, sig)], m.sig[:]) {
-		logf(w, "net", "%v message from %016x has a bad signature", m.kind, key_short(m.author))
-		return
-	}
-	return m, true
+	if !ed25519.public_key_set_bytes(&pub, m.author[:]) do return m, "author is not a valid public key"
+	if !ed25519.verify(&pub, b[:offset_of(Message, sig)], m.sig[:]) do return m, "bad signature"
+	return m, ""
 }
 
 msg_id :: proc(m: ^Message) -> (id: [32]u8) {
@@ -543,4 +530,177 @@ msg_id :: proc(m: ^Message) -> (id: [32]u8) {
 key_short :: proc(k: [32]u8) -> (v: u64) {
 	for i in 0 ..< 8 do v = v << 8 | u64(k[i])
 	return
+}
+
+// Every message this node knows, written here or received from peers. Peers sync from it, so it is bounded:
+// one key holds at most STORE_PER_AUTHOR slots and a full store drops what expires first.
+// Order means nothing, removing moves the last message into the hole. Zero is an empty store.
+// The network thread writes it and the frame loop reads it, so every access takes lock.
+STORE_PATH :: "cache/messages.log"
+STORE_MAX :: 4096
+STORE_PER_AUTHOR :: 64
+MSG_KEEP_S :: 30 * 24 * 3600 // requests, accepts and reviews; an offer is useless after its depart time
+MSG_FUTURE_S :: 3600 // allowed clock difference; a time far ahead would outlive every expiry
+
+Store :: struct {
+	lock:      sync.Mutex,
+	count:     int,
+	ids:       [STORE_MAX][32]u8,
+	msgs:      [STORE_MAX]Message,
+	file_ok:   bool, // the file was read whole (or did not exist), appending to it is safe
+	file_msgs: int, // messages in the file, dropped ones included; rewritten at 2 x STORE_MAX
+}
+
+Store_Add :: enum u8 {
+	Added,
+	Duplicate,
+	Expired,
+	Future,
+	Full, // the store is full of messages that all outlive this one
+}
+
+msg_expires :: proc(m: ^Message) -> i64 {
+	return m.kind == .Offer ? i64(m.offer.depart) : i64(m.time) + MSG_KEEP_S
+}
+
+// m must have passed msg_read. Memory only, store_append writes it to the file.
+store_add :: proc(s: ^Store, m: ^Message, now: i64) -> Store_Add {
+	if msg_expires(m) <= now do return .Expired
+	if i64(m.time) > now + MSG_FUTURE_S do return .Future
+	id := msg_id(m)
+	sync.mutex_lock(&s.lock)
+	defer sync.mutex_unlock(&s.lock)
+	for i in 0 ..< s.count {
+		if s.ids[i] == id do return .Duplicate
+	}
+
+	// Make room. An author over the cap loses its oldest message, so its newest ones always get through.
+	// A full store first drops what has expired, then what expires soonest, unless that is m itself.
+	own, own_oldest := 0, -1
+	for i in 0 ..< s.count {
+		if s.msgs[i].author != m.author do continue
+		own += 1
+		if own_oldest < 0 || s.msgs[i].time < s.msgs[own_oldest].time do own_oldest = i
+	}
+	if own >= STORE_PER_AUTHOR {
+		store_remove(s, own_oldest)
+	} else if s.count == STORE_MAX {
+		for i := 0; i < s.count; {
+			if msg_expires(&s.msgs[i]) <= now {
+				store_remove(s, i)
+			} else {
+				i += 1
+			}
+		}
+		if s.count == STORE_MAX {
+			first := 0
+			for i in 1 ..< s.count {
+				if msg_expires(&s.msgs[i]) < msg_expires(&s.msgs[first]) do first = i
+			}
+			if msg_expires(m) <= msg_expires(&s.msgs[first]) do return .Full
+			store_remove(s, first)
+		}
+	}
+	s.ids[s.count] = id
+	s.msgs[s.count] = m^
+	s.count += 1
+	return .Added
+}
+
+// Caller holds s.lock.
+store_remove :: proc(s: ^Store, i: int) {
+	s.count -= 1
+	s.ids[i] = s.ids[s.count]
+	s.msgs[i] = s.msgs[s.count]
+}
+
+// Once at start, on the network thread: ~4k messages are too slow for the first frame.
+// The file is messages back to back. It only ever gets messages that passed msg_read, so loading checks
+// header and fields, not signatures. A file that is not whole messages is reported and left alone, and the
+// store stays memory only, so nothing is appended to a file we do not understand.
+// Then the file is rewritten without expired and dropped messages. All allocations go to scratch.
+store_load :: proc(s: ^Store, path: string, now: i64, scratch: mem.Allocator) {
+	if os.exists(path) {
+		data, err := os.read_entire_file(path, scratch)
+		if err != nil || len(data) % size_of(Message) != 0 {
+			fmt.eprintfln(
+				"[net] %s: %v, %d bytes is not a multiple of %d, store not saved this run",
+				path,
+				err,
+				len(data),
+				size_of(Message),
+			)
+			return
+		}
+		added, bad, dropped := 0, 0, 0
+		for at := 0; at < len(data); at += size_of(Message) {
+			m, why := msg_check(data[at:][:size_of(Message)])
+			if why != "" {
+				fmt.eprintfln("[net] %s: message %d: %s, skipped", path, at / size_of(Message), why)
+				bad += 1
+				continue
+			}
+			if store_add(s, &m, now) == .Added {
+				added += 1
+			} else {
+				dropped += 1
+			}
+		}
+		fmt.eprintfln(
+			"[net] %s: %d messages, %d bad, %d expired / duplicate / over a cap",
+			path,
+			added,
+			bad,
+			dropped,
+		)
+	}
+	s.file_ok = true
+	store_save(s, path)
+}
+
+// Appends one message that store_add just added. On the network thread, never in the frame loop.
+store_append :: proc(s: ^Store, path: string, m: ^Message) {
+	if !s.file_ok do return
+	if s.file_msgs >= 2 * STORE_MAX {
+		store_save(s, path)
+		return
+	}
+	if err := os.make_directory("cache"); err != nil && err != .Exist {
+		fmt.eprintln("[net] cannot create cache/:", err)
+	}
+	perm := os.Permissions{.Read_User, .Write_User}
+	file, err := os.open(path, {.Write, .Create, .Append}, perm)
+	if err != nil {
+		fmt.eprintfln("[net] cannot open %s for appending: %v, message kept in memory only", path, err)
+		return
+	}
+	defer os.close(file)
+	if _, werr := os.write(file, mem.ptr_to_bytes(m)); werr != nil {
+		fmt.eprintfln("[net] cannot write %s: %v, message kept in memory only", path, werr)
+		return
+	}
+	s.file_msgs += 1
+}
+
+// The whole store to a temp file, then rename, so a crash leaves the old file or the new one.
+store_save :: proc(s: ^Store, path: string) {
+	if !s.file_ok do return
+	if err := os.make_directory("cache"); err != nil && err != .Exist {
+		fmt.eprintln("[net] cannot create cache/:", err)
+	}
+	sync.mutex_lock(&s.lock)
+	defer sync.mutex_unlock(&s.lock)
+	tmp_buf: [256]u8
+	tmp := fmt.bprintf(tmp_buf[:], "%s.tmp", path)
+	os.remove(tmp)
+	bytes := mem.slice_to_bytes(s.msgs[:s.count])
+	if err := os.write_entire_file(tmp, bytes, {.Read_User, .Write_User}); err != nil {
+		fmt.eprintfln("[net] cannot write %s: %v", tmp, err)
+		return
+	}
+	if err := os.rename(tmp, path); err != nil {
+		fmt.eprintfln("[net] cannot rename %s to %s: %v", tmp, path, err)
+		return
+	}
+	s.file_msgs = s.count
 }

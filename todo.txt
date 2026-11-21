@@ -98,7 +98,7 @@ The central relay (#18, #22, #25) was dropped; reuse its code from those branche
 [x] ed25519 key pair per user (core:crypto)
 [x] signed message format: offer, request, accept, review (fixed-size binary, not JSON)
 [ ] offers include hub ids, times, seats, weather snapshot hash
-[ ] message store: by id (sha256), dedupe, expiry, cap per author and total, append-only file (#41)
+[x] message store: by id (sha256), dedupe, expiry, cap per author and total, append-only file (#41)
 [ ] peer sync: swap ids since time T, send what the other side is missing (TCP, timeouts, thread) (#41)
 [ ] peer list: seed nodes in config, learn peers from peers, forget dead ones (#41)
 [ ] headless node: same store + sync without the window, anyone can run one (#41)
