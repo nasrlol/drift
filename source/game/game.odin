@@ -120,7 +120,7 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	w.accum += min(f64(rl.GetFrameTime()), MAX_FRAME_DT)
 	for w.accum >= SIM_DT {
-		ship_step(&w.ship, w.controls, SIM_DT)
+		ship_step(w, w.controls, SIM_DT)
 		w.tick += 1
 		w.accum -= SIM_DT
 	}
