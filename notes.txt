@@ -128,11 +128,32 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     network thread writes, the frame loop reads.
                     cache/messages.log: messages back to back, append-only while running (store_append).
                     store_load(s, path, now, scratch) at start: header + field check per message (no
-                    signatures: only verified messages are ever written), then store_save rewrites it without
+                    signatures: only verified messages are ever written), then store_rewrite writes it again without
                     expired / dropped ones (temp file + rename). Also rewritten when it reaches 2 x STORE_MAX
                     messages. A size that is not a multiple of 184 is logged and left alone, nothing is
                     appended to it that run. Load of a full file ~12 ms (linear dedupe, 4k x 4k id compares),
                     so it runs on the network thread, not in game_init.
+                  Peer to peer node: every game is one, there is no server. w.node (Net_Node) holds the peers,
+                    the threads and per-thread buffers (2 x 128 KB id lists). node_poll(w) each frame starts it
+                    after start and after every reload, node_stop(w) in game_before_reload / game_shutdown.
+                    Two threads, blocking with timeouts (5 s per send / recv):
+                      serve: listens on NODE_PORT 7419 (w.node.port overrides it, 0 = default), non-blocking
+                        accept every 50 ms so it can stop, one connection at a time, max 30 s each.
+                      sync: loads the store first (store_load), then every SYNC_S = 30 s per peer: asks the
+                        peer's ids since T, gets the missing ones (64 per request, each through msg_read and
+                        checked to be one it asked for), pushes ours it does not list.
+                        T = 0 (all) once an hour per peer, otherwise the last good sync - 10 min.
+                        A failed sync backs off: 30 s x 2^fails, max 32 min.
+                    Protocol, one TCP connection, the dialer asks until it closes:
+                      both: hello = magic "DRNP" u32le, version u8, listen port u16le (0 = not listening)
+                      'I' since i64le -> count u32le + ids;  'G' count + ids -> count + messages;
+                      'P' count + messages -> added u32le. Counts above STORE_MAX / SYNC_BATCH close it.
+                    net_dial (dial_posix.odin / dial_windows.odin): net.dial_tcp has no connect timeout (a
+                    dead address blocks ~75 s), so non-blocking connect + poll, 5 s max, checks the stop flag
+                    every 100 ms. Stop while dialing a dead peer: ~10 ms.
+                    Store writes from both threads: s.file_lock around appends and rewrites.
+                    node_add_peer(n, ep) for now; seeds and learning peers come with the peer list item.
+                    Measured (localhost): two nodes with 120 + 80 messages both end with 200 in one sync.
                   The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
   debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
                   Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =

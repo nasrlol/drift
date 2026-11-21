@@ -11,6 +11,7 @@ import "core:fmt"
 import "core:math"
 import "core:mem"
 import "core:mem/virtual"
+import "core:net"
 import "core:os"
 import "core:strings"
 import "core:sync"
@@ -544,6 +545,7 @@ MSG_FUTURE_S :: 3600 // allowed clock difference; a time far ahead would outlive
 
 Store :: struct {
 	lock:      sync.Mutex,
+	file_lock: sync.Mutex, // both network threads append; taken before lock, never after
 	count:     int,
 	ids:       [STORE_MAX][32]u8,
 	msgs:      [STORE_MAX]Message,
@@ -654,19 +656,20 @@ store_load :: proc(s: ^Store, path: string, now: i64, scratch: mem.Allocator) {
 			dropped,
 		)
 	}
+	sync.mutex_lock(&s.file_lock)
+	defer sync.mutex_unlock(&s.file_lock)
 	s.file_ok = true
-	store_save(s, path)
+	store_rewrite(s, path)
 }
 
-// Appends one message that store_add just added. On the network thread, never in the frame loop.
+// Appends one message that store_add just added. On a network thread, never in the frame loop.
 store_append :: proc(s: ^Store, path: string, m: ^Message) {
+	sync.mutex_lock(&s.file_lock)
+	defer sync.mutex_unlock(&s.file_lock)
 	if !s.file_ok do return
 	if s.file_msgs >= 2 * STORE_MAX {
-		store_save(s, path)
+		store_rewrite(s, path)
 		return
-	}
-	if err := os.make_directory("cache"); err != nil && err != .Exist {
-		fmt.eprintln("[net] cannot create cache/:", err)
 	}
 	perm := os.Permissions{.Read_User, .Write_User}
 	file, err := os.open(path, {.Write, .Create, .Append}, perm)
@@ -683,8 +686,8 @@ store_append :: proc(s: ^Store, path: string, m: ^Message) {
 }
 
 // The whole store to a temp file, then rename, so a crash leaves the old file or the new one.
-store_save :: proc(s: ^Store, path: string) {
-	if !s.file_ok do return
+// Caller holds s.file_lock.
+store_rewrite :: proc(s: ^Store, path: string) {
 	if err := os.make_directory("cache"); err != nil && err != .Exist {
 		fmt.eprintln("[net] cannot create cache/:", err)
 	}
@@ -703,4 +706,427 @@ store_save :: proc(s: ^Store, path: string) {
 		return
 	}
 	s.file_msgs = s.count
+}
+
+// Peer to peer: every game is a node, there is no server. A node listens on NODE_PORT and syncs its store
+// with its peers every SYNC_S. Two threads, both blocking with timeouts: serve answers other nodes one
+// connection at a time, sync dials peers. Neither runs in the frame loop.
+//
+// One TCP connection, the dialer asks, the other side answers, until the dialer closes it:
+//   both send hello: magic "DRNP" u32le, version u8, listen port u16le (0 = not listening)
+//   'I' since i64le          -> count u32le, count ids (32 bytes): messages with time >= since
+//   'G' count u32le, ids     -> count u32le, the messages it has of those (count <= SYNC_BATCH)
+//   'P' count u32le, msgs    -> added u32le (count <= SYNC_BATCH)
+// Sync is by message id, never by position: positions only mean something inside one store.
+// Every message from a peer goes through msg_read before store_add, the id of a 'G' answer must be one
+// that was asked for.
+NODE_PORT :: 7419
+NODE_MAGIC :: 0x504e5244 // "DRNP"
+NODE_VERSION :: 1
+NET_TIMEOUT_MS :: 5000
+SERVE_MAX_MS :: 30_000 // one connection, so a slow peer cannot keep serve busy
+SYNC_S :: 30
+SYNC_FULL_S :: 3600 // ask for all ids this often, the rest of the time only the recent ones
+SYNC_MARGIN_S :: 600 // messages can arrive a while after their time
+SYNC_BATCH :: 64
+MAX_PEERS :: 32
+
+Peer :: struct {
+	ep:      net.Endpoint,
+	next:    i64, // unix s of the next sync
+	full_at: i64, // last sync that asked for every id, 0 = never
+	last_ok: i64,
+	fails:   int, // failed syncs in a row, backs off the next one
+}
+
+// Zero is valid: not started, NODE_PORT, no peers. Lives in World, so the threads stop before a reload.
+Net_Node :: struct {
+	port:       int, // 0 = NODE_PORT; set another one to run two nodes on one machine
+	started:    bool,
+	loaded:     bool, // store loaded from STORE_PATH, once per run
+	stop:       bool, // atomic
+	listening:  bool,
+	listener:   net.TCP_Socket,
+	server:     ^thread.Thread,
+	syncer:     ^thread.Thread,
+	mem:        virtual.Arena, // sync thread scratch
+	peers_lock: sync.Mutex,
+	peers:      [MAX_PEERS]Peer,
+	peer_count: int,
+	// Per thread, too big for a thread stack.
+	sync_ids:   [STORE_MAX][32]u8,
+	sync_msgs:  [SYNC_BATCH]Message,
+	serve_ids:  [STORE_MAX][32]u8,
+	serve_msgs: [SYNC_BATCH]Message,
+}
+
+// Called every frame, like weather_poll: starts the node after game start and after every reload.
+node_poll :: proc(w: ^World) {
+	n := &w.node
+	if n.started do return
+	n.started = true
+	sync.atomic_store(&n.stop, false)
+	port := n.port == 0 ? NODE_PORT : n.port
+	sock, err := net.listen_tcp({net.IP4_Any, port})
+	if err != nil {
+		logf(w, "net", "cannot listen on port %d: %v, only dialing out", port, err)
+	} else if berr := net.set_blocking(sock, false); berr != nil {
+		logf(w, "net", "cannot make the listener non-blocking: %v, only dialing out", berr)
+		net.close(sock)
+	} else {
+		n.listener = sock
+		n.listening = true
+		n.server = thread.create(node_serve_thread)
+		if n.server != nil {
+			n.server.data = w
+			thread.start(n.server)
+		}
+	}
+	n.syncer = thread.create(node_sync_thread)
+	if n.syncer == nil {
+		logf(w, "net", "cannot create the sync thread, network off")
+		return
+	}
+	n.syncer.data = w
+	thread.start(n.syncer)
+	logf(
+		w,
+		"net",
+		"node up, %s port %d, %d peers",
+		n.listening ? "listening on" : "not listening,",
+		port,
+		n.peer_count,
+	)
+}
+
+// Before a reload and at shutdown. Waits for both threads: at most one network timeout.
+node_stop :: proc(w: ^World) {
+	n := &w.node
+	if !n.started do return
+	sync.atomic_store(&n.stop, true)
+	if n.server != nil do thread.destroy(n.server)
+	if n.syncer != nil do thread.destroy(n.syncer)
+	n.server, n.syncer = nil, nil
+	if n.listening do net.close(n.listener)
+	n.listening = false
+	n.started = false
+	virtual.arena_free_all(&n.mem)
+}
+
+// Adds ep unless it is known or the list is full. Safe from any thread.
+node_add_peer :: proc(n: ^Net_Node, ep: net.Endpoint) -> bool {
+	sync.mutex_lock(&n.peers_lock)
+	defer sync.mutex_unlock(&n.peers_lock)
+	for i in 0 ..< n.peer_count {
+		if n.peers[i].ep == ep do return false
+	}
+	if n.peer_count == MAX_PEERS do return false
+	n.peers[n.peer_count] = {
+		ep = ep,
+	}
+	n.peer_count += 1
+	return true
+}
+
+node_serve_thread :: proc(t: ^thread.Thread) {
+	w := (^World)(t.data)
+	n := &w.node
+	for !sync.atomic_load(&n.stop) {
+		client, source, err := net.accept_tcp(n.listener)
+		if err == .Would_Block {
+			time.sleep(50 * time.Millisecond)
+			continue
+		}
+		if err != nil {
+			fmt.eprintln("[net] accept failed:", err)
+			time.sleep(time.Second)
+			continue
+		}
+		// Accepted sockets inherit non-blocking from the listener on BSD / macOS.
+		if net.set_blocking(client, true) == nil && net_timeouts(client) {
+			node_serve(w, client, source)
+		}
+		net.close(client)
+	}
+}
+
+// Answers one connection. Every count from the peer is checked before it sizes a read.
+node_serve :: proc(w: ^World, s: net.TCP_Socket, from: net.Endpoint) {
+	n := &w.node
+	buf: [64]u8
+	if _, ok := node_hello(n, s); !ok do return
+	start := time.tick_now()
+	got, gave := 0, 0
+	for time.duration_milliseconds(time.tick_since(start)) < SERVE_MAX_MS {
+		op: [1]u8
+		if !net_recv(s, op[:]) do break
+		switch op[0] {
+		case 'I':
+			since: i64le
+			if !net_recv(s, mem.ptr_to_bytes(&since)) do return
+			count := 0
+			{
+				st := &w.store
+				sync.mutex_lock(&st.lock)
+				defer sync.mutex_unlock(&st.lock)
+				for i in 0 ..< st.count {
+					if st.msgs[i].time < since do continue
+					n.serve_ids[count] = st.ids[i]
+					count += 1
+				}
+			}
+			head := u32le(count)
+			if !net_send(s, mem.ptr_to_bytes(&head)) do return
+			if !net_send(s, mem.slice_to_bytes(n.serve_ids[:count])) do return
+		case 'G':
+			count: u32le
+			if !net_recv(s, mem.ptr_to_bytes(&count)) || count > SYNC_BATCH do return
+			ids := n.serve_ids[:count]
+			if !net_recv(s, mem.slice_to_bytes(ids)) do return
+			found := 0
+			{
+				st := &w.store
+				sync.mutex_lock(&st.lock)
+				defer sync.mutex_unlock(&st.lock)
+				for id in ids {
+					for i in 0 ..< st.count {
+						if st.ids[i] != id do continue
+						n.serve_msgs[found] = st.msgs[i]
+						found += 1
+						break
+					}
+				}
+			}
+			head := u32le(found)
+			if !net_send(s, mem.ptr_to_bytes(&head)) do return
+			if !net_send(s, mem.slice_to_bytes(n.serve_msgs[:found])) do return
+			gave += found
+		case 'P':
+			count: u32le
+			if !net_recv(s, mem.ptr_to_bytes(&count)) || count > SYNC_BATCH do return
+			msgs := n.serve_msgs[:count]
+			if !net_recv(s, mem.slice_to_bytes(msgs)) do return
+			added := node_take(w, msgs, nil, from)
+			head := u32le(added)
+			if !net_send(s, mem.ptr_to_bytes(&head)) do return
+			got += added
+		case:
+			fmt.eprintfln("[net] %s: unknown op %d, closing", ep_text(from, buf[:]), op[0])
+			return
+		}
+	}
+	if got > 0 || gave > 0 {
+		fmt.eprintfln("[net] served %s: took %d, gave %d", ep_text(from, buf[:]), got, gave)
+	}
+}
+
+// Verifies and stores messages from a peer. With want, each id must be one of those (a 'G' answer).
+node_take :: proc(w: ^World, msgs: []Message, want: [][32]u8, from: net.Endpoint) -> (added: int) {
+	buf: [64]u8
+	now := time.time_to_unix(time.now())
+	for &raw in msgs {
+		m, why := msg_read(mem.ptr_to_bytes(&raw))
+		if why != "" {
+			fmt.eprintfln("[net] %s: message refused: %s", ep_text(from, buf[:]), why)
+			continue
+		}
+		if want != nil {
+			id := msg_id(&m)
+			asked := false
+			for wid in want do asked ||= wid == id
+			if !asked {
+				fmt.eprintfln("[net] %s: sent a message it was not asked for, refused", ep_text(from, buf[:]))
+				continue
+			}
+		}
+		if store_add(&w.store, &m, now) == .Added {
+			store_append(&w.store, STORE_PATH, &m)
+			added += 1
+		}
+	}
+	return
+}
+
+node_sync_thread :: proc(t: ^thread.Thread) {
+	w := (^World)(t.data)
+	n := &w.node
+	buf: [64]u8
+	if !n.loaded {
+		store_load(&w.store, STORE_PATH, time.time_to_unix(time.now()), virtual.arena_allocator(&n.mem))
+		virtual.arena_free_all(&n.mem)
+		n.loaded = true
+	}
+	for !sync.atomic_load(&n.stop) {
+		now := time.time_to_unix(time.now())
+		p: Peer
+		due := -1
+		{
+			sync.mutex_lock(&n.peers_lock)
+			defer sync.mutex_unlock(&n.peers_lock)
+			for i in 0 ..< n.peer_count {
+				if n.peers[i].next <= now && (due < 0 || n.peers[i].next < n.peers[due].next) do due = i
+			}
+			if due >= 0 do p = n.peers[due]
+		}
+		if due < 0 {
+			time.sleep(100 * time.Millisecond)
+			continue
+		}
+		full := now - p.full_at >= SYNC_FULL_S
+		ok := node_sync(w, p.ep, full ? 0 : max(p.last_ok - SYNC_MARGIN_S, 0))
+		if ok {
+			if full do p.full_at = now
+			p.last_ok = now
+			p.fails = 0
+			p.next = now + SYNC_S
+		} else {
+			if p.fails == 0 do fmt.eprintfln("[net] sync with %s failed, backing off", ep_text(p.ep, buf[:]))
+			p.fails += 1
+			p.next = now + SYNC_S << uint(min(p.fails, 6))
+		}
+		// The list may have changed while the lock was free, find the peer again.
+		sync.mutex_lock(&n.peers_lock)
+		for i in 0 ..< n.peer_count {
+			if n.peers[i].ep == p.ep do n.peers[i] = p
+		}
+		sync.mutex_unlock(&n.peers_lock)
+	}
+}
+
+// One sync with one peer: fetch what we miss of their ids since `since`, then push ours they miss.
+node_sync :: proc(w: ^World, ep: net.Endpoint, since: i64) -> bool {
+	n := &w.node
+	buf: [64]u8
+	s := net_dial(ep, &n.stop) or_return
+	defer net.close(s)
+	node_hello(n, s) or_return
+
+	// 1. Their ids.
+	theirs: []([32]u8)
+	{
+		req: [9]u8
+		req[0] = 'I'
+		(^i64le)(&req[1])^ = i64le(since)
+		count: u32le
+		net_send(s, req[:]) or_return
+		net_recv(s, mem.ptr_to_bytes(&count)) or_return
+		if count > STORE_MAX do return false
+		theirs = n.sync_ids[:count]
+		net_recv(s, mem.slice_to_bytes(theirs)) or_return
+	}
+
+	// 2. Get the ones we do not have, SYNC_BATCH at a time.
+	got := 0
+	for at := 0; at < len(theirs); {
+		want: [SYNC_BATCH][32]u8
+		count := 0
+		for ; at < len(theirs) && count < SYNC_BATCH; at += 1 {
+			if !store_has(&w.store, theirs[at]) {
+				want[count] = theirs[at]
+				count += 1
+			}
+		}
+		if count == 0 do break
+		req: [5]u8
+		req[0] = 'G'
+		(^u32le)(&req[1])^ = u32le(count)
+		head: u32le
+		net_send(s, req[:]) or_return
+		net_send(s, mem.slice_to_bytes(want[:count])) or_return
+		net_recv(s, mem.ptr_to_bytes(&head)) or_return
+		if int(head) > count do return false
+		net_recv(s, mem.slice_to_bytes(n.sync_msgs[:head])) or_return
+		got += node_take(w, n.sync_msgs[:head], want[:count], ep)
+	}
+
+	// 3. Push ours from since on that they do not have. The store can change between batches (removal moves
+	// messages), so a message may be skipped this round. The next sync sends it.
+	sent, at := 0, 0
+	for {
+		count := 0
+		{
+			st := &w.store
+			sync.mutex_lock(&st.lock)
+			defer sync.mutex_unlock(&st.lock)
+			for ; at < st.count && count < SYNC_BATCH; at += 1 {
+				if st.msgs[at].time < i64le(since) do continue
+				has := false
+				for id in theirs do has ||= id == st.ids[at]
+				if has do continue
+				n.sync_msgs[count] = st.msgs[at]
+				count += 1
+			}
+		}
+		if count == 0 do break
+		req: [5]u8
+		req[0] = 'P'
+		(^u32le)(&req[1])^ = u32le(count)
+		added: u32le
+		net_send(s, req[:]) or_return
+		net_send(s, mem.slice_to_bytes(n.sync_msgs[:count])) or_return
+		net_recv(s, mem.ptr_to_bytes(&added)) or_return
+		sent += int(added)
+	}
+	if got > 0 || sent > 0 {
+		fmt.eprintfln(
+			"[net] synced %s: got %d, sent %d, they list %d since %d",
+			ep_text(ep, buf[:]),
+			got,
+			sent,
+			len(theirs),
+			since,
+		)
+	}
+	return true
+}
+
+store_has :: proc(s: ^Store, id: [32]u8) -> bool {
+	sync.mutex_lock(&s.lock)
+	defer sync.mutex_unlock(&s.lock)
+	for i in 0 ..< s.count {
+		if s.ids[i] == id do return true
+	}
+	return false
+}
+
+// Both sides send a hello and check the other one. Returns the port the peer listens on.
+node_hello :: proc(n: ^Net_Node, s: net.TCP_Socket) -> (port: int, ok: bool) {
+	hello: [7]u8
+	(^u32le)(&hello[0])^ = NODE_MAGIC
+	hello[4] = NODE_VERSION
+	if n.listening do (^u16le)(&hello[5])^ = u16le(n.port == 0 ? NODE_PORT : n.port)
+	theirs: [7]u8
+	net_send(s, hello[:]) or_return
+	net_recv(s, theirs[:]) or_return
+	if (^u32le)(&theirs[0])^ != NODE_MAGIC || theirs[4] != NODE_VERSION do return
+	return int((^u16le)(&theirs[5])^), true
+}
+
+// "1.2.3.4:7419" for logs, without allocating.
+ep_text :: proc(ep: net.Endpoint, buf: []u8) -> string {
+	b := strings.builder_from_bytes(buf)
+	return net.endpoint_to_string(ep, &b)
+}
+
+net_timeouts :: proc(s: net.TCP_Socket) -> bool {
+	t := NET_TIMEOUT_MS * time.Millisecond
+	return net.set_option(s, .Receive_Timeout, t) == nil && net.set_option(s, .Send_Timeout, t) == nil
+}
+
+net_recv :: proc(s: net.TCP_Socket, buf: []u8) -> bool {
+	for got := 0; got < len(buf); {
+		n, err := net.recv_tcp(s, buf[got:])
+		if err != nil || n == 0 do return false
+		got += n
+	}
+	return true
+}
+
+net_send :: proc(s: net.TCP_Socket, buf: []u8) -> bool {
+	for sent := 0; sent < len(buf); {
+		n, err := net.send_tcp(s, buf[sent:])
+		if err != nil do return false
+		sent += n
+	}
+	return true
 }

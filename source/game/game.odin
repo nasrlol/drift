@@ -45,6 +45,7 @@ World :: struct {
 	identity:     ed25519.Private_Key, // zero until identity_load_or_create succeeds
 	identity_pub: [32]u8,
 	store:        Store, // carpool messages, see net.odin
+	node:         Net_Node, // peer to peer threads and peers, see net.odin
 	grid:         Grid,
 	controls:     Controls,
 	ship:         Ship,
@@ -123,6 +124,7 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	t := prof_begin()
 	weather_poll(w)
+	node_poll(w)
 	w.controls = read_controls()
 
 	if rl.IsKeyPressed(.M) do w.drive_mode = !w.drive_mode
@@ -276,13 +278,16 @@ game_update :: proc(memory: rawptr) -> bool {
 @(export)
 game_before_reload :: proc(memory: rawptr) {
 	weather_stop((^World)(memory))
+	node_stop((^World)(memory))
 }
 
 @(export)
 game_shutdown :: proc(memory: rawptr) {
 	w := (^World)(memory)
 	weather_stop(w)
+	node_stop(w)
 	virtual.arena_destroy(&w.fetch.mem)
+	virtual.arena_destroy(&w.node.mem)
 	virtual.arena_destroy(&w.frame)
 	virtual.arena_destroy(&w.route_mem)
 	perm := w.perm
