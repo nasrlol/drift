@@ -604,6 +604,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
                   R/F climb up / down (arrows = W/A/S/D, PgUp / PgDn = R / F), gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
+                  Gamepad (Lars, 2026-11-21: "controller mode werkt niet", GTA style): R2 throttle, L2 brake and
+                  reverse, left stick steers and drives, R1 / L1 climb and sink, right stick looks around in the
+                  street view (climbs on the map), Triangle toggles the street view, Options leaves it. Triggers
+                  rest at -1 or 0 by mapping: only the upper half counts until one was seen below -0.5. pad_poll
+                  logs "[input] gamepad 0 connected: <name>": no such line means raylib does not see the controller
+                  (a DualSense was paired on Lars's Mac but not connected when this was written: untested).
   airship.odin    The flying car (Lars, 2026-11-21: "iets realistisch in 3d"): assets/car.bin.gz from tools/bake_car
                   (Car Concept, Khronos glTF sample, CC BY 4.0 Eric Chadwick, credited bottom right, assets/car-LICENSE.txt),
                   unpacked once in game_init (airship_build) into body parts + 4 wheels, lit by CAR_VS / CAR_FS (paint,

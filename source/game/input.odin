@@ -1,9 +1,46 @@
 // author: dario
 package game
 
+import "core:strings"
 import rl "vendor:raylib"
 
 STICK_DEADZONE :: 0.15
+
+// The first gamepad (Lars, 2026-11-21: "controller mode werkt niet"), GTA style: R2 throttle, L2 brake and
+// reverse, left stick steers (and drives with up / down), R1 / L1 climb and sink, right stick looks around in the
+// street view (climbs on the map), Triangle the street view, Options back. A trigger rests at -1 or at 0
+// depending on the controller's mapping: until it has been seen below -0.5 only its upper half counts, so a
+// resting trigger never drives. Connecting and disconnecting are logged with the name, so the log shows
+// whether raylib knows the controller at all (without a mapping every axis stays 0).
+Pad :: struct {
+	connected:  bool,
+	full_range: [2]bool, // left, right trigger seen at the bottom of -1..1
+}
+
+pad_trigger :: proc(w: ^World, axis: rl.GamepadAxis, k: int) -> f32 {
+	v := rl.GetGamepadAxisMovement(0, axis)
+	if v < -0.5 do w.pad.full_range[k] = true
+	return w.pad.full_range[k] ? clamp((v + 1) / 2, 0, 1) : clamp(v, 0, 1)
+}
+
+// Once per frame before the controls are read: notices the gamepad coming and going.
+pad_poll :: proc(w: ^World) {
+	on := !w.script.on && rl.IsGamepadAvailable(0)
+	if on == w.pad.connected do return
+	w.pad = {
+		connected = on,
+	}
+	if on {
+		name := strings.clone_from_cstring(rl.GetGamepadName(0), context.temp_allocator)
+		logf(w, "input", "gamepad 0 connected: %q, %d axes", name, rl.GetGamepadAxisCount(0))
+	} else {
+		logf(w, "input", "gamepad 0 disconnected")
+	}
+}
+
+pad_pressed :: proc(w: ^World, b: rl.GamepadButton) -> bool {
+	return w.pad.connected && rl.IsGamepadButtonPressed(0, b)
+}
 
 // Keyboard and the first gamepad add up, so either can be used at any time. Turn is positive to the right,
 // stick Y is negative when pushed up, so throttle and climb flip it. In the street view Space and Shift climb
@@ -21,10 +58,13 @@ read_controls :: proc(w: ^World) -> Controls {
 	if key_down(w, .R) || key_down(w, .PAGE_UP) do c.climb += 1
 	if key_down(w, .F) || key_down(w, .PAGE_DOWN) do c.climb -= 1
 
-	if !w.script.on && rl.IsGamepadAvailable(0) {
+	if w.pad.connected {
 		c.throttle -= stick_axis(rl.GetGamepadAxisMovement(0, .LEFT_Y))
+		c.throttle += pad_trigger(w, .RIGHT_TRIGGER, 1) - pad_trigger(w, .LEFT_TRIGGER, 0)
 		c.turn += stick_axis(rl.GetGamepadAxisMovement(0, .LEFT_X))
-		c.climb -= stick_axis(rl.GetGamepadAxisMovement(0, .RIGHT_Y))
+		if rl.IsGamepadButtonDown(0, .RIGHT_TRIGGER_1) do c.climb += 1
+		if rl.IsGamepadButtonDown(0, .LEFT_TRIGGER_1) do c.climb -= 1
+		if !w.street.on do c.climb -= stick_axis(rl.GetGamepadAxisMovement(0, .RIGHT_Y))
 	}
 
 	c.throttle = clamp(c.throttle, -1, 1)

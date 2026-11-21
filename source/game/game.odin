@@ -98,6 +98,7 @@ World :: struct {
 	pose:            Ship_Pose, // where the ship is drawn this frame (ship.odin)
 	collide:         Collide, // building footprints for free flight, collide.odin
 	script:          Script, // --script: keys, mouse and screenshots per frame, debug.odin
+	pad:             Pad, // the first gamepad, input.odin
 }
 
 @(export)
@@ -203,6 +204,7 @@ game_update :: proc(memory: rawptr) -> bool {
 		node_poll(w)
 	}
 	ui_begin(w)
+	pad_poll(w)
 	keys := read_controls(w)
 	pad := pilot_pad_controls(w)
 	w.controls = {
@@ -214,7 +216,7 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	if !typing {
 		// V: the third-person street view (street.odin), V again or Esc back to the map.
-		if key_pressed(w, .V) do street_toggle(w)
+		if key_pressed(w, .V) || pad_pressed(w, .RIGHT_FACE_UP) do street_toggle(w)
 		// M: free flight without a route (the old drive mode), or back to the plan screen.
 		if key_pressed(w, .M) && !w.street.on {
 			if w.screen == .Plan {
@@ -226,7 +228,7 @@ game_update :: proc(memory: rawptr) -> bool {
 			}
 		}
 	}
-	if w.street.on && (w.screen != .Navigate || key_pressed(w, .ESCAPE)) {
+	if w.street.on && (w.screen != .Navigate || key_pressed(w, .ESCAPE) || pad_pressed(w, .MIDDLE_RIGHT)) {
 		street_toggle(w)
 	} else if w.screen == .Navigate {
 		if key_pressed(w, .ESCAPE) do pilot_exit(w)

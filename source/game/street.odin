@@ -826,8 +826,9 @@ street_camera :: proc(w: ^World) {
 	}
 
 	look := mouse_delta(w) * STREET_MOUSE_RAD_PER_PX
-	if !w.script.on && rl.IsGamepadAvailable(0) {
+	if w.pad.connected {
 		look.x += stick_axis(rl.GetGamepadAxisMovement(0, .RIGHT_X)) * STREET_STICK_RAD_PER_S * dt
+		look.y += stick_axis(rl.GetGamepadAxisMovement(0, .RIGHT_Y)) * STREET_STICK_RAD_PER_S * dt
 	}
 	if look != {} {
 		st.yaw += look.x
