@@ -30,8 +30,8 @@ exit /b 1
 
 :debug
 echo Building %BUILD_DIR%\drift.exe + %BUILD_DIR%\game.dll [debug, hot reload]
-for /f "delims=" %%r in ('odin root') do set ODIN_ROOT=%%r
-copy /y "%ODIN_ROOT%\vendor\raylib\windows\raylib.dll" %BUILD_DIR%\ >nul || exit /b 1
+for /f "delims=" %%r in ('odin root') do set ODIN_DIR=%%r
+copy /y "%ODIN_DIR%\vendor\raylib\windows\raylib.dll" %BUILD_DIR%\ >nul || exit /b 1
 del /q %BUILD_DIR%\game_*.pdb 2>nul
 odin build source\game %OFLAGS% -debug -o:none -use-separate-modules -build-mode:dll ^
 	-define:RAYLIB_SHARED=true -pdb-name:%BUILD_DIR%\game_%RANDOM%.pdb ^
