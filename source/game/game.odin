@@ -82,7 +82,7 @@ game_init :: proc() -> rawptr {
 	game_hot_reloaded(w)
 	weather_load_snapshot(w, SNAPSHOT_PATH)
 	identity_load_or_create(w)
-	airship_build(&w.airship)
+	if rl.IsWindowReady() do airship_build(&w.airship)
 	w.replay.steps = make([]Control_Step, REPLAY_MAX_STEPS, virtual.arena_allocator(&w.perm))
 	logf(w, "game", "build %s", BUILD_MODE)
 	logf(
