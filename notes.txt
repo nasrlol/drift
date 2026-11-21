@@ -108,16 +108,27 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Windows release is -subsystem:windows and has no console: use the debug or profile exe there.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
-                  Stub: straight line. Path lives in w.route_mem until the next call.
-                  ok = false also when from or to lies outside the routing grid.
+                  Path lives in w.route_mem until the next call: from, the centres of the grid nodes
+                  in between, to. ok = false also when from or to lies outside the routing grid.
                   Grid: 286 x 237 cells of 1 km x 3 layers (LAYER_ALT) = 203,346 nodes, covers every point
                   in belgium.bin (x 0.6..285.2, y 1.0..236.5 km). node = layer * 286 * 237 + y * 286 + x,
                   each layer a contiguous row-major plane. grid_node_at(pos) snaps to the cell under x, y
                   and the closest layer, grid_node_pos(n) gives the cell centre, grid_neighbor(n, d) steps
                   one entry of GRID_DIRS (8 horizontal directions, up, down) and fails past the edge.
                   w.grid holds the search state as fixed arrays in World (no arena, allocated with World):
-                  visit stamp, cost, parent per node, 12 B x 203k = 2.4 MB. A node's cost and parent only
-                  count when visit[n] == grid.search, so a route starts with search += 1, not a 2.4 MB clear.
+                  visit stamp, cost, parent, heap slot and heap item per node. A node's cost and parent only
+                  count when visit[n] == grid.search, so a route starts with search += 1, not a 4.9 MB clear.
+                  A*: cost = km flown (1 or sqrt 2 per cell, layer change = altitude difference / 1000).
+                  mode and hour are not used yet (cost per mode and wind are the next todo items).
+                  Estimate (grid_estimate) = octile distance + altitude difference: exact on an empty grid,
+                  never too high, consistent, so an expanded node is never reopened. Weighted x 1.001 to
+                  break the many near-ties of an open grid (paths at most 0.1 % longer than the cheapest).
+                  Open set: binary min-heap on f in grid.heap (fixed array, 8 B x 203k) with grid.slot
+                  (index in the heap, HEAP_CLOSED once expanded) for decrease-key. No allocation during
+                  the search, the path is the only allocation (route arena). Search state 24 B x 203k = 4.9 MB.
+                  Measured (cloud box, -o:speed): 2025 routes between all city pairs x 3 x 3 layers,
+                  avg 14 us, worst 0.19 ms; corner to corner expands 286 nodes (35k without the weight).
+                  Debug build: avg 0.14 ms, worst 0.6 ms. With test walls the cost matched a plain Dijkstra.
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 test/main.odin    the one test program: odin run test -out:build/test (from the repo root, the hook and CI run it).
                   Each case = snapshot + inputs through game.headless_run, output compared line by line to the
@@ -126,7 +137,7 @@ test/main.odin    the one test program: odin run test -out:build/test (from the 
   test/data/      snapshots in the cache/weather.snap format (valid sha256, fetched_at 1795176600).
                   calm.snap: zero wind / gust / cloud, start 1795176000. nan_wind.snap: same with
                   wind[3][1][20].x = NaN, must be rejected by weather_valid. routes.txt: one route per mode, hours 0 / 4 / 8,
-                  a route to the same hub. calm_routes.expected: today the straight line stub.
+                  a route to the same hub. calm_routes.expected: A* grid paths (unsmoothed, wind not used yet).
                   Snapshots were written byte by byte from the format above. Add a real fetched snapshot
                   (copy a cache/weather.snap), the calm one does not exercise the wind.
 bench/main.odin   odin run bench -o:speed -debug -define:DRIFT_PROFILE=true -out:build/bench, before every merge.
