@@ -222,6 +222,11 @@ nav_ui :: proc(w: ^World) {
 	// Layer pill 26 px under the ship.
 	if sp, visible := cam_to_screen(w, {s.pos.x, s.pos.y, 0}); visible {
 		name := layer_name(buf[:], layer_at(s.alt))
+		// Driving: the real name of the road under the car, like a street name (spec "Namen").
+		if s.on_road {
+			name = "Road"
+			if road, _, ok := map_nearest_name(w, s.pos, ROAD_NAME_KM); ok do name = road
+		}
 		size := ui_text_size(w, name, .Figtree_600, 17)
 		box := rl.Rectangle{sp.x - size.x / 2 - 14, sp.y + PILL_BELOW_SHIP, size.x + 28, size.y + 10}
 		round_rect(box, box.height / 2, pal.pill)

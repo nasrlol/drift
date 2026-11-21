@@ -1,0 +1,38 @@
+weather start 1795176000
+drive from 140.294 79.606, landed on edge 43983 Secondary
+  edge 28510 Secondary oneway 1 at 140.231 79.798
+  edge 43986 Secondary oneway 1 at 140.232 79.821
+  edge 43982 Secondary oneway 0 at 140.290 79.826
+  edge 44796 Secondary oneway 0 at 140.522 79.902
+  edge 30207 Secondary oneway 0 at 140.545 79.895
+  edge 28567 Secondary oneway 1 at 140.578 79.797
+  edge 9599 Primary oneway 1 at 140.688 79.833
+  edge 9601 Primary oneway 1 at 140.710 79.840
+  edge 11338 Trunk oneway 1 at 141.553 80.111
+  edge 46991 Trunk oneway 1 at 141.847 79.930
+  edge 47726 Trunk oneway 1 at 142.160 79.701
+  edge 46832 Trunk oneway 1 at 143.726 78.903
+  edge 46833 Trunk oneway 1 at 143.949 78.765
+  edge 47528 Trunk oneway 1 at 144.318 78.520
+  edge 49247 Trunk oneway 1 at 144.581 78.345
+  after 180 s: 145.052 78.095, 35.0 m/s, alt 73.3 m, on road true
+drive from 119.479 59.873, landed on edge 29017 Secondary
+  edge 29021 Secondary oneway 0 at 118.326 64.100
+  edge 30986 Secondary oneway 0 at 118.323 64.138
+  edge 39020 Secondary oneway 1 at 117.628 65.589
+  edge 39022 Secondary oneway 1 at 117.256 66.810
+  edge 44302 Secondary oneway 1 at 117.239 66.848
+  edge 39032 Secondary oneway 1 at 116.777 67.802
+  edge 31382 Secondary oneway 1 at 116.760 67.958
+  edge 11781 Primary oneway 1 at 116.827 68.112
+  edge 11782 Trunk oneway 1 at 116.173 68.658
+  after 300 s: 116.023 68.780, 35.0 m/s, alt 14.5 m, on road true
+drive from 119.479 59.873, landed on edge 29017 Secondary
+  edge 29021 Secondary oneway 0 at 118.326 64.100
+  edge 30984 Secondary oneway 0 at 118.323 64.138
+  edge 30983 Secondary oneway 1 at 120.427 64.575
+  edge 40795 Secondary oneway 0 at 120.452 64.585
+  edge 35355 Secondary oneway 1 at 120.458 64.573
+  edge 30982 Secondary oneway 0 at 120.426 64.575
+  after 300 s: 118.339 64.130, 35.0 m/s, alt 8.9 m, on road true
+drive 10.000 10.000: no road within 250 m (nearest within 5 km: false at 0.000 0.000)

@@ -50,6 +50,9 @@ CASES :: [?]Case {
 	{"demo_flow", "test/data/windy.snap", "test/data/demo_flow.txt", "test/data/demo_flow.expected"},
 	// Long routes with layer changes: the why line and the climb / continue / approach maneuvers.
 	{"maneuvers", "test/data/windy.snap", "test/data/maneuvers.txt", "test/data/maneuvers.expected"},
+	// The airship as a flying car: lands on the nearest road, follows one-way edges, turns at junctions by
+	// the turn input, stops nowhere off the graph; far from any road it does not land.
+	{"drive", "test/data/calm.snap", "test/data/drive.txt", "test/data/drive.expected"},
 	// A NaN in the wind field must reject the snapshot, not reach the router.
 	{"nan_wind", "test/data/nan_wind.snap", "test/data/routes.txt", ""},
 }

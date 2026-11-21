@@ -270,6 +270,83 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 					)
 				}
 			}
+		case "drive":
+			// drive <x km> <y km> <seconds> <turn -1..1>: lands the ship on the road nearest (x, y), then drives at
+			// full throttle with that turn input. Prints every edge it enters and where it ends.
+			x, x_ok := strconv.parse_f32(f[1])
+			y, y_ok := strconv.parse_f32(f[2])
+			secs, secs_ok := strconv.parse_f32(f[3])
+			turn, turn_ok := strconv.parse_f32(f[4])
+			sane := x_ok && y_ok && secs_ok && turn_ok && abs(x) < 1e6 && abs(y) < 1e6
+			if n != 5 || !sane || !(secs > 0 && secs < 1e5) || !(abs(turn) <= 1) {
+				logf(
+					w,
+					"headless",
+					"inputs line %d: %q, want: drive <x km> <y km> <seconds> <turn -1..1>",
+					line_no,
+					line,
+				)
+				return false
+			}
+			s := &w.ship
+			s^ = {
+				pos      = {x, y},
+				alt      = height_at(w, x, y) + SHIP_MIN_CLEARANCE,
+				used_kwh = s.used_kwh,
+			}
+			s.on_road = false
+			road_try_land(w, {climb = -1})
+			if !s.on_road {
+				near, near_s, near_ok := road_nearest_edge(w, {x, y}, 5)
+				p: [2]f32
+				if near_ok do p, _ = road_at(w, near, near_s)
+				fmt.sbprintfln(
+					out,
+					"drive %.3f %.3f: no road within %.0f m (nearest within 5 km: %v at %.3f %.3f)",
+					x,
+					y,
+					ROAD_LAND_KM * 1000,
+					near_ok,
+					p.x,
+					p.y,
+				)
+				continue
+			}
+			fmt.sbprintfln(
+				out,
+				"drive from %.3f %.3f, landed on edge %d %v",
+				x,
+				y,
+				s.road_edge,
+				Map_Kind(w.m.road_edges[s.road_edge].kind),
+			)
+			last := s.road_edge
+			for _ in 0 ..< int(secs / SIM_DT) {
+				ship_step(w, {throttle = 1, turn = turn}, SIM_DT)
+				if s.road_edge != last {
+					last = s.road_edge
+					e := w.m.road_edges[last]
+					fmt.sbprintfln(
+						out,
+						"  edge %d %v oneway %d at %.3f %.3f",
+						last,
+						Map_Kind(e.kind),
+						e.oneway,
+						s.pos.x,
+						s.pos.y,
+					)
+				}
+			}
+			fmt.sbprintfln(
+				out,
+				"  after %.0f s: %.3f %.3f, %.1f m/s, alt %.1f m, on road %v",
+				secs,
+				s.pos.x,
+				s.pos.y,
+				s.speed,
+				s.alt,
+				s.on_road,
+			)
 		case "fly":
 			// fly <mode> <max seconds> [report gust after <seconds>]: navigation with the autopilot at 1x, fixed
 			// steps, until docked or the time is up. Prints every new maneuver, reroute and the arrival.

@@ -1,0 +1,148 @@
+// author: lars
+package game
+
+import "core:math"
+import "core:math/linalg"
+
+// Landing snaps to a road this close: wide enough to hit by hand from the lowest flying height (28 m up), where a
+// road is a few pixels wide. Not from the spec or design, see the PR assumptions.
+ROAD_LAND_KM :: 0.25
+
+// The airship as a flying car (#67 part 2, #68 option B): on the ground it is locked to the road graph of
+// belgium.bin. Its place is an edge and a distance along it, never a free x, y. It lands on a road by descending
+// to its lowest height within ROAD_LAND_KM of an edge, and takes off again by climbing.
+// Throttle drives along the edge (same speed limits as flying), turn picks the next edge at a junction, a
+// one-way road is only ever driven its own way. No wind on the ground.
+
+// The edge nearest to pos within radius_km, and the distance along it in km. Brute force over the road points:
+// called once when landing, not every step.
+road_nearest_edge :: proc(w: ^World, pos: [2]f32, radius_km: f32) -> (edge: int, s_km: f32, ok: bool) {
+	best := radius_km
+	for e, ei in w.m.road_edges {
+		pts := w.m.road_points[e.start:][:e.count]
+		along: f32
+		for i in 1 ..< len(pts) {
+			a, b := pts[i - 1], pts[i]
+			ab := b - a
+			l2 := linalg.length2(ab)
+			f := l2 > 0 ? clamp(linalg.dot(pos - a, ab) / l2, 0, 1) : 0
+			d := linalg.length(pos - (a + ab * f))
+			seg := math.sqrt(l2)
+			if d < best {
+				best, edge, s_km, ok = d, ei, along + seg * f, true
+			}
+			along += seg
+		}
+	}
+	return
+}
+
+// Polyline length of an edge in km (length_km is the unsimplified way, the drawn geometry is what we drive on).
+road_edge_km :: proc(w: ^World, edge: int) -> f32 {
+	e := w.m.road_edges[edge]
+	pts := w.m.road_points[e.start:][:e.count]
+	km: f32
+	for i in 1 ..< len(pts) do km += linalg.length(pts[i] - pts[i - 1])
+	return km
+}
+
+// Position and heading at s_km along an edge.
+road_at :: proc(w: ^World, edge: int, s_km: f32) -> (pos: [2]f32, heading: f32) {
+	e := w.m.road_edges[edge]
+	pts := w.m.road_points[e.start:][:e.count]
+	along: f32
+	for i in 1 ..< len(pts) {
+		seg := linalg.length(pts[i] - pts[i - 1])
+		if along + seg >= s_km || i == len(pts) - 1 {
+			f := seg > 0 ? clamp((s_km - along) / seg, 0, 1) : 0
+			return linalg.lerp(pts[i - 1], pts[i], f), heading_of(pts[i] - pts[i - 1])
+		}
+		along += seg
+	}
+	return pts[0], 0
+}
+
+// Heading at the start of an edge.
+road_start_heading :: proc(w: ^World, edge: int) -> f32 {
+	e := w.m.road_edges[edge]
+	pts := w.m.road_points[e.start:][:e.count]
+	return heading_of(pts[1] - pts[0])
+}
+
+// At the end of edge: the next edge out of its to-node. turn -1..1 bends the wanted heading up to 90 degrees left
+// or right of the current one, the edge whose start heading is closest wins. Turning back onto the same road
+// (the reverse edge) only at a dead end. -1 when the node has no edge out (a one-way dead end).
+road_next_edge :: proc(w: ^World, edge: int, heading: f32, turn: f32) -> int {
+	e := w.m.road_edges[edge]
+	node := w.m.road_nodes[e.to]
+	want := heading + clamp(turn, -1, 1) * math.PI / 2
+	best, best_diff := -1, f32(math.F32_MAX)
+	back := -1
+	for k in node.first ..< node.first + node.count {
+		o := w.m.road_edges[k]
+		if o.to == e.from && o.count == e.count {
+			back = int(k)
+			continue
+		}
+		diff := abs(math.mod(road_start_heading(w, int(k)) - want + 3 * math.PI, math.TAU) - math.PI)
+		if diff < best_diff do best, best_diff = int(k), diff
+	}
+	return best >= 0 ? best : back
+}
+
+// One fixed step on the road. Returns false when the ship took off (climb > 0): ship_step then flies on.
+road_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
+	s := &w.ship
+	if c.climb > 0 {
+		s.on_road = false
+		return false
+	}
+	target := max(c.throttle, 0) * SHIP_MAX_SPEED
+	if target > s.speed {
+		s.speed = min(s.speed + SHIP_ACCEL * dt, target)
+	} else {
+		s.speed = max(s.speed - SHIP_BRAKE * dt, target)
+	}
+	s.road_s += s.speed * dt / 1000
+	for s.road_s > road_edge_km(w, s.road_edge) {
+		over := s.road_s - road_edge_km(w, s.road_edge)
+		_, h := road_at(w, s.road_edge, s.road_s)
+		next := road_next_edge(w, s.road_edge, h, c.turn)
+		if next < 0 {
+			// A dead end: stop at the node.
+			s.road_s = road_edge_km(w, s.road_edge)
+			s.speed = 0
+			break
+		}
+		s.road_edge, s.road_s = next, over
+	}
+	s.pos, s.heading = road_at(w, s.road_edge, s.road_s)
+	s.alt = height_at(w, s.pos.x, s.pos.y)
+	s.turn_rate = 0
+	s.used_kwh += power_kw(s.speed, 0) * dt / 3600
+	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, sim_hour(w))) * dt / 3600
+	s.warnings = {}
+	s.docked = false
+	return true
+}
+
+// Landing: at the lowest flying height, descending, within ROAD_LAND_KM of a road.
+road_try_land :: proc(w: ^World, c: Controls) {
+	s := &w.ship
+	floor := height_at(w, s.pos.x, s.pos.y) + SHIP_MIN_CLEARANCE
+	if c.climb >= 0 || s.alt > floor + 0.5 || len(w.m.road_edges) == 0 do return
+	edge, along, ok := road_nearest_edge(w, s.pos, ROAD_LAND_KM)
+	if !ok do return
+	s.on_road = true
+	s.road_edge, s.road_s = edge, along
+	s.pos, s.heading = road_at(w, edge, along)
+	s.alt = height_at(w, s.pos.x, s.pos.y)
+	logf(
+		w,
+		"ship",
+		"landed on road edge %d (%v), %.3f km along",
+		edge,
+		Map_Kind(w.m.road_edges[edge].kind),
+		along,
+	)
+}

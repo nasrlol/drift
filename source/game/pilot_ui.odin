@@ -206,9 +206,18 @@ pilot_ui :: proc(w: ^World) {
 			ui_block(w, r)
 		}
 		first := pilot_pad_rect(w, 0)
-		card := rl.Rectangle{first.x, first.y - 12 - 58, 3 * PAD_KEY + 2 * PAD_GAP, 58}
+		card := rl.Rectangle{first.x, first.y - 12 - 80, 3 * PAD_KEY + 2 * PAD_GAP, 80}
 		round_rect(card, 12, rl.ColorAlpha(pal.surface, 0.9))
 		ui_text(w, {card.x + 12, card.y + 9}, "W S  speed   A D  turn", .Mono_400, 12, pal.text_2)
 		ui_text(w, {card.x + 12, card.y + 31}, "R F  climb   Esc  exit", .Mono_400, 12, pal.text_2)
+		// Flying car: hold F at the lowest height above a road to land on it, R takes off again.
+		ui_text(
+			w,
+			{card.x + 12, card.y + 53},
+			w.ship.on_road ? "R  take off" : "F low  land",
+			.Mono_400,
+			12,
+			pal.text_2,
+		)
 	}
 }

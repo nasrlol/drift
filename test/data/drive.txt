@@ -1,0 +1,8 @@
+# Flying car (#67 part 2): land on the road nearest (x, y), drive full throttle with a turn input.
+# Near Brussels, straight on.
+drive 140.294 79.606 180 0
+# West of Brussels, bearing right, then the same start bearing left.
+drive 119.479 59.873 300 0.6
+drive 119.479 59.873 300 -0.6
+# Off the map corner: no road to land on.
+drive 10 10 10 0

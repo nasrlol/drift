@@ -59,6 +59,10 @@ Ship :: struct {
 	// the solar film. The battery holds BATTERY_START x BATTERY_KWH - used + solar (ship_battery_kwh).
 	used_kwh:  f32,
 	solar_kwh: f32,
+	// On the ground as a flying car (road.odin): locked to road_edges[road_edge], road_s km along it.
+	on_road:   bool,
+	road_edge: int,
+	road_s:    f32,
 }
 
 // Battery charge in kWh, BATTERY_START x BATTERY_KWH at the start, clamped to the capacity.
@@ -96,6 +100,7 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 		}
 		s.moored = false
 	}
+	if s.on_road && road_step(w, c, dt) do return
 
 	target_turn := c.turn * SHIP_MAX_TURN_RATE
 	s.turn_rate += (target_turn - s.turn_rate) * min(dt / SHIP_TURN_SMOOTH_S, 1)
@@ -133,6 +138,9 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 			s.warnings += {.No_Fly}
 		}
 	}
+
+	road_try_land(w, c)
+	if s.on_road do return
 
 	s.docked = false
 	for i in 0 ..< w.m.hub_count {
