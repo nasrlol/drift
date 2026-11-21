@@ -1,0 +1,11 @@
+# Brussels (hub 5) inside an 8 km zone over every layer: no route from or to it, others still route.
+no_fly 139.669 79.4 8 10000
+route 5 10 fastest 0
+route 10 5 greenest 3
+route 6 10 fastest 0
+# Liege (hub 10) under a zone up to 400 m: layer 0 is closed, the route leaves from layer 1.
+no_fly 226.134 101.848 8 400
+route 10 6 calmest 8
+# Antwerpen (hub 11) in a 3 km zone: the closest free node is outside it, within 5 km.
+no_fly 143.012 37.725 3 10000
+route 11 9 fastest 0

@@ -1,0 +1,15 @@
+weather start 1795176000
+no_fly 0: 139.669 79.400 radius 8.000 km below 10000 m
+route 5 -> 10 fastest hour 0: no safe route
+route 10 -> 5 greenest hour 3: no safe route
+route 6 -> 10 fastest hour 0: 2 points, 198.742 km
+  38.201 37.196 58.0
+  226.134 101.848 58.0
+no_fly 1: 226.134 101.848 radius 8.000 km below 400 m
+route 10 -> 6 calmest hour 8: 2 points, 198.742 km
+  226.134 101.848 58.0
+  38.201 37.196 58.0
+no_fly 2: 143.012 37.725 radius 3.000 km below 10000 m
+route 11 -> 9 fastest hour 0: 2 points, 51.275 km
+  143.012 37.725 58.0
+  95.238 56.347 58.0
