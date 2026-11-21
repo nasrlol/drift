@@ -28,7 +28,7 @@ FIRST, TOGETHER (so everyone can work in parallel)
 NASR: MAP + RENDERING + UI
 [x] load belgium.bin and draw lines (km -> px: scale + offset)
 [x] camera: pan + zoom to cursor (mouse wheel / controller)
-[ ] draw cities + names
+[x] draw cities + names
 [x] "(c) OpenStreetMap contributors" on screen (Roboto, assets/fonts/)
 [ ] download Copernicus GLO-90 tiles N49-N51, E002-E006 (sea tiles 404, fine)
 [ ] gdalbuildvrt + gdalwarp to our projection, 250 m cells, raw i16

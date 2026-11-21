@@ -207,6 +207,14 @@ game_update :: proc(memory: rawptr) -> bool {
 			rl.DrawLineStrip(raw_data(w.m.points[l.start:]), i32(l.count), colors[Map_Kind(l.kind)])
 		}
 		rl.EndMode2D()
+
+		// Cities in screen space, so dots and text keep their pixel size at every zoom.
+		// Names are 0-terminated UTF-8 from the bake, the default raylib font covers Latin-1 (Liege has an e grave).
+		for &c in w.m.cities {
+			p := rl.GetWorldToScreen2D(c.pos, cam)
+			rl.DrawCircleV(p, 3, rl.BLACK)
+			rl.DrawText(cstring(raw_data(c.name[:])), i32(p.x) + 6, i32(p.y) - 5, 10, rl.BLACK)
+		}
 	}
 	{
 		// The OpenStreetMap license (ODbL) asks for this credit wherever the map is shown.
