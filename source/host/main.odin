@@ -12,6 +12,7 @@ Game_API :: struct {
 	init_window:     proc(),
 	init:            proc() -> rawptr,
 	hot_reloaded:    proc(memory: rawptr),
+	before_reload:   proc(memory: rawptr),
 	update:          proc(memory: rawptr) -> bool,
 	shutdown:        proc(memory: rawptr),
 	shutdown_window: proc(),
@@ -71,6 +72,7 @@ main :: proc() {
 		}
 
 		// Unload the old library only after the new one is loaded, so the shared raylib stays loaded.
+		api.before_reload(memory)
 		dynlib.unload_library(api.__handle)
 		api = new_api
 		api.hot_reloaded(memory)

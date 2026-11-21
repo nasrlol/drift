@@ -58,3 +58,18 @@ weather_cell :: proc(x, y: f32) -> (cell: int, fx, fy: f32) {
 	iy := min(int(gy), WEATHER_GRID_H - 2)
 	return iy * WEATHER_GRID_W + ix, gx - f32(ix), gy - f32(iy)
 }
+
+// For snapshots read from disk. Written so that NaN fails every test.
+weather_valid :: proc(w: ^Weather) -> bool {
+	if w.start % 3600 != 0 do return false
+	for &hour in w.wind do for &layer in hour do for v in layer {
+		if !(abs(v.x) <= 100 && abs(v.y) <= 100) do return false
+	}
+	for &hour in w.gust do for &layer in hour do for v in layer {
+		if !(v >= 0 && v <= 1) do return false
+	}
+	for &hour in w.cloud do for v in hour {
+		if !(v >= 0 && v <= 1) do return false
+	}
+	return true
+}

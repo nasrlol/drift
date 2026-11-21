@@ -60,16 +60,28 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   3 layers = 975 / 950 / 925 hPa ~ LAYER_ALT 300 / 550 / 800 m, hours 0..8 from snapshot start
                   Weather struct: start (unix s), wind [hour][layer][cell][2]f32, gust [hour][layer][cell] 0..1,
                   cloud [hour][cell] 0..1. Fixed size 22.7 KB, zero = calm and clear.
-  net.odin        fetch_weather(out, scratch) -> ok: blocking Open-Meteo request with curl (15 s timeout,
-                  max 1 MB), converts the json into a Weather. Writes out only if every value is valid.
-                  Run it on a thread, never in the frame loop. Not called yet (snapshot + refresh todo).
+  net.odin        fetch_weather(out, scratch, cancel) -> ok: blocking Open-Meteo request with curl (15 s timeout,
+                  max 1 MB, aborts within ~1 s when cancel is set), converts the json into a Weather.
+                  Writes out only if every value is valid.
+                  Snapshot cycle (state in w.fetch, zero = fetch on the first update):
+                    game_init -> weather_load_snapshot: reads cache/weather.snap, checks size, magic, version,
+                      sha256 and weather_valid. Bad or missing file: weather stays zero, fetch right away.
+                    game_update -> weather_poll: every frame, starts a thread when now >= next (15 min after
+                      the snapshot was fetched, 5 min after a failure). The thread fetches, hashes and writes
+                      the file (temp + rename), all allocation in w.fetch.mem. When is_done, the frame loop
+                      copies the 22.7 KB Weather into w.weather. No network or disk IO in the frame loop.
+                    game_before_reload / game_shutdown -> weather_stop: cancel + join (measured 5-14 ms),
+                      because the thread runs code from the library that is about to be unloaded.
+                  cache/weather.snap: Snapshot_Header (magic "DRWS", version 1, fetched_at unix s,
+                  sha256 of the Weather bytes) + raw Weather, 22736 bytes. w.weather_hash = that sha256.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hubs = map cities for now.
                   Stub: straight line. Path lives in w.route_mem until the next call.
 Units everywhere: horizontal km (map space, y down), altitude m, speed m/s, energy kWh.
 source/host/      debug host: loads build/game.so (game.dll on Windows), checks its mtime every frame, copies it to
                   build/game_N.so and loads the copy, unloads the old one after. Compares memory_size,
-                  refuses a reload if World changed (restart needed). Run from the repo root.
+                  refuses a reload if World changed (restart needed). Calls game_before_reload on the old
+                  library right before unloading it (stops the weather thread). Run from the repo root.
 source/release/   release main: calls the game package directly, one static exe
 
 World memory
