@@ -82,14 +82,14 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     Present but wrong size or invalid: logged and left alone (it is the user's reputation),
                     w.identity stays zero and network features stay off. w.identity_pub = public key,
                     logged as the first 8 bytes in hex. Moves to the user data folder with the release item.
-                  Carpool messages: Message is 184 bytes, fixed size, little endian, no implicit padding
-                    (#assert). Header: magic "DRMS", version 1, kind (Offer / Request / Accept / Review),
+                  Carpool messages: Message is 208 bytes, fixed size, little endian, no implicit padding
+                    (#assert). Header: magic "DRMS", version 2, kind (Offer / Request / Accept / Review),
                     time (unix s, set by the author), author (ed25519 public key). Body is a raw union:
                       Offer   from_hub, to_hub, seats 1..8, mode, depart, arrive, weather snapshot hash, energy_kwh
-                      Request offer id, from_hub, to_hub, seats 1..8
-                      Accept  offer id, request id
+                      Request offer id, from_hub, to_hub, seats 1..8, passenger x25519 public key (not zero)
+                      Accept  offer id, request id, driver x25519 public key (not zero)
                       Review  subject public key, accept id, stars 1..5
-                    sig = ed25519 over bytes 0..119. Message id = sha256 of all 184 bytes.
+                    sig = ed25519 over bytes 0..143. Message id = sha256 of all 208 bytes.
                     msg_sign(w, m) fills magic, version, author, sig (start from a zeroed Message).
                     msg_read(w, bytes) for anything from outside: size, header, field ranges, then signature.
                     Measured (macOS arm64, -o:speed): sign ~33 us, read + verify ~44 us.
@@ -102,6 +102,22 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     relay_publish_weather(endpoint, snap), relay_fetch_weather(endpoint, sha256, out): out only
                     written when snapshot_check passes and the hash is the one asked for. An offer carries the
                     hash, a passenger fetches that snapshot and recomputes the same route.
+                  Trip and live position (w.trip, one trip at a time, zero = none):
+                    trip_keypair(w) -> x25519 public key, fresh per trip, goes into the signed Request
+                      (passenger) or Accept (driver), so the key exchange is authenticated by ed25519.
+                    trip_start(w, request, accept, driver): checks accept answers that request and offer and
+                      that this user is the author of its side, x25519 shared secret (all zero = low order
+                      point, refused), key = HKDF-SHA256(salt accept id, ikm shared, info "drift live position
+                      v1"), wipes the private half. Trip id = accept id.
+                    Live_Packet (88 bytes): trip id, seq, from_driver, Live_Position (x, y km, alt m, time)
+                      encrypted with ChaCha20-Poly1305, header bytes as aad. Nonce = seq + direction byte, so
+                      both directions share the key but never a nonce. live_seal / live_open; open drops the
+                      own direction, seq <= last accepted (replay) and anything that does not verify.
+                    relay_live_put / relay_live_get(trip, from_driver): relay keeps the latest packet per trip
+                      and direction, in memory only.
+                    Tested with driver / passenger / eavesdropper and a running relay: same key on both sides,
+                      round trip through the relay, replay, flipped ciphertext, changed seq, own direction,
+                      guessed key, low order point and a third user claiming the passenger role all refused.
                   The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
   debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
                   Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =
@@ -140,14 +156,18 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   count when visit[n] == grid.search, so a route starts with search += 1, not a 2.4 MB clear.
 relay/main.odin   carpool relay, its own program (no game import, no raylib): odin build relay -out:build/relay,
                   ./build/relay [port] [store file], defaults 7419 and cache/relay.log. Plain TCP, one request per
-                  connection, one connection at a time, 5 s timeouts. 'P' + 184 byte message -> status u8 + index
+                  connection, one connection at a time, 5 s timeouts. 'P' + 208 byte message -> status u8 + index
                   u64le. 'G' + after u64le + max u32le -> count u32le + messages (max 256). Checks size, magic,
                   version and kind, not signatures (clients do). Store = messages back to back, index = offset /
-                  184, also kept in memory; a store whose size is not a multiple of 184 refuses to start.
+                  208, also kept in memory; a store whose size is not a multiple of 208 refuses to start.
+                  (Version 1 stores with 184 byte messages do not load: delete cache/relay.log.)
                   'W' + snapshot (22736 bytes) -> status: stored under cache/relay_weather/<sha256 hex>.snap
                   (third argument), only when magic, version and the sha256 of the weather bytes match the
                   header, so nobody can put other data under a hash. Not checked: weather ranges (clients do).
                   'H' + sha256 -> status + snapshot. File names are hex of the hash only, no path from outside.
+                  'L' + live packet (88 bytes) -> status: kept in memory, latest per trip id + direction, 1024
+                  slots, reused oldest first when full. 'M' + trip id + from_driver -> status + packet. Not
+                  logged (once a second per user) and never written to disk; the relay cannot decrypt them.
                   Message constants are copied from net.odin, keep them in sync. Not built by CI yet.
                   Tested on macOS: post, reject bad header, forged signature stored but dropped by msg_read,
                   paging with max 2, restart keeps the store, unknown op and cut-off post are logged.

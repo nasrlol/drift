@@ -4,8 +4,11 @@ package game
 import "base:runtime"
 import "core:c"
 import "core:crypto"
+import "core:crypto/chacha20poly1305"
 import "core:crypto/ed25519"
 import "core:crypto/hash"
+import "core:crypto/hkdf"
+import "core:crypto/x25519"
 import "core:encoding/json"
 import "core:fmt"
 import "core:math"
@@ -408,7 +411,7 @@ identity_load_or_create :: proc(w: ^World) {
 // no implicit padding, so the relay can store and forward them without parsing.
 // The signature covers every byte before sig. A message id is the sha256 of all its bytes, sig included.
 MSG_MAGIC :: 0x534d5244 // "DRMS"
-MSG_VERSION :: 1
+MSG_VERSION :: 2
 MSG_MAX_SEATS :: 8
 
 Msg_Kind :: enum u8 {
@@ -432,16 +435,19 @@ Msg_Offer :: struct {
 }
 
 // A passenger asks for seats on an offer, possibly boarding / leaving at other hubs (detour).
+// x25519 is the passenger's half of the trip key exchange (see trip_start), new for every request.
 Msg_Request :: struct {
 	offer:            [32]u8, // message id
 	from_hub, to_hub: u16le,
 	seats:            u8,
 	_:                [3]u8,
+	x25519:           [32]u8,
 }
 
-// The driver accepts one request.
+// The driver accepts one request, x25519 is the driver's half of the trip key exchange.
 Msg_Accept :: struct {
 	offer, request: [32]u8, // message ids
+	x25519:         [32]u8,
 }
 
 // After a trip, one side rates the other. accept proves the trip was agreed between them.
@@ -467,8 +473,8 @@ Message :: struct {
 	},
 	sig:     [64]u8,
 }
-#assert(size_of(Msg_Offer) == 64 && size_of(Msg_Request) == 40 && size_of(Msg_Accept) == 64)
-#assert(size_of(Msg_Review) == 72 && size_of(Message) == 184 && offset_of(Message, sig) == 120)
+#assert(size_of(Msg_Offer) == 64 && size_of(Msg_Request) == 72 && size_of(Msg_Accept) == 96)
+#assert(size_of(Msg_Review) == 72 && size_of(Message) == 208 && offset_of(Message, sig) == 144)
 
 // Fills magic, version, author and sig. The caller sets kind, time and the body, starting from a zeroed
 // Message so unused body bytes are zero. False when this user has no identity yet.
@@ -518,9 +524,9 @@ msg_read :: proc(w: ^World, b: []u8) -> (m: Message, ok: bool) {
 			o.energy_kwh < 1000
 	case .Request:
 		r := m.request
-		fields_ok = r.from_hub != r.to_hub && r.seats >= 1 && r.seats <= MSG_MAX_SEATS
+		fields_ok = r.from_hub != r.to_hub && r.seats >= 1 && r.seats <= MSG_MAX_SEATS && r.x25519 != {}
 	case .Accept:
-		fields_ok = true
+		fields_ok = m.accept.x25519 != {}
 	case .Review:
 		fields_ok = m.review.stars >= 1 && m.review.stars <= 5
 	}
@@ -678,4 +684,150 @@ relay_recv :: proc(s: net.TCP_Socket, buf: []u8) -> bool {
 		got += n
 	}
 	return true
+}
+
+// Live position between the two users of one accepted trip. Not a signed Message: sent about once a
+// second, kept by the relay only in memory, readable only by the two of them.
+// Key exchange: each side makes a fresh x25519 key pair (trip_keypair) and puts the public half in its
+// signed Request / Accept, so the exchange is authenticated by the ed25519 identities.
+// key = HKDF-SHA256(salt = accept id, ikm = x25519 shared secret, info = LIVE_INFO).
+// Nonce = seq (8 bytes LE) + from_driver + 3 zero bytes: both directions share the key, never a nonce.
+LIVE_INFO :: "drift live position v1"
+
+// Zero is no trip. One trip at a time.
+Trip :: struct {
+	own_x25519:  [32]u8, // private half, wiped once the key is derived
+	accept:      [32]u8, // message id, names the trip
+	key:         [32]u8,
+	driver:      bool,
+	active:      bool,
+	sent, heard: u64, // last sequence numbers sent and accepted, replays and old packets are dropped
+}
+
+Live_Position :: struct {
+	x, y, alt: f32le, // km, km, m
+	_:         [4]u8,
+	time:      i64le, // unix seconds
+}
+
+Live_Packet :: struct {
+	trip:        [32]u8, // accept id, so the relay can keep the latest packet per trip and direction
+	seq:         u64le,
+	from_driver: u8,
+	_:           [7]u8,
+	box:         [size_of(Live_Position)]u8, // encrypted Live_Position
+	tag:         [chacha20poly1305.TAG_SIZE]u8, // authenticates box and every header byte before it
+}
+#assert(size_of(Live_Position) == 24 && size_of(Live_Packet) == 88 && offset_of(Live_Packet, box) == 48)
+
+// Before signing a Request (passenger) or an Accept (driver): a fresh key pair, the public half goes
+// into the message. Starting a new one drops the trip in progress.
+trip_keypair :: proc(w: ^World) -> (public: [32]u8) {
+	w.trip = {}
+	crypto.rand_bytes(w.trip.own_x25519[:])
+	x25519.scalarmult_basepoint(public[:], w.trip.own_x25519[:])
+	return
+}
+
+// Both sides call it with the same two verified messages (from msg_read). driver = this user sent accept.
+trip_start :: proc(w: ^World, request, accept: ^Message, driver: bool) -> bool {
+	t := &w.trip
+	defer crypto.zero_explicit(&t.own_x25519, size_of(t.own_x25519))
+	if request.kind != .Request || accept.kind != .Accept || accept.accept.request != msg_id(request) {
+		logf(w, "net", "trip: accept does not answer this request")
+		return false
+	}
+	own_side := driver ? accept.author : request.author
+	if accept.accept.offer != request.request.offer || own_side != w.identity_pub {
+		logf(w, "net", "trip: wrong offer, or this user is not the %s", driver ? "driver" : "passenger")
+		return false
+	}
+	shared: [32]u8
+	defer crypto.zero_explicit(&shared, size_of(shared))
+	peer := driver ? request.request.x25519 : accept.accept.x25519
+	x25519.scalarmult(shared[:], t.own_x25519[:], peer[:])
+	if shared == {} {
+		logf(w, "net", "trip: peer x25519 key %016x is a low order point", key_short(peer))
+		return false
+	}
+	t.accept = msg_id(accept)
+	hkdf.extract_and_expand(.SHA256, t.accept[:], shared[:], transmute([]u8)string(LIVE_INFO), t.key[:])
+	t.driver = driver
+	t.active = true
+	t.sent, t.heard = 0, 0
+	logf(w, "net", "trip %016x started as %s", key_short(t.accept), driver ? "driver" : "passenger")
+	return true
+}
+
+live_seal :: proc(w: ^World, pos: Live_Position) -> (p: Live_Packet, ok: bool) {
+	t := &w.trip
+	if !t.active do return
+	t.sent += 1
+	p.trip = t.accept
+	p.seq = u64le(t.sent)
+	p.from_driver = u8(t.driver)
+	pos := pos
+	nonce := live_nonce(&p)
+	ctx: chacha20poly1305.Context
+	chacha20poly1305.init(&ctx, t.key[:])
+	header := mem.ptr_to_bytes(&p)[:offset_of(Live_Packet, box)]
+	chacha20poly1305.seal(&ctx, p.box[:], p.tag[:], nonce[:], header, mem.ptr_to_bytes(&pos))
+	chacha20poly1305.reset(&ctx)
+	return p, true
+}
+
+// For packets from the relay: only the other side of this trip, only newer than the last one, only
+// when the tag verifies.
+live_open :: proc(w: ^World, p: ^Live_Packet) -> (pos: Live_Position, ok: bool) {
+	t := &w.trip
+	if !t.active || p.trip != t.accept || p.from_driver != u8(!t.driver) || u64(p.seq) <= t.heard do return
+	nonce := live_nonce(p)
+	ctx: chacha20poly1305.Context
+	chacha20poly1305.init(&ctx, t.key[:])
+	header := mem.ptr_to_bytes(p)[:offset_of(Live_Packet, box)]
+	ok = chacha20poly1305.open(&ctx, mem.ptr_to_bytes(&pos), nonce[:], header, p.box[:], p.tag[:])
+	chacha20poly1305.reset(&ctx)
+	if !ok {
+		logf(w, "net", "trip %016x: live packet %d does not verify, dropped", key_short(t.accept), p.seq)
+		return {}, false
+	}
+	t.heard = u64(p.seq)
+	return pos, true
+}
+
+live_nonce :: proc(p: ^Live_Packet) -> (nonce: [chacha20poly1305.IV_SIZE]u8) {
+	(^u64le)(&nonce[0])^ = p.seq
+	nonce[8] = p.from_driver
+	return
+}
+
+// Relay keeps only the latest packet per trip and direction, in memory.
+relay_live_put :: proc(relay: net.Endpoint, p: ^Live_Packet) -> bool {
+	s := relay_dial(relay) or_return
+	defer net.close(s)
+	op := [1]u8{'L'}
+	status: [1]u8
+	if !relay_send(s, op[:]) || !relay_send(s, mem.ptr_to_bytes(p)) || !relay_recv(s, status[:]) {
+		fmt.eprintln("[relay] live put: connection lost")
+		return false
+	}
+	return status[0] == 0
+}
+
+// The latest packet the other side of the trip left on the relay. ok = false also when there is none yet.
+relay_live_get :: proc(relay: net.Endpoint, trip: [32]u8, from_driver: bool, out: ^Live_Packet) -> bool {
+	s := relay_dial(relay) or_return
+	defer net.close(s)
+	req: [34]u8
+	req[0] = 'M'
+	trip := trip
+	copy(req[1:], trip[:])
+	req[33] = u8(from_driver)
+	status: [1]u8
+	if !relay_send(s, req[:]) || !relay_recv(s, status[:]) {
+		fmt.eprintln("[relay] live get: connection lost")
+		return false
+	}
+	if status[0] != 0 do return false
+	return relay_recv(s, mem.ptr_to_bytes(out))
 }

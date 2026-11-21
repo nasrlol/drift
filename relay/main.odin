@@ -7,6 +7,9 @@
 //   'G' + after u64le + max u32le        -> count u32le + count messages, starting at index `after`
 //   'W' + one weather snapshot (SNAPSHOT_SIZE bytes) -> status u8 (0 stored or already there, 1 rejected)
 //   'H' + sha256 (32 bytes)              -> status u8 (0 found, 1 not found) + the snapshot when found
+//   'L' + one live packet (LIVE_SIZE)    -> status u8; keeps only the latest per trip and direction
+//   'M' + trip id (32) + from_driver u8  -> status u8 (0 found) + that latest packet
+// Live packets are encrypted end to end (the relay cannot read them) and live only in memory.
 // Subscribers poll 'G' with the index after the last message they have. The relay does not check
 // signatures (clients do, with game.msg_read), only size, magic, version and kind, so it needs
 // nothing from the game package. The store is the messages back to back, index = offset / MSG_SIZE.
@@ -22,9 +25,9 @@ import "core:strconv"
 import "core:time"
 
 // Keep in sync with Message in source/game/net.odin.
-MSG_SIZE :: 184
+MSG_SIZE :: 208
 MSG_MAGIC :: 0x534d5244
-MSG_VERSION :: 1
+MSG_VERSION :: 2
 MSG_KINDS :: 4
 
 // Keep in sync with Snapshot in source/game/net.odin: header (magic, version, fetched_at, sha256 of the
@@ -33,6 +36,15 @@ SNAPSHOT_SIZE :: 22736
 SNAPSHOT_HEADER :: 48
 SNAPSHOT_MAGIC :: 0x53575244
 SNAPSHOT_VERSION :: 1
+
+// Keep in sync with Live_Packet in source/game/net.odin: trip id (32), seq u64le, from_driver u8, ...
+LIVE_SIZE :: 88
+LIVE_SLOTS :: 1024 // two per trip; when full the oldest slot is reused
+
+Live_Slot :: struct {
+	packet: [LIVE_SIZE]u8, // trip id = packet[0:32], direction = packet[40]
+	used:   bool,
+}
 
 MAX_GET :: 256
 TIMEOUT :: 5 * time.Second
@@ -61,7 +73,7 @@ main :: proc() {
 		os.exit(1)
 	}
 
-	// All messages stay in memory as well: 10k messages are 1.8 MB.
+	// All messages stay in memory as well: 10k messages are 2.1 MB.
 	store: [dynamic]u8
 	if os.exists(path) {
 		data, err := os.read_entire_file(path, context.allocator)
@@ -89,6 +101,9 @@ main :: proc() {
 		os.exit(1)
 	}
 	fmt.eprintfln("[relay] listening on port %d, %d messages in %s", port, len(store) / MSG_SIZE, path)
+
+	live: [LIVE_SLOTS]Live_Slot
+	live_next := 0
 
 	// One connection at a time. A slow or silent client costs at most TIMEOUT per direction.
 	for {
@@ -182,6 +197,43 @@ main :: proc() {
 			}
 			if send_all(client, {0}) do send_all(client, snap)
 			fmt.eprintfln("[relay] %s: sent weather %s", from, name)
+		case 'L':
+			p: [LIVE_SIZE]u8
+			if !recv_full(client, p[:]) {
+				fmt.eprintfln("[relay] %s: live packet cut off", from)
+				break
+			}
+			slot := -1
+			for &l, i in live {
+				if l.used && mem.compare(l.packet[:32], p[:32]) == 0 && l.packet[40] == p[40] {
+					slot = i
+					break
+				}
+			}
+			if slot < 0 {
+				slot = live_next
+				live_next = (live_next + 1) % LIVE_SLOTS
+			}
+			live[slot] = {p, true}
+			send_all(client, {0})
+		case 'M':
+			req: [33]u8
+			if !recv_full(client, req[:]) {
+				fmt.eprintfln("[relay] %s: live request cut off", from)
+				break
+			}
+			found := -1
+			for &l, i in live {
+				if l.used && mem.compare(l.packet[:32], req[:32]) == 0 && l.packet[40] == req[32] {
+					found = i
+					break
+				}
+			}
+			if found < 0 {
+				send_all(client, {1})
+			} else if send_all(client, {0}) {
+				send_all(client, live[found].packet[:])
+			}
 		case:
 			fmt.eprintfln("[relay] %s: unknown request %d", from, op[0])
 		}

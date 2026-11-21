@@ -28,6 +28,7 @@ World :: struct {
 	fetch:        Fetch,
 	identity:     ed25519.Private_Key, // zero until identity_load_or_create succeeds
 	identity_pub: [32]u8,
+	trip:         Trip,
 	grid:         Grid,
 	tick:         u64,
 	accum:        f64,

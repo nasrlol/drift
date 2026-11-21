@@ -100,7 +100,7 @@ network + carpooling (after routing works):
 [ ] matching: filter offers by grid cell + hour, then detour check with the router
 [ ] verify offer route/energy by recomputing it locally
 [ ] energy split: own share + detour cost for passenger
-[ ] accept handshake, live position encrypted between matched users (x25519 + chacha20poly1305)
+[x] accept handshake, live position encrypted between matched users (x25519 + chacha20poly1305)
 [ ] signed reviews for reputation
 
 EXTRA (future, not now: C API so the core can be ported to Swift / Kotlin apps)
