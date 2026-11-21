@@ -17,6 +17,8 @@ WEATHER_CELLS :: WEATHER_GRID_W * WEATHER_GRID_H
 Weather :: struct {
 	start: i64, // unix seconds of hour 0, UTC
 	wind:  [FORECAST_HOURS][WIND_LAYERS][WEATHER_CELLS][2]f32,
+	gust:  [FORECAST_HOURS][WIND_LAYERS][WEATHER_CELLS]f32, // 0 calm .. 1 very gusty
+	cloud: [FORECAST_HOURS][WEATHER_CELLS]f32, // 0 clear .. 1 overcast
 }
 
 // x, y in km, layer 0..WIND_LAYERS-1, hour 0..FORECAST_HOURS-1 counted from the snapshot start.

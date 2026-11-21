@@ -14,6 +14,8 @@ OPEN_METEO_URL :: "https://api.open-meteo.com/v1/forecast"
 FETCH_TIMEOUT_MS :: 15_000
 FETCH_MAX_BYTES :: 1 << 20
 PRESSURE_HPA :: [WIND_LAYERS]int{975, 950, 925}
+// Gust minus mean wind at 10 m that counts as "very gusty" (index 1 at the lowest layer).
+GUST_SPREAD_MAX :: 10.0
 
 // Same projection as tools/bake_map, inverted to get the lat / lon of each grid point.
 MAP_LON0 :: 2.38
@@ -38,9 +40,10 @@ fetch_weather :: proc(out: ^Weather, scratch: mem.Allocator) -> bool {
 			fmt.sbprintf(&b, "%s%.4f", cell == 0 ? "" : ",", MAP_LON0 + x / (KM_PER_DEG * cos_lat))
 		}
 		strings.write_string(&b, "&hourly=")
-		for hpa, layer in PRESSURE_HPA {
-			fmt.sbprintf(&b, "%swind_speed_%dhPa,wind_direction_%dhPa", layer == 0 ? "" : ",", hpa, hpa)
+		for hpa in PRESSURE_HPA {
+			fmt.sbprintf(&b, "wind_speed_%dhPa,wind_direction_%dhPa,", hpa, hpa)
 		}
+		strings.write_string(&b, "wind_speed_10m,wind_gusts_10m,cloud_cover")
 		fmt.sbprintf(&b, "&forecast_hours=%d&wind_speed_unit=ms", FORECAST_HOURS)
 		strings.write_string(&b, "&timezone=GMT&timeformat=unixtime")
 		err: mem.Allocator_Error
@@ -101,50 +104,57 @@ fetch_weather :: proc(out: ^Weather, scratch: mem.Allocator) -> bool {
 	for loc, cell in locs {
 		obj, _ := loc.(json.Object)
 		hourly, has_hourly := obj["hourly"].(json.Object)
-		times, has_times := hourly["time"].(json.Array)
-		if !has_hourly || !has_times || len(times) != FORECAST_HOURS {
-			fmt.eprintfln("[weather] cell %d: missing hourly data or not %d hours", cell, FORECAST_HOURS)
+		if !has_hourly {
+			fmt.eprintfln("[weather] cell %d: no hourly object", cell)
 			return false
 		}
-		t0, has_t0 := times[0].(json.Float)
-		if cell == 0 do w.start = i64(t0)
-		if !has_t0 || i64(t0) != w.start {
+		times := hourly_values(hourly, "time", cell) or_return
+		if cell == 0 do w.start = i64(times[0])
+		if i64(times[0]) != w.start {
 			fmt.eprintfln("[weather] cell %d: start time %v, cell 0 has %d", cell, times[0], w.start)
 			return false
 		}
 		for hpa, layer in PRESSURE_HPA {
 			speed_key := fmt.aprintf("wind_speed_%dhPa", hpa, allocator = scratch)
 			dir_key := fmt.aprintf("wind_direction_%dhPa", hpa, allocator = scratch)
-			speeds, has_speeds := hourly[speed_key].(json.Array)
-			dirs, has_dirs := hourly[dir_key].(json.Array)
-			if !has_speeds || !has_dirs || len(speeds) != FORECAST_HOURS || len(dirs) != FORECAST_HOURS {
-				fmt.eprintfln(
-					"[weather] cell %d: missing wind at %d hPa or not %d hours",
-					cell,
-					hpa,
-					FORECAST_HOURS,
-				)
-				return false
-			}
+			speeds := hourly_values(hourly, speed_key, cell) or_return
+			dirs := hourly_values(hourly, dir_key, cell) or_return
 			for hour in 0 ..< FORECAST_HOURS {
-				speed, has_speed := speeds[hour].(json.Float)
-				dir, has_dir := dirs[hour].(json.Float)
-				if !has_speed || !has_dir {
-					fmt.eprintfln(
-						"[weather] cell %d, %d hPa, hour %d: speed %v, direction %v are not numbers",
-						cell,
-						hpa,
-						hour,
-						speeds[hour],
-						dirs[hour],
-					)
-					return false
-				}
-				s, rad := f64(speed), f64(dir) * math.RAD_PER_DEG
+				s, rad := speeds[hour], dirs[hour] * math.RAD_PER_DEG
 				w.wind[hour][layer][cell] = {f32(-s * math.sin(rad)), f32(s * math.cos(rad))}
 			}
+		}
+		// Gusts only exist at 10 m. The spread between gust and mean wind, scaled down with height
+		// like in the spec (1.08 - alt / 1600), gives the 0..1 gust index per layer.
+		mean := hourly_values(hourly, "wind_speed_10m", cell) or_return
+		gusts := hourly_values(hourly, "wind_gusts_10m", cell) or_return
+		clouds := hourly_values(hourly, "cloud_cover", cell) or_return
+		for hour in 0 ..< FORECAST_HOURS {
+			spread := clamp((gusts[hour] - mean[hour]) / GUST_SPREAD_MAX, 0, 1)
+			for alt, layer in LAYER_ALT {
+				w.gust[hour][layer][cell] = clamp(f32(spread) * (1.08 - alt / 1600), 0, 1)
+			}
+			w.cloud[hour][cell] = clamp(f32(clouds[hour] / 100), 0, 1)
 		}
 	}
 	out^ = w
 	return true
+}
+
+// Every hourly series must be FORECAST_HOURS numbers. Open-Meteo sends null for missing values.
+hourly_values :: proc(hourly: json.Object, key: string, cell: int) -> (v: [FORECAST_HOURS]f64, ok: bool) {
+	a, is_array := hourly[key].(json.Array)
+	if !is_array || len(a) != FORECAST_HOURS {
+		fmt.eprintfln("[weather] cell %d: %s needs %d values, got %d", cell, key, FORECAST_HOURS, len(a))
+		return
+	}
+	for x, hour in a {
+		n, is_number := x.(json.Float)
+		if !is_number {
+			fmt.eprintfln("[weather] cell %d: %s hour %d is %v, not a number", cell, key, hour, x)
+			return
+		}
+		v[hour] = f64(n)
+	}
+	return v, true
 }
