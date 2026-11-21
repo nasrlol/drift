@@ -235,10 +235,16 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 [x] free flight with momentum, wind and gusts, hover over ground and roofs (ship_free_step)
 [x] building collision against real and generated buildings (collide.odin)
 [x] buildings at real height, towns, trees, the car at real size, HUD
-[ ] BUG: land use and road ribbons do not show in the street view (land quad and buildings do)
-[ ] always day in the street view, natural greens (no dark mode there)
-[ ] scripted run mode with screenshots (--script: keys per frame, shot, quit) for visual checks
-[ ] headless test cases for free flight: wall stop, roof landing, top speed, crosswind drift, same output twice
+[x] BUG: land use and road ribbons did not show in the street view: f32 depth of the km meshes, fixed with
+    layered far depth in the ground shader (notes.txt street.odin)
+[ ] residential streets, squares and sidewalks between the houses (not in belgium.bin: below tertiary)
+[x] always day in the street view, natural greens; light only in the whole app (Lars: dark mode gone everywhere)
+[x] scripted run mode with screenshots (--script: keys per frame, shot, quit) for visual checks
+    test/data/street_standard.txt: tower, street, main road, park, countryside
+[x] headless test cases for free flight: wall stop, roof landing, top speed, crosswind drift, same output twice
+    (headless free / free_on, test/ run_free_flight)
+[x] flicker in the street view: anchored meshes (z-fighting), render interpolation (uneven frames), near plane
+    0.25 m; e2e check test/data/street_flicker.txt
 [ ] sun lighting with normals, sky with sun, haze, ambient occlusion at wall feet, sun shadows (shadow map)
 [ ] facades in the shader: floors, windows, doors, shop fronts, brick / plaster / stone per building
 [ ] roofs: gables for houses, parapets and roof details (solar panels, green roofs) for flat roofs
@@ -247,7 +253,7 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 
 TOGETHER, AT THE END
 [ ] demo run: plan Brussels -> Gent, pick greenest, Preview, Start, report gust, reroute, dock, Done
-[ ] headless test case for that flow, plus a screenshot of both screens in night and day
+[ ] headless test case for that flow, plus a screenshot of both screens (light only since 2026-11-21)
 
 NOT DOING
 film, procedural world, web stack, touch / responsive layout, speech, shadows on the map (the street view gets them)

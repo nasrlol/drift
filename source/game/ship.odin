@@ -75,6 +75,24 @@ Ship :: struct {
 	hit_s:     f32, // seconds since the car last hit a wall, for the street view's shake and the HUD
 }
 
+// Where the ship is drawn, filled by game_update every frame: between its state before and after the last fixed
+// step, by the time left in the accumulator. Drawn from the raw state, the car jumped 0, 1 or 2 steps per frame
+// when the frame times were uneven (as on a real screen) while the cameras eased smoothly, so buildings and roads
+// shook: 1.6 % of the pixels flickered A-B-A in a fast flight (--script frame_ms), 0.03 % with even frames.
+Ship_Pose :: struct {
+	pos:     [2]f64, // km, pos_frac included
+	alt:     f32,
+	heading: f32,
+}
+
+ship_pose :: proc(s: ^Ship) -> Ship_Pose {
+	return {
+		pos = {f64(s.pos.x) + f64(s.pos_frac.x) / 1000, f64(s.pos.y) + f64(s.pos_frac.y) / 1000},
+		alt = s.alt,
+		heading = s.heading,
+	}
+}
+
 // Battery charge in kWh, BATTERY_START x BATTERY_KWH at the start, clamped to the capacity.
 ship_battery_kwh :: proc(s: ^Ship) -> f32 {
 	return clamp(BATTERY_START * BATTERY_KWH - s.used_kwh + s.solar_kwh, 0, BATTERY_KWH)

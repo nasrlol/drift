@@ -29,15 +29,10 @@ wind_rand :: proc(p: ^Wind_Particles) -> f32 {
 	return f32(p.rand >> 8) / (1 << 24)
 }
 
-// Every color that is drawn comes from the palette of the current theme: the design's token table
-// (docs/drift-design.pdf, "Kleuren"), code never uses a hex value directly. Night is the design default, so it is
-// zero. World keeps the theme and a copy of its palette, refreshed every frame: a pointer into this library's
-// constants would dangle after a hot reload.
-Theme :: enum u8 {
-	Night,
-	Day,
-}
-
+// Every color that is drawn comes from the palette: the design's token table (docs/drift-design.pdf, "Kleuren"),
+// code never uses a hex value directly. Light only (Lars, 2026-11-21: "alleen light mode, doe de dark mode overal
+// weg"). World keeps a copy of PALETTE, refreshed every frame: a pointer into this library's constants would
+// dangle after a hot reload.
 Palette :: struct {
 	surface:          rl.Color, // panels, cards, buttons
 	surface_2:        rl.Color, // input fields, hover
@@ -100,126 +95,67 @@ Palette :: struct {
 }
 
 // Road colors come from the map table in docs/drift-design.pdf: main road = trunk + primary, street =
-// secondary + tertiary. Day uses the casing color, the white fill would vanish on the background while lines
-// are 1 px without casings. Night uses the fill.
-PALETTES :: [Theme]Palette {
-	.Night = {
-		surface = {32, 33, 36, 255},
-		surface_2 = {43, 45, 49, 255},
-		surface_3 = {53, 55, 60, 255},
-		text = {232, 234, 237, 255},
-		text_2 = {154, 160, 166, 255},
-		line = {60, 64, 67, 255},
-		accent = {138, 180, 248, 255},
-		accent_strong = {26, 115, 232, 255},
-		green = {52, 208, 122, 255},
-		banner = {12, 90, 83, 255},
-		banner_2 = {10, 74, 68, 255},
-		red = {229, 65, 59, 255},
-		warning = {249, 171, 0, 255},
-		reroute = {60, 64, 67, 255},
-		arrived = {19, 115, 51, 255},
-		sheet = {22, 23, 25, 255},
-		chip = {35, 36, 39, 255},
-		bubble = {143, 227, 255, 255},
-		bubble_text = {11, 42, 58, 255},
-		pill = {26, 143, 216, 255},
-		land = {31, 60, 85, 255},
-		city = {40, 62, 99, 255},
-		park = {27, 71, 82, 255},
-		farmland = {34, 68, 91, 255},
-		marsh = {28, 71, 87, 255},
-		beach = {42, 73, 100, 255},
-		water = {12, 36, 66, 255},
-		roof = {80, 102, 151, 255},
-		wall = {54, 73, 122, 255},
-		tree = {38, 104, 98, 255},
-		motorway = {129, 147, 210, 255},
-		motorway_casing = {51, 70, 140, 255},
-		main_road = {100, 118, 176, 255},
-		main_road_casing = {43, 59, 110, 255},
-		street = {79, 98, 153, 255},
-		street_casing = {37, 53, 99, 255},
-		track = {59, 80, 128, 255},
-		track_casing = {34, 51, 92, 255},
-		route = {34, 205, 255, 255},
-		route_casing = {11, 119, 168, 255},
-		alt_route = {108, 123, 168, 255},
-		alt_route_casing = {58, 72, 112, 255},
-		sky = {10, 23, 48, 255},
-		horizon = {22, 48, 78, 255},
-		area_label = {201, 212, 234, 255},
-		water_label = {111, 155, 209, 255},
-		label_halo = {12, 26, 44, 255},
-		shield = {50, 99, 201, 255},
-		shield_border = {255, 255, 255, 255},
-		shield_text = {255, 255, 255, 255},
-		hub = {47, 125, 109, 255},
-		wind_calm = {255, 255, 255, 255},
-		wind_mint = {127, 227, 196, 255},
-		wind_yellow = {249, 216, 92, 255},
-		wind_coral = {255, 127, 110, 255},
-	},
-	.Day = {
-		surface = {255, 255, 255, 255},
-		surface_2 = {241, 243, 244, 255},
-		surface_3 = {232, 234, 237, 255},
-		text = {32, 33, 36, 255},
-		text_2 = {95, 99, 104, 255},
-		line = {218, 220, 224, 255},
-		accent = {26, 115, 232, 255},
-		accent_strong = {26, 115, 232, 255},
-		green = {24, 128, 56, 255},
-		banner = {15, 107, 95, 255},
-		banner_2 = {11, 90, 80, 255},
-		red = {229, 65, 59, 255},
-		warning = {249, 171, 0, 255},
-		reroute = {60, 64, 67, 255},
-		arrived = {19, 115, 51, 255},
-		sheet = {255, 255, 255, 255},
-		chip = {241, 243, 244, 255},
-		bubble = {255, 255, 255, 255},
-		bubble_text = {32, 33, 36, 255},
-		pill = {26, 115, 232, 255},
-		land = {239, 236, 229, 255},
-		city = {231, 227, 219, 255},
-		park = {200, 232, 196, 255},
-		farmland = {238, 241, 217, 255},
-		marsh = {211, 236, 220, 255},
-		beach = {246, 237, 207, 255},
-		water = {159, 212, 246, 255},
-		roof = {244, 241, 236, 255},
-		wall = {216, 211, 203, 255},
-		tree = {118, 178, 106, 255},
-		motorway = {253, 217, 130, 255},
-		motorway_casing = {226, 180, 82, 255},
-		main_road = {255, 255, 255, 255},
-		main_road_casing = {211, 206, 197, 255},
-		street = {255, 255, 255, 255},
-		street_casing = {219, 214, 206, 255},
-		track = {251, 250, 247, 255},
-		track_casing = {227, 223, 215, 255},
-		route = {26, 115, 232, 255},
-		route_casing = {20, 86, 181, 255},
-		alt_route = {159, 189, 236, 255},
-		alt_route_casing = {117, 151, 212, 255},
-		sky = {188, 220, 242, 255},
-		horizon = {230, 239, 242, 255},
-		area_label = {60, 64, 67, 255},
-		water_label = {58, 110, 170, 255},
-		label_halo = {255, 255, 255, 255},
-		shield = {255, 255, 255, 255},
-		shield_border = {154, 160, 166, 255},
-		shield_text = {32, 33, 36, 255},
-		hub = {47, 125, 109, 255},
-		wind_calm = {95, 99, 104, 255},
-		wind_mint = {24, 160, 120, 255},
-		wind_yellow = {214, 160, 0, 255},
-		wind_coral = {226, 90, 70, 255},
-	},
+// secondary + tertiary, the casing color (the white fill would vanish on the background while lines are 1 px
+// without casings).
+PALETTE :: Palette {
+	surface          = {255, 255, 255, 255},
+	surface_2        = {241, 243, 244, 255},
+	surface_3        = {232, 234, 237, 255},
+	text             = {32, 33, 36, 255},
+	text_2           = {95, 99, 104, 255},
+	line             = {218, 220, 224, 255},
+	accent           = {26, 115, 232, 255},
+	accent_strong    = {26, 115, 232, 255},
+	green            = {24, 128, 56, 255},
+	banner           = {15, 107, 95, 255},
+	banner_2         = {11, 90, 80, 255},
+	red              = {229, 65, 59, 255},
+	warning          = {249, 171, 0, 255},
+	reroute          = {60, 64, 67, 255},
+	arrived          = {19, 115, 51, 255},
+	sheet            = {255, 255, 255, 255},
+	chip             = {241, 243, 244, 255},
+	bubble           = {255, 255, 255, 255},
+	bubble_text      = {32, 33, 36, 255},
+	pill             = {26, 115, 232, 255},
+	land             = {239, 236, 229, 255},
+	city             = {231, 227, 219, 255},
+	park             = {200, 232, 196, 255},
+	farmland         = {238, 241, 217, 255},
+	marsh            = {211, 236, 220, 255},
+	beach            = {246, 237, 207, 255},
+	water            = {159, 212, 246, 255},
+	roof             = {244, 241, 236, 255},
+	wall             = {216, 211, 203, 255},
+	tree             = {118, 178, 106, 255},
+	motorway         = {253, 217, 130, 255},
+	motorway_casing  = {226, 180, 82, 255},
+	main_road        = {255, 255, 255, 255},
+	main_road_casing = {211, 206, 197, 255},
+	street           = {255, 255, 255, 255},
+	street_casing    = {219, 214, 206, 255},
+	track            = {251, 250, 247, 255},
+	track_casing     = {227, 223, 215, 255},
+	route            = {26, 115, 232, 255},
+	route_casing     = {20, 86, 181, 255},
+	alt_route        = {159, 189, 236, 255},
+	alt_route_casing = {117, 151, 212, 255},
+	sky              = {188, 220, 242, 255},
+	horizon          = {230, 239, 242, 255},
+	area_label       = {60, 64, 67, 255},
+	water_label      = {58, 110, 170, 255},
+	label_halo       = {255, 255, 255, 255},
+	shield           = {255, 255, 255, 255},
+	shield_border    = {154, 160, 166, 255},
+	shield_text      = {32, 33, 36, 255},
+	hub              = {47, 125, 109, 255},
+	wind_calm        = {95, 99, 104, 255},
+	wind_mint        = {24, 160, 120, 255},
+	wind_yellow      = {214, 160, 0, 255},
+	wind_coral       = {226, 90, 70, 255},
 }
 
-// The palette of the current theme. Refreshed at the start of every frame (game_update).
+// The palette, refreshed at the start of every frame (game_update).
 palette :: proc(w: ^World) -> ^Palette {
 	return &w.palette
 }
@@ -254,10 +190,8 @@ Line_Meshes :: struct {
 	// ground layers (plan_ui layers_draw_ground): a vertex colored grid over the map
 	ground:          rl.Mesh,
 	ground_material: rl.Material,
-	// land use (draw order 1): the baked area triangles, vertex colors from the palette of area_theme
+	// land use (draw order 1): the baked area triangles, vertex colors from the palette
 	areas:           rl.Mesh,
-	area_colors:     [][4]u8, // perm arena, one per vertex, rewritten on a theme change
-	area_theme:      Theme,
 	// hillshade (terrain map type): one quad over the map with the baked shading as a texture
 	hill:            rl.Mesh,
 	hill_material:   rl.Material,
@@ -276,7 +210,7 @@ ground_quad :: proc(gx, gy: int) -> [6][2]int {
 }
 
 // Line colors and widths are uniform arrays: the Map_Kind entries, then the four wind trail colors. Switching the
-// theme or zooming rebuilds nothing; the casing pass draws the same mesh again with the casing colors and wider
+// zooming rebuilds nothing; the casing pass draws the same mesh again with the casing colors and wider
 // widths, so every casing lies under every fill (design: casings first, then fills).
 WIND_COLOR :: len(Map_Kind)
 WIND_COLOR_COUNT :: 4
@@ -376,35 +310,12 @@ line_meshes_unload :: proc(lm: ^Line_Meshes) {
 }
 
 // Land use (draw order 1): one static mesh of the baked area triangles, built once. Each triangle is turned to
-// the winding of ground_quad, so back face culling never drops one. Colors per vertex from the palette, rewritten
-// only when the theme changes.
+// the winding of ground_quad, so back face culling never drops one. Colors per vertex from the palette.
 areas_build :: proc(w: ^World, lm: ^Line_Meshes) {
 	pts := w.m.area_points
 	if len(pts) == 0 do return
 	pos := make([][3]f32, len(pts), context.temp_allocator)
-	lm.area_colors = make([][4]u8, len(pts))
-	for a in w.m.areas {
-		tri := pts[a.start:][:a.count]
-		for t := 0; t + 2 < len(tri); t += 3 {
-			p0, p1, p2 := tri[t], tri[t + 1], tri[t + 2]
-			e1, e2 := p1 - p0, p2 - p0
-			if e1.x * e2.y - e1.y * e2.x > 0 do p1, p2 = p2, p1
-			base := int(a.start) + t
-			pos[base], pos[base + 1], pos[base + 2] = {p0.x, p0.y, 0}, {p1.x, p1.y, 0}, {p2.x, p2.y, 0}
-		}
-	}
-	areas_color(w, lm)
-	lm.areas = rl.Mesh {
-		vertexCount   = i32(len(pts)),
-		triangleCount = i32(len(pts) / 3),
-		vertices      = ([^]f32)(raw_data(pos)),
-		colors        = ([^]u8)(raw_data(lm.area_colors)),
-	}
-	rl.UploadMesh(&lm.areas, true)
-	lm.areas.vertices, lm.areas.colors = nil, nil
-}
-
-areas_color :: proc(w: ^World, lm: ^Line_Meshes) {
+	col := make([]rl.Color, len(pts), context.temp_allocator)
 	pal := palette(w)
 	colors := [Area_Kind]rl.Color {
 		.City     = pal.city,
@@ -415,25 +326,30 @@ areas_color :: proc(w: ^World, lm: ^Line_Meshes) {
 		.Water    = pal.water,
 	}
 	for a in w.m.areas {
+		tri := pts[a.start:][:a.count]
 		c := colors[Area_Kind(a.kind)]
-		for &v in lm.area_colors[a.start:][:a.count] do v = {c.r, c.g, c.b, c.a}
+		for t := 0; t + 2 < len(tri); t += 3 {
+			p0, p1, p2 := tri[t], tri[t + 1], tri[t + 2]
+			e1, e2 := p1 - p0, p2 - p0
+			if e1.x * e2.y - e1.y * e2.x > 0 do p1, p2 = p2, p1
+			base := int(a.start) + t
+			pos[base], pos[base + 1], pos[base + 2] = {p0.x, p0.y, 0}, {p1.x, p1.y, 0}, {p2.x, p2.y, 0}
+			col[base], col[base + 1], col[base + 2] = c, c, c
+		}
 	}
-	lm.area_theme = w.theme
+	lm.areas = rl.Mesh {
+		vertexCount   = i32(len(pts)),
+		triangleCount = i32(len(pts) / 3),
+		vertices      = ([^]f32)(raw_data(pos)),
+		colors        = ([^]u8)(raw_data(col)),
+	}
+	rl.UploadMesh(&lm.areas, false)
+	lm.areas.vertices, lm.areas.colors = nil, nil
 }
 
 areas_draw :: proc(w: ^World) {
 	lm := &w.line_meshes
 	if lm.areas.vertexCount == 0 do return
-	if lm.area_theme != w.theme {
-		areas_color(w, lm)
-		rl.UpdateMeshBuffer(
-			lm.areas,
-			3,
-			raw_data(lm.area_colors),
-			i32(len(lm.area_colors) * size_of([4]u8)),
-			0,
-		)
-	}
 	rl.DrawMesh(lm.areas, lm.ground_material, rl.Matrix(1))
 }
 
@@ -443,7 +359,7 @@ HILL_SHADOW_ALPHA :: 130
 HILL_LIGHT_ALPHA :: 70
 
 // The hillshade of belgium.bin as one texture on a quad over the whole map (todo: "draw it as one quad"). Shadows
-// are black and highlights white with alpha, so it shades whatever land use is under it, in both themes.
+// are black and highlights white with alpha, so it shades whatever land use is under it.
 hill_build :: proc(w: ^World, lm: ^Line_Meshes) {
 	hs := w.m.hillshade
 	if len(hs) != HEIGHT_W * HEIGHT_H do return

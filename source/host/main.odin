@@ -17,6 +17,7 @@ Game_API :: struct {
 	shutdown:        proc(memory: rawptr),
 	shutdown_window: proc(),
 	headless:        proc(args: []string) -> bool,
+	script:          proc(memory: rawptr, path: string) -> bool,
 	__handle:        dynlib.Library,
 }
 
@@ -59,6 +60,12 @@ main :: proc() {
 	memory := api.init()
 	if memory == nil {
 		os.exit(1)
+	}
+	if len(os.args) > 1 && os.args[1] == "--script" {
+		if len(os.args) != 3 || !api.script(memory, os.args[2]) {
+			fmt.eprintln("[host] usage: drift --script <file>")
+			os.exit(1)
+		}
 	}
 
 	for api.update(memory) {

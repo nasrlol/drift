@@ -250,8 +250,8 @@ plan_ui :: proc(w: ^World) {
 	panel := plan_panel_rect(w)
 	buf: [96]u8
 
-	// Card A: from / to, mode chips, departure. No brand row (Lars, 2026-11-21: the logo goes), the day / night
-	// button moved to the map buttons.
+	// Card A: from / to, mode chips, departure. No brand row (Lars, 2026-11-21: the logo goes), no day / night
+	// button (light only).
 	a := rl.Rectangle{panel.x, panel.y, panel.width, 252 + CAR_PICKER_H + 12}
 	ui_card(w, a)
 	x := a.x + 16
@@ -598,10 +598,6 @@ plan_map_controls :: proc(w: ^World) {
 	if compass_button(w, compass) do cam_north(w)
 	layers := rl.Rectangle{x, compass.y - MAP_BUTTON_GAP - MAP_BUTTON, MAP_BUTTON, MAP_BUTTON}
 	if ui_round_button(w, layers, .Layers, p.layers_open) do p.layers_open = !p.layers_open
-	theme := rl.Rectangle{x, layers.y - MAP_BUTTON_GAP - MAP_BUTTON, MAP_BUTTON, MAP_BUTTON}
-	if ui_round_button(w, theme, w.theme == .Night ? .Moon : .Sun, false) {
-		w.theme = w.theme == .Night ? .Day : .Night
-	}
 
 	if p.layers_open {
 		// Profile and debug builds get one more row: the profiler overlay.

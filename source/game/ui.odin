@@ -159,8 +159,6 @@ Icon :: enum u8 {
 	Waves,
 	Swap,
 	Clock,
-	Moon,
-	Sun,
 	Layers,
 	Compass,
 	Plus,
@@ -205,8 +203,6 @@ ICON_CODEPOINTS :: [Icon]rune {
 	.Waves        = 0xe176,
 	.Swap         = 0xe8d5, // swap_vert
 	.Clock        = 0xe8b5, // schedule
-	.Moon         = 0xe51c, // dark_mode
-	.Sun          = 0xe518, // light_mode
 	.Layers       = 0xe53b,
 	.Compass      = 0xf1e0, // north
 	.Plus         = 0xe145,
@@ -242,7 +238,7 @@ ICON_CODEPOINTS :: [Icon]rune {
 	.Logo         = 0,
 }
 
-// Fixed colors of the logo (design "Iconen"): they are part of the mark, not of a theme.
+// Fixed colors of the logo (design "Iconen"): they are part of the mark, not of the palette.
 LOGO_MINT :: rl.Color{127, 227, 196, 255}
 LOGO_GREEN :: rl.Color{52, 208, 122, 255}
 LOGO_AMBER :: rl.Color{255, 179, 71, 255}
@@ -338,7 +334,7 @@ ui_begin :: proc(w: ^World) {
 	}
 	u.activate = u.focus > 0 && (rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.SPACE))
 	if rl.IsMouseButtonPressed(.LEFT) do u.focus = 0
-	u.toast_t += rl.GetFrameTime()
+	u.toast_t += frame_time(w)
 }
 
 // True when the mouse is over UI drawn last frame: the map then ignores drags, the wheel and clicks.
@@ -408,16 +404,12 @@ round_rect_lines :: proc(r: rl.Rectangle, radius, thick: f32, color: rl.Color) {
 	rl.DrawRectangleRoundedLinesEx(r, min(2 * radius / m, 1), 12, thick, color)
 }
 
-// The design's floating card shadow: two soft layers (night 0 2 6 / 0 8 24 black, day grey-blue and lighter).
+// The design's floating card shadow (day): two soft grey-blue layers.
 ui_shadow :: proc(w: ^World, r: rl.Rectangle, radius: f32) {
-	night := w.theme == .Night
-	base := night ? rl.Color{0, 0, 0, 255} : rl.Color{60, 64, 67, 255}
+	base := rl.Color{60, 64, 67, 255}
 	layers := [2]struct {
 		dy, blur, alpha: f32,
-	} {
-		{night ? 2 : 1, night ? 6 : 3, night ? 0.35 : 0.3},
-		{night ? 8 : 4, night ? 24 : 12, night ? 0.25 : 0.18},
-	}
+	}{{1, 3, 0.3}, {4, 12, 0.18}}
 	for l in layers {
 		steps :: 4
 		for k in 0 ..< steps {
@@ -471,7 +463,7 @@ ui_pill_button :: proc(
 	switch kind {
 	case .Primary:
 		round_rect(r, radius, hot ? rl.ColorBrightness(pal.accent, 0.1) : pal.accent)
-		fg = w.theme == .Night ? pal.surface : rl.WHITE
+		fg = rl.WHITE
 	case .Secondary:
 		if hot do round_rect(r, radius, pal.surface_2)
 		round_rect_lines(r, radius, 1, pal.line)
@@ -521,7 +513,7 @@ ui_toggle :: proc(w: ^World, r: rl.Rectangle, on: ^bool) -> bool {
 	if fired do on^ = !on^
 	a := &w.ui.anims[(id - 1) % MAX_UI_ANIMS]
 	target: f32 = on^ ? 1 : 0
-	step := rl.GetFrameTime() / 0.15
+	step := frame_time(w) / 0.15
 	a^ = target > a^ ? min(a^ + step, target) : max(a^ - step, target)
 	round_rect(r, r.height / 2, on^ ? pal.accent_strong : pal.surface_3)
 	knob := r.height - 4
