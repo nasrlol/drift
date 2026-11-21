@@ -185,3 +185,11 @@ check.sh                 allowed imports, no raylib in sim files, banned file na
 AGENTS.md                entry point for agents and new people, points to rules / notes / todo
 format.sh                formats all tracked .odin files with odinfmt, --check only reports (hook + CI).
                          new files must be git added first
+
+WINDOWS SMOKE TEST (2026-11-21, Windows 11, Odin dev-2026-11a, VS Build Tools 2022)
+compile.bat debug: ~1.8 s. build\drift.exe starts from the repo root, loads the map, fetches weather.
+compile.bat release: ~3.8 s, the exe starts.
+Broken: compile.bat debug while drift.exe runs stops at "copy /y raylib.dll build\" ("The process cannot access
+  the file because it is being used by another process", raylib.dll is loaded by the running exe), so game.dll
+  is never rebuilt and no reload happens. Fix for the compile.bat owner: copy raylib.dll only when drift.exe
+  is not running (move the tasklist check above the copy). "[host] reloaded game" was not reached, unverified.
