@@ -55,6 +55,13 @@ Snapshot_Header :: struct {
 	hash:           [32]u8,
 }
 
+// The whole snapshot file (and relay payload) as one struct, no padding between the two parts.
+Snapshot :: struct {
+	header:  Snapshot_Header,
+	weather: Weather,
+}
+#assert(size_of(Snapshot) == size_of(Snapshot_Header) + size_of(Weather))
+
 // Zero is valid: no thread, fetch on the first update.
 // The thread owns mem and result while it runs. The frame loop only looks at them after is_done.
 Fetch :: struct {
@@ -238,33 +245,31 @@ weather_load_snapshot :: proc(w: ^World, path: string) -> bool {
 		logf(w, "weather", "no snapshot at %s (%v)", path, err)
 		return false
 	}
-	want := size_of(Snapshot_Header) + size_of(Weather)
-	if len(data) != want {
-		logf(w, "weather", "%s is %d bytes, want %d, ignored", path, len(data), want)
+	snap, why := snapshot_check(data)
+	if snap == nil {
+		logf(w, "weather", "%s: %s, ignored", path, why)
 		return false
 	}
-	h := (^Snapshot_Header)(raw_data(data))
-	if h.magic != SNAPSHOT_MAGIC || h.version != SNAPSHOT_VERSION {
-		logf(w, "weather", "%s has magic %x version %d, ignored", path, h.magic, h.version)
-		return false
+	w.weather = snap.weather
+	w.weather_hash = snap.header.hash
+	f.fetched_at = snap.header.fetched_at
+	f.next = snap.header.fetched_at + REFRESH_S
+	logf(w, "weather", "loaded %s, start %d, fetched at %d", path, w.weather.start, snap.header.fetched_at)
+	return true
+}
+
+// For snapshot bytes from disk or the relay. Returns nil and the reason when anything is off.
+snapshot_check :: proc(data: []u8) -> (snap: ^Snapshot, why: string) {
+	if len(data) != size_of(Snapshot) do return nil, "wrong size"
+	snap = (^Snapshot)(raw_data(data))
+	if snap.header.magic != SNAPSHOT_MAGIC || snap.header.version != SNAPSHOT_VERSION {
+		return nil, "wrong magic or version"
 	}
 	digest: [32]u8
-	hash.hash_bytes_to_buffer(.SHA256, data[size_of(Snapshot_Header):], digest[:])
-	if digest != h.hash {
-		logf(w, "weather", "%s hash mismatch, file is corrupt, ignored", path)
-		return false
-	}
-	snap := (^Weather)(raw_data(data[size_of(Snapshot_Header):]))
-	if !weather_valid(snap) {
-		logf(w, "weather", "%s has values out of range, ignored", path)
-		return false
-	}
-	w.weather = snap^
-	w.weather_hash = h.hash
-	f.fetched_at = h.fetched_at
-	f.next = h.fetched_at + REFRESH_S
-	logf(w, "weather", "loaded %s, start %d, fetched at %d", path, w.weather.start, h.fetched_at)
-	return true
+	hash.hash_bytes_to_buffer(.SHA256, mem.ptr_to_bytes(&snap.weather), digest[:])
+	if digest != snap.header.hash do return nil, "hash mismatch, corrupt"
+	if !weather_valid(&snap.weather) do return nil, "values out of range"
+	return snap, ""
 }
 
 // Called every frame. Starts a fetch thread when one is due, takes over its result when it is done.
@@ -593,6 +598,55 @@ relay_fetch :: proc(relay: net.Endpoint, after: u64, out: []Message) -> (count: 
 		return 0, false
 	}
 	return count, true
+}
+
+// Publishing the same snapshot twice is fine, the relay keys it by its hash.
+relay_publish_weather :: proc(relay: net.Endpoint, snap: ^Snapshot) -> bool {
+	s := relay_dial(relay) or_return
+	defer net.close(s)
+	op := [1]u8{'W'}
+	status: [1]u8
+	if !relay_send(s, op[:]) || !relay_send(s, mem.ptr_to_bytes(snap)) || !relay_recv(s, status[:]) {
+		fmt.eprintln("[relay] publish weather: connection lost")
+		return false
+	}
+	if status[0] != 0 {
+		fmt.eprintln("[relay] publish weather: rejected")
+		return false
+	}
+	return true
+}
+
+// The snapshot an offer was planned with. out is written only when the bytes pass snapshot_check
+// and their hash is the one asked for.
+relay_fetch_weather :: proc(relay: net.Endpoint, want: [32]u8, out: ^Snapshot) -> bool {
+	s := relay_dial(relay) or_return
+	defer net.close(s)
+	req: [33]u8
+	req[0] = 'H'
+	want := want
+	copy(req[1:], want[:])
+	status: [1]u8
+	if !relay_send(s, req[:]) || !relay_recv(s, status[:]) {
+		fmt.eprintln("[relay] fetch weather: connection lost")
+		return false
+	}
+	if status[0] != 0 {
+		fmt.eprintfln("[relay] fetch weather: relay has no snapshot %016x", key_short(want))
+		return false
+	}
+	got: Snapshot
+	if !relay_recv(s, mem.ptr_to_bytes(&got)) {
+		fmt.eprintln("[relay] fetch weather: cut off")
+		return false
+	}
+	snap, why := snapshot_check(mem.ptr_to_bytes(&got))
+	if snap == nil || snap.header.hash != want {
+		fmt.eprintfln("[relay] fetch weather %016x: %s", key_short(want), snap == nil ? why : "other hash")
+		return false
+	}
+	out^ = snap^
+	return true
 }
 
 relay_dial :: proc(relay: net.Endpoint) -> (s: net.TCP_Socket, ok: bool) {
