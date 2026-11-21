@@ -268,12 +268,35 @@ game_update :: proc(memory: rawptr) -> bool {
 		rl.DrawPoly(w.ship.pos, 3, 8 / cam.zoom, math.to_degrees(w.ship.heading) - 90, pal.ship)
 		rl.EndMode2D()
 
-		// Cities in screen space, so dots and text keep their pixel size at every zoom.
+		// Labels in screen space, so dots and text keep their pixel size at every zoom.
 		// Names are 0-terminated UTF-8 from the bake, the default raylib font covers Latin-1 (Liege has an e grave).
+		// Off screen: dropped. Overlapping an earlier label: only the dot. Earlier = first in the bake, there is
+		// no population yet to rank cities by.
+		labels := make([dynamic]Label, 0, len(w.m.cities), context.temp_allocator)
+		screen_rect := rl.Rectangle{0, 0, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 		for &c in w.m.cities {
 			p := rl.GetWorldToScreen2D(c.pos, cam)
-			rl.DrawCircleV(p, 3, pal.city)
-			rl.DrawText(cstring(raw_data(c.name[:])), i32(p.x) + 6, i32(p.y) - 5, 10, pal.city)
+			text := cstring(raw_data(c.name[:]))
+			l := Label {
+				dot   = p,
+				rect  = {
+					p.x + 6 - LABEL_GAP_PX,
+					p.y - LABEL_PX / 2 - LABEL_GAP_PX,
+					f32(rl.MeasureText(text, LABEL_PX)) + 2 * LABEL_GAP_PX,
+					LABEL_PX + 2 * LABEL_GAP_PX,
+				},
+				text  = text,
+				shown = true,
+			}
+			if !rl.CheckCollisionPointRec(p, screen_rect) && !rl.CheckCollisionRecs(l.rect, screen_rect) do continue
+			for &prev in labels {
+				if prev.shown && rl.CheckCollisionRecs(l.rect, prev.rect) do l.shown = false
+			}
+			append(&labels, l)
+		}
+		for &l in labels {
+			rl.DrawCircleV(l.dot, 3, pal.city)
+			if l.shown do rl.DrawText(l.text, i32(l.rect.x + LABEL_GAP_PX), i32(l.rect.y + LABEL_GAP_PX), LABEL_PX, pal.city)
 		}
 	}
 	prof_end(w, .Draw, t)

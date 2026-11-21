@@ -54,6 +54,17 @@ PALETTES :: [Theme]Palette {
 	},
 }
 
+LABEL_PX :: 10
+LABEL_GAP_PX :: 2 // space kept free around a label, so two labels never touch
+
+// A dot with its name in screen space. Collected per frame into the frame arena, culled, then drawn in one pass.
+Label :: struct {
+	dot:   [2]f32,
+	rect:  rl.Rectangle, // the text, LABEL_GAP_PX bigger on every side
+	text:  cstring,
+	shown: bool, // false: it overlaps an earlier label, only the dot is drawn
+}
+
 // The whole map is one static mesh, uploaded once and drawn with one call. Drawing it as line strips sent
 // 36k points through the raylib batch every frame (8.6 ms). Each segment is a quad of two triangles whose
 // corners sit on the segment ends; the vertex shader pushes them sideways in screen space, so lines are
