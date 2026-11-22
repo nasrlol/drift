@@ -70,7 +70,8 @@ main :: proc() {
 	if !run_scan_order() do failed += 1
 	if !run_carpool() do failed += 1
 	if !run_free_flight() do failed += 1
-	fmt.printfln("test: %d passed, %d failed", len(CASES) + 3 - failed, failed)
+	if !run_battery() do failed += 1
+	fmt.printfln("test: %d passed, %d failed", len(CASES) + 4 - failed, failed)
 	os.exit(failed == 0 ? 0 : 1)
 }
 
@@ -646,6 +647,142 @@ run_free_flight :: proc() -> bool {
 		same &&= sa.heading == sb.heading && a.out == b.out
 		if !a_ok || !b_ok || !same {
 			fmt.printfln("test free_flight: the same inputs twice differ\n  %s\n  %s", a.out, b.out)
+			return false
+		}
+	}
+	return true
+}
+
+// The battery (Lars, 2026-11-22: "noodlanding + iets meer opladen in de zon"). Empty on the map, the car glides
+// down and lands on the road below, and on the road it creeps and cannot take off; empty in the street view it
+// sinks onto the ground and creeps on its wheels; at a tower it charges from empty and flies again from
+// BATTERY_FLY_AGAIN; by hand the sun yields SHIP_SOLAR_GAIN times what the autopilot (the spec) gets.
+run_battery :: proc() -> bool {
+	w := (^game.World)(game.game_init())
+	if w == nil {
+		fmt.println("test battery: game_init failed")
+		return false
+	}
+	defer game.game_shutdown(w)
+	context.allocator = virtual.arena_allocator(&w.perm)
+	if !game.weather_load_snapshot(w, "test/data/calm.snap") {
+		fmt.println("test battery: cannot load test/data/calm.snap")
+		return false
+	}
+	s := &w.ship
+	step :: proc(w: ^game.World, c: game.Controls, seconds: f32) {
+		for _ in 0 ..< int(seconds * game.SIM_HZ) do game.ship_step(w, c, game.SIM_DT)
+	}
+	ground :: proc(w: ^game.World) -> f32 {
+		return w.ship.alt - game.height_at(w, w.ship.pos.x, w.ship.pos.y)
+	}
+
+	// 1: empty 300 m over the roads west of Brussels (test/data/drive.txt), the pilot asking for full throttle
+	// and climb: it lands on a road within 90 s, then creeps and stays on the road.
+	{
+		x, y: f32 = 140.294, 79.606
+		s^ = {
+			pos      = {x, y},
+			alt      = game.height_at(w, x, y) + 300,
+			speed    = 30,
+			used_kwh = 1000,
+		}
+		full := game.Controls{1, 0, 1}
+		landed_s: f32 = -1
+		for i in 0 ..< 90 * game.SIM_HZ {
+			game.ship_step(w, full, game.SIM_DT)
+			if s.on_road {
+				landed_s = f32(i) / game.SIM_HZ
+				break
+			}
+		}
+		step(w, full, 30)
+		if landed_s < 0 || !s.drained || !s.on_road || s.speed > game.EMPTY_DRIVE_MS + 0.01 {
+			fmt.printfln(
+				"test battery: empty on the map: landed after %.1f s (want < 90), drained %v, on the road %v, %.1f m/s (want <= %.0f), %.0f m up",
+				landed_s,
+				s.drained,
+				s.on_road,
+				s.speed,
+				game.EMPTY_DRIVE_MS,
+				ground(w),
+			)
+			return false
+		}
+	}
+
+	// 2: empty, moored at the Brussels tower: it charges at TOWER_CHARGE_KW from 0 %, and flies again past
+	// BATTERY_FLY_AGAIN (9 kWh at ~117 kW net: under 5 minutes).
+	{
+		hub := 5
+		p := w.m.hubs[hub].pos
+		s^ = {
+			pos      = p,
+			alt      = game.height_at(w, p.x, p.y) + game.HUB_TOWER_M + game.DOCK_ABOVE_M,
+			moored   = true,
+			docked   = true,
+			dock_hub = hub,
+			used_kwh = 1000,
+		}
+		step(w, {}, 1)
+		empty := game.ship_battery_kwh(s)
+		step(w, {}, 60)
+		gained := game.ship_battery_kwh(s) - empty
+		want := (game.TOWER_CHARGE_KW - game.power_kw(0, 0)) / 60
+		step(w, {}, 240)
+		if empty > 0.05 || gained < want - 0.01 || gained > want + 0.4 || s.drained {
+			fmt.printfln(
+				"test battery: tower: %.2f kWh after a second empty (want ~0), +%.2f kWh in 60 s (want %.2f + sun), still drained after 5 min %v",
+				empty,
+				gained,
+				want,
+				s.drained,
+			)
+			return false
+		}
+	}
+
+	// 3: empty 60 m over open country in the street view at full throttle and climb: on its wheels within 20 s,
+	// at EMPTY_DRIVE_MS at most, and up does not lift it.
+	{
+		b := strings.builder_make()
+		ok := game.headless_run(
+			w,
+			"test/data/calm.snap",
+			transmute([]u8)string("free 132.924 83.707 60 0 1 0 0 1\n"),
+			&b,
+		)
+		s.used_kwh = 1000
+		ok &&= game.headless_run(w, "test/data/calm.snap", transmute([]u8)string("free_on 1 0 1 20\n"), &b)
+		if !ok || !s.driving || abs(ground(w)) > 0.1 || s.speed > game.EMPTY_DRIVE_MS + 0.5 {
+			fmt.printfln(
+				"test battery: empty in the street view: on wheels %v, %.2f m up, %.1f m/s (want <= %.0f)\n  %s",
+				s.driving,
+				ground(w),
+				s.speed,
+				game.EMPTY_DRIVE_MS,
+				strings.to_string(b),
+			)
+			return false
+		}
+	}
+
+	// 4: the sun by hand and by autopilot at the same place and hour.
+	{
+		s^ = {
+			pos = {140.294, 79.606},
+		}
+		hand := game.ship_solar_kw(w)
+		w.nav.active, w.nav.manual = true, false
+		auto := game.ship_solar_kw(w)
+		w.nav = {}
+		if auto <= 0 || abs(hand - auto * game.SHIP_SOLAR_GAIN) > 0.001 {
+			fmt.printfln(
+				"test battery: sun: %.2f kW by hand, %.2f kW by autopilot (want %.0f x, and some sun in calm.snap at hour 0)",
+				hand,
+				auto,
+				game.SHIP_SOLAR_GAIN,
+			)
 			return false
 		}
 	}

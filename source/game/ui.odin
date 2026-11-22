@@ -1077,6 +1077,7 @@ ui_tip_draw :: proc(w: ^World) {
 
 Battery_Badge :: struct {
 	charge: f32,
+	label:  string, // "battery", "charging" at a tower, "empty" when drained
 	bv:     string,
 	bvs:    [2]f32,
 	bus:    [2]f32,
@@ -1086,13 +1087,15 @@ Battery_Badge :: struct {
 
 // Measures the circular battery gauge so callers can reserve space alongside other HUD elements.
 ui_battery_badge :: proc(w: ^World, min_dia: f32) -> Battery_Badge {
-	charge := clamp(ship_battery_kwh(&w.ship) / BATTERY_KWH, 0, 1)
+	s := &w.ship
+	charge := clamp(ship_battery_kwh(s) / BATTERY_KWH, 0, 1)
+	label := s.drained ? "empty" : s.docked && charge < 0.999 ? "charging" : "battery"
 	bv := fmt.tprintf("%.0f%%", charge * 100)
 	bvs := ui_text_size(w, bv, .Figtree_700, 20)
-	bus := ui_text_size(w, "battery", .Figtree_700, 10)
+	bus := ui_text_size(w, label, .Figtree_700, 10)
 	h := bvs.y + bus.y + 2
 	dia := max(min_dia, h + 18, max(bvs.x, bus.x) + 18)
-	return {charge = charge, bv = bv, bvs = bvs, bus = bus, h = h, dia = dia}
+	return {charge = charge, label = label, bv = bv, bvs = bvs, bus = bus, h = h, dia = dia}
 }
 
 // Draws the circular battery gauge (wavy elixir fill + charge ring) centred at c.
@@ -1102,7 +1105,7 @@ ui_battery_circle :: proc(w: ^World, c: [2]f32, dia: f32, b: Battery_Badge, alph
 	if alpha >= 0.99 do ui_shadow(w, {c.x - r, c.y - r, dia, dia}, r)
 	rl.DrawCircleV(c, r, alpha < 1 ? rl.ColorAlpha(pal.surface, alpha) : pal.surface)
 
-	liquid := b.charge < 0.2 ? pal.warning : pal.green
+	liquid := b.label == "empty" ? pal.red : b.charge < 0.2 ? pal.warning : pal.green
 	ir := r - 6
 	if b.charge > 0.005 && ir > 2 {
 		t := f32(rl.GetTime())
@@ -1135,7 +1138,8 @@ ui_battery_circle :: proc(w: ^World, c: [2]f32, dia: f32, b: Battery_Badge, alph
 	ui_decorate_circle(w, c, r, alpha)
 	top := c.y - b.h / 2
 	ui_text(w, {c.x - b.bvs.x / 2, top}, b.bv, .Figtree_700, 20, pal.text)
-	ui_text(w, {c.x - b.bus.x / 2, top + b.bvs.y + 2}, "battery", .Figtree_700, 10, pal.text_2)
+	label_col := b.label == "empty" ? pal.red : b.label == "charging" ? pal.green : pal.text_2
+	ui_text(w, {c.x - b.bus.x / 2, top + b.bvs.y + 2}, b.label, .Figtree_700, 10, label_col)
 }
 
 // Draws a pointed botanical leaf from stem along unit vector dir, scaled by length and width.

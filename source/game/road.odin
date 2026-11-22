@@ -175,7 +175,7 @@ ROAD_BRAKE :: 1.6
 
 road_speed :: proc(w: ^World, c: Controls, dt: f32) {
 	s := &w.ship
-	target := max(c.throttle, 0) * ROAD_MAX_SPEED / ship_jam_factor(w)
+	target := max(c.throttle, 0) * (s.drained ? EMPTY_DRIVE_MS : ROAD_MAX_SPEED) / ship_jam_factor(w)
 	if target > s.speed {
 		s.speed = min(s.speed + ROAD_ACCEL * dt, target)
 	} else {
@@ -204,7 +204,7 @@ road_advance :: proc(w: ^World, c: Controls, dt: f32) {
 // One fixed step on the road. Returns false when the ship took off (climb > 0): ship_step then flies on.
 road_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
 	s := &w.ship
-	if c.climb > 0 {
+	if c.climb > 0 && !s.drained {
 		s.on_road = false
 		s.lifting = true
 		return false
@@ -214,9 +214,7 @@ road_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
 	s.pos, s.heading = road_at(w, s.road_edge, s.road_s)
 	s.alt = height_at(w, s.pos.x, s.pos.y)
 	s.turn_rate = 0
-	s.used_kwh += power_kw(s.speed, 0) * dt / 3600
-	s.solar_kwh +=
-		solar_kw(cloud_at(w, s.pos.x, s.pos.y, sim_hour(w)), sun_factor(w, sim_hour(w))) * dt / 3600
+	ship_energy(w, power_kw(s.speed, 0), 0, dt)
 	s.warnings = {}
 	s.docked = false
 	return true
@@ -226,7 +224,7 @@ road_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
 // ship_step flies on.
 road_landing_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
 	s := &w.ship
-	if c.climb > 0 {
+	if c.climb > 0 && !s.drained {
 		s.landing = false
 		return false
 	}
@@ -240,9 +238,7 @@ road_landing_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
 	s.turn_rate = diff * k / dt
 	ground := height_at(w, goal.x, goal.y)
 	s.alt = max(s.alt - ROAD_DESCENT_MS * dt, ground)
-	s.used_kwh += power_kw(s.speed, 0) * dt / 3600
-	s.solar_kwh +=
-		solar_kw(cloud_at(w, s.pos.x, s.pos.y, sim_hour(w)), sun_factor(w, sim_hour(w))) * dt / 3600
+	ship_energy(w, power_kw(s.speed, 0), 0, dt)
 	s.warnings = {}
 	s.docked = false
 	if s.alt <= ground {

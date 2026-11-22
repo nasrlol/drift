@@ -112,6 +112,8 @@ World :: struct {
 	// Other cars from the presence gossip (presence.odin), rebuilt from the node table every frame.
 	others:           [PRESENCE_SLOTS]Other_Car,
 	other_count:      int,
+	battery_note:     u8, // the last battery toast: 0 none, 1 low, 2 critical, 3 empty
+	charging_note:    bool, // the "Charging at" toast was shown for this stay at a tower
 	street:           Street, // the third-person street view, street.odin
 	pose_prev:        Ship_Pose, // the ship before the last fixed step
 	pose:             Ship_Pose, // where the ship is drawn this frame (ship.odin)
@@ -351,6 +353,29 @@ game_update :: proc(memory: rawptr) -> bool {
 			alt     = p.alt + (now.alt - p.alt) * t,
 			heading = angle_lerp(p.heading, now.heading, t),
 		}
+	}
+	if w.screen == .Navigate {
+		// Battery toasts (ship.odin, BATTERY_*): once per level on the way down, again after charging past 20 %.
+		s := &w.ship
+		frac := ship_battery_kwh(s) / BATTERY_KWH
+		level: u8 = s.drained ? 3 : frac <= BATTERY_CRITICAL ? 2 : frac <= BATTERY_LOW ? 1 : 0
+		if level > w.battery_note {
+			switch level {
+			case 1:
+				ui_toast(w, "Battery 15 %: dock at a tower to charge")
+			case 2:
+				ui_toast(w, "Battery 5 %: land or dock at a tower soon")
+			case 3:
+				ui_toast(w, "Battery empty: emergency landing, charge at a tower or in the sun")
+			}
+			w.battery_note = level
+		}
+		if !s.drained && frac > 0.2 do w.battery_note = 0
+		charging := s.docked && frac < 0.999
+		if charging && !w.charging_note {
+			ui_toast(w, fmt.tprintf("Charging at %s", hub_name(w, s.dock_hub)))
+		}
+		w.charging_note = s.docked
 	}
 	if !w.script.on {
 		if carpool_poll_trip(w, &w.plan.request_id, &w.plan.partner_pub, &w.plan.trip_accept) {
