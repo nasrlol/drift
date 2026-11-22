@@ -1530,7 +1530,7 @@ street_camera :: proc(w: ^World) {
 		t := st.on_s * 60
 		shake = {math.sin(t * 1.7), math.sin(t * 2.3), math.sin(t * 1.3)} * a
 	}
-	speed := clamp(s.speed / SHIP_MAX_SPEED, 0, 1)
+	speed := clamp(s.speed / w.tune.max_speed, 0, 1)
 	st.view = rl.Camera3D {
 		position   = st.eye + shake,
 		target     = target + shake,

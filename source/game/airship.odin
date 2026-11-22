@@ -50,7 +50,6 @@ Airship :: struct {
 	material:   rl.Material,
 	ready:      bool,
 	skins:      [Car_Skin]Skin_Mesh, // generated bodies (car_models.odin), Concept unused
-	preview:    rl.RenderTexture2D, // the plan panel's skin preview
 }
 
 CAR_VS :: `#version 330

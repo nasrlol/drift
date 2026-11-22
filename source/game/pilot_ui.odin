@@ -23,11 +23,11 @@ cruise_throttle :: proc(w: ^World, input, dt: f32) -> f32 {
 	// The road and the air have their own top speed: on landing or take-off the held throttle is taken from the
 	// speed again, so the car does not jump to the other top speed.
 	if w.cruise < 0 || s.on_road != w.cruise_on_road {
-		top: f32 = s.on_road ? ROAD_MAX_SPEED : SHIP_MAX_SPEED
+		top: f32 = s.on_road ? ROAD_MAX_SPEED : w.tune.max_speed
 		w.cruise = clamp(s.speed / top, 0, 1)
 		w.cruise_on_road = s.on_road
 	}
-	w.cruise = clamp(w.cruise + input * CRUISE_RATE * dt, 0, 1)
+	w.cruise = clamp(w.cruise + input * w.tune.cruise_rate * dt, 0, 1)
 	return w.cruise
 }
 
@@ -73,9 +73,9 @@ pilot_ui :: proc(w: ^World) {
 		}
 	}
 
-	// Speed circle 16 px from the left, 84 px above the sheet.
+	// Speed circle 16 px from the left, the battery circle under it, 84 px above the sheet.
 	{
-		c := [2]f32{16 + SPEED_CIRCLE / 2, sheet.y - 84 - SPEED_CIRCLE / 2}
+		c := [2]f32{16 + SPEED_CIRCLE / 2, sheet.y - 84 - SPEED_CIRCLE - 12 - SPEED_CIRCLE / 2}
 		ui_shadow(
 			w,
 			{c.x - SPEED_CIRCLE / 2, c.y - SPEED_CIRCLE / 2, SPEED_CIRCLE, SPEED_CIRCLE},
@@ -87,6 +87,21 @@ pilot_ui :: proc(w: ^World) {
 		ui_text(w, {c.x - vs.x / 2, c.y - 19}, v, .Figtree_700, 25, {32, 33, 36, 255})
 		us := ui_text_size(w, "km/h", .Figtree_700, 11)
 		ui_text(w, {c.x - us.x / 2, c.y + 8}, "km/h", .Figtree_700, 11, {95, 99, 104, 255})
+	}
+	{
+		c := [2]f32{16 + SPEED_CIRCLE / 2, sheet.y - 84 - SPEED_CIRCLE / 2}
+		r := f32(SPEED_CIRCLE / 2)
+		ui_shadow(w, {c.x - r, c.y - r, SPEED_CIRCLE, SPEED_CIRCLE}, r)
+		rl.DrawCircleV(c, r, rl.WHITE)
+		// The charge as a ring from the top, clockwise.
+		charge := clamp(ship_battery_kwh(s) / BATTERY_KWH, 0, 1)
+		rl.DrawRing(c, r - 6, r - 2, 0, 360, 48, pal.surface_3)
+		rl.DrawRing(c, r - 6, r - 2, -90, -90 + 360 * charge, 48, pal.green)
+		v := fmt.tprintf("%.0f%%", charge * 100)
+		vs := ui_text_size(w, v, .Figtree_700, 20)
+		ui_text(w, {c.x - vs.x / 2, c.y - 16}, v, .Figtree_700, 20, {32, 33, 36, 255})
+		bs := ui_text_size(w, "battery", .Figtree_700, 10)
+		ui_text(w, {c.x - bs.x / 2, c.y + 7}, "battery", .Figtree_700, 10, {95, 99, 104, 255})
 	}
 
 	// Re-centre after the user moved the map.
