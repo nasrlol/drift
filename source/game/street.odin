@@ -138,6 +138,27 @@ Street :: struct {
 	ready:      bool,
 }
 
+// Last light uniforms sent to one shader (skip unchanged uploads on idle / steady frames).
+Street_Light_Cache :: struct {
+	valid:     bool,
+	light_vp:  rl.Matrix,
+	slot:      i32,
+	shadow_on: f32,
+	sun_dir:   [3]f32,
+	sun_col:   [3]f32,
+	sky_zen:   [3]f32,
+	sky_hor:   [3]f32,
+	sky_curve: f32,
+	sky_glow:  f32,
+	amb_sky:   [3]f32,
+	amb_gnd:   [3]f32,
+	cam:       [3]f32,
+	haze:      [2]f32,
+	bend:      f32,
+	vp_up:     [4]f32,
+	direct:    f32,
+}
+
 // Uniform locations of STREET_GLSL in one shader.
 Street_Light_Locs :: struct {
 	sun_dir,
@@ -156,6 +177,7 @@ Street_Light_Locs :: struct {
 	bend,
 	vp_up,
 	direct: i32,
+	cache:                                                                                                                                      Street_Light_Cache,
 }
 
 street_light_locs :: proc(sh: rl.Shader) -> Street_Light_Locs {
@@ -179,28 +201,30 @@ street_light_locs :: proc(sh: rl.Shader) -> Street_Light_Locs {
 	}
 }
 
-street_light_set :: proc(w: ^World, sh: rl.Shader, l: Street_Light_Locs, cam: [3]f32) {
+street_light_set :: proc(w: ^World, sh: rl.Shader, l: ^Street_Light_Locs, cam: [3]f32) {
 	look := street_look(w)
-	cam := cam
+	c := &l.cache
+	force := !c.valid
 	slot := i32(SHADOW_SLOT)
 	on: f32 = w.street.shadow_tex != 0 ? 1 : 0
-	rl.SetShaderValueMatrix(sh, l.light_vp, w.street.light_vp)
-	rl.SetShaderValue(sh, l.shadow_map, &slot, .INT)
-	rl.SetShaderValue(sh, l.shadow_on, &on, .FLOAT)
-	rl.SetShaderValue(sh, l.sun_dir, &look.sun_dir, .VEC3)
-	rl.SetShaderValue(sh, l.sun_col, &look.sun_col, .VEC3)
-	rl.SetShaderValue(sh, l.sky_zen, &look.sky_zen, .VEC3)
-	rl.SetShaderValue(sh, l.sky_hor, &look.sky_hor, .VEC3)
-	rl.SetShaderValue(sh, l.sky_curve, &look.sky_curve, .FLOAT)
-	rl.SetShaderValue(sh, l.sky_glow, &look.sky_glow, .FLOAT)
-	rl.SetShaderValue(sh, l.amb_sky, &look.amb_up, .VEC3)
-	rl.SetShaderValue(sh, l.amb_gnd, &look.amb_down, .VEC3)
-	rl.SetShaderValue(sh, l.cam, &cam, .VEC3)
-	rl.SetShaderValue(sh, l.haze, &look.haze, .VEC2)
-	rl.SetShaderValue(sh, l.bend, &w.street.bend, .FLOAT)
-	rl.SetShaderValue(sh, l.vp_up, &w.street.vp_up, .VEC4)
 	direct: f32 = w.street.post.hdr.id == 0 ? 1 : 0
-	rl.SetShaderValue(sh, l.direct, &direct, .FLOAT)
+	shader_set_mat(sh, l.light_vp, &c.light_vp, w.street.light_vp, force)
+	shader_set(sh, l.shadow_map, &c.slot, slot, .INT, force)
+	shader_set(sh, l.shadow_on, &c.shadow_on, on, .FLOAT, force)
+	shader_set(sh, l.sun_dir, &c.sun_dir, look.sun_dir, .VEC3, force)
+	shader_set(sh, l.sun_col, &c.sun_col, look.sun_col, .VEC3, force)
+	shader_set(sh, l.sky_zen, &c.sky_zen, look.sky_zen, .VEC3, force)
+	shader_set(sh, l.sky_hor, &c.sky_hor, look.sky_hor, .VEC3, force)
+	shader_set(sh, l.sky_curve, &c.sky_curve, look.sky_curve, .FLOAT, force)
+	shader_set(sh, l.sky_glow, &c.sky_glow, look.sky_glow, .FLOAT, force)
+	shader_set(sh, l.amb_sky, &c.amb_sky, look.amb_up, .VEC3, force)
+	shader_set(sh, l.amb_gnd, &c.amb_gnd, look.amb_down, .VEC3, force)
+	shader_set(sh, l.cam, &c.cam, cam, .VEC3, force)
+	shader_set(sh, l.haze, &c.haze, look.haze, .VEC2, force)
+	shader_set(sh, l.bend, &c.bend, w.street.bend, .FLOAT, force)
+	shader_set(sh, l.vp_up, &c.vp_up, w.street.vp_up, .VEC4, force)
+	shader_set(sh, l.direct, &c.direct, direct, .FLOAT, force)
+	c.valid = true
 }
 
 // The light of every street view shader (STREET_GLSL is pasted into each): one sun, a sky gradient that also
@@ -1634,7 +1658,7 @@ street_draw :: proc(w: ^World) {
 		rl.SetShaderValue(sh, st.sky_loc.screen, &render, .VEC2)
 		sky_clouds := [2]f32{w.sky_edit.clouds ? w.sky_edit.cloud_amt : 0, f32(w.tick) * SIM_DT}
 		rl.SetShaderValue(sh, st.sky_loc.clouds, &sky_clouds, .VEC2)
-		street_light_set(w, sh, st.sky_loc.light, st.view.position)
+		street_light_set(w, sh, &st.sky_loc.light, st.view.position)
 		rl.BeginShaderMode(sh)
 		rl.DrawRectangle(0, 0, i32(screen.x), i32(screen.y), rl.WHITE)
 		rl.EndShaderMode()
@@ -1661,7 +1685,7 @@ street_draw :: proc(w: ^World) {
 		sh := st.material.shader
 		origin := st.origin * 1000
 		rl.SetShaderValue(sh, st.loc.origin, &origin, .VEC2)
-		street_light_set(w, sh, st.loc.light, st.view.position)
+		street_light_set(w, sh, &st.loc.light, st.view.position)
 		cities: [16][3]f32
 		for i in 0 ..< min(w.buildings.count, 16) {
 			d := (w.buildings.origins[i] - st.origin) * 1000
@@ -1720,7 +1744,7 @@ street_draw :: proc(w: ^World) {
 		// 3: rivers, sidewalks, roads and zebra crossings (layers 1 .. 4, STREET_ROAD_FS).
 		road_layer: f32 = 1
 		rl.SetShaderValue(st.road.shader, st.road_loc.layer, &road_layer, .FLOAT)
-		street_light_set(w, st.road.shader, st.road_loc.light, st.view.position)
+		street_light_set(w, st.road.shader, &st.road_loc.light, st.view.position)
 		tiles_update_draw(
 			w,
 			&st.roads,
@@ -1735,13 +1759,13 @@ street_draw :: proc(w: ^World) {
 
 	// 4: the houses (real and generated, lit, with facades and roofs), then the trees (the map's clumps for now:
 	// buildings_draw with no reach only sets their shader's uniforms).
-	street_light_set(w, st.lit.shader, st.lit_loc, st.view.position)
+	street_light_set(w, st.lit.shader, &st.lit_loc, st.view.position)
 	tiles_update_draw(w, &st.houses, HOUSE_TILE_KM, HOUSE_REACH_KM, houses_build_tile, st.lit, centre, place)
 	trees_draw(w, centre, TREES_REACH_KM, st.view.position, false)
 	solarpunk_draw(w, centre, PROP_REACH_KM, st.view.position, false)
 
 	// 5: the cars.
-	street_light_set(w, st.car.shader, st.car_loc, st.view.position)
+	street_light_set(w, st.car.shader, &st.car_loc, st.view.position)
 	street_cars(w, &st.car)
 	rl.EndMode3D()
 	if st.shadow_tex != 0 {

@@ -530,7 +530,7 @@ trees_draw :: proc(w: ^World, target: [2]f32, reach: f32, cam: [3]f32, shadow: b
 		}
 	}
 	mat := shadow ? tr.depth : tr.lit
-	if !shadow do street_light_set(w, tr.lit.shader, tr.lit_loc, cam)
+	if !shadow do street_light_set(w, tr.lit.shader, &tr.lit_loc, cam)
 	for k in 0 ..< TREE_KINDS {
 		if len(near[k]) > 0 do rl.DrawMeshInstanced(tr.near[k], mat, raw_data(near[k]), i32(len(near[k])))
 	}

@@ -642,7 +642,7 @@ solarpunk_draw :: proc(w: ^World, target: [2]f32, reach: f32, cam: [3]f32, shado
 
 	mat := shadow ? st.trees.depth : sp.lit
 	if !shadow {
-		street_light_set(w, sp.lit.shader, sp.lit_loc, cam)
+		street_light_set(w, sp.lit.shader, &sp.lit_loc, cam)
 		mat.maps[0].color = rl.WHITE
 	}
 	draw_batch :: proc(mesh: rl.Mesh, mat: rl.Material, items: []rl.Matrix) {

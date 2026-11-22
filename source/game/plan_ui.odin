@@ -938,15 +938,30 @@ layers_draw_ground :: proc(w: ^World) {
 	pal := palette(w)
 	l := &w.plan.layers
 	hour := sim_hour(w)
-	sun := sun_factor(w, hour)
 	if (!l.hide_gusts || !l.hide_solar) && w.line_meshes.built {
-		// Soft: a color per grid point, the GPU blends across each quad.
-		colors := make([][4]u8, GROUND_VERTICES, context.temp_allocator)
-		for gy in 0 ..< GROUND_H - 1 {
-			for gx in 0 ..< GROUND_W - 1 {
-				corners := ground_quad(gx, gy)
-				for c, k in corners {
-					x, y := f32(c.x * GROUND_CELL_KM), f32(c.y * GROUND_CELL_KM)
+		lm := &w.line_meshes
+		key := Ground_Key {
+			valid        = true,
+			hour         = hour,
+			wind_layer   = l.wind_layer,
+			hide_gusts   = l.hide_gusts,
+			hide_solar   = l.hide_solar,
+			ground_sun   = w.cloud_edit.ground_sun,
+			ground_shade = w.cloud_edit.ground_shade,
+			warning      = pal.warning,
+			red          = pal.red,
+			sun          = pal.sun,
+			weather      = w.weather_hash,
+		}
+		if key != lm.ground_key {
+			lm.ground_key = key
+			sun := sun_factor(w, hour)
+			// Soft: evaluate each grid point once, then fill each quad so the GPU blends across corners.
+			grid := make([][4]u8, GROUND_W * GROUND_H, context.temp_allocator)
+			for gy in 0 ..< GROUND_H {
+				y := f32(gy * GROUND_CELL_KM)
+				for gx in 0 ..< GROUND_W {
+					x := f32(gx * GROUND_CELL_KM)
 					col := rl.Color{}
 					if !l.hide_gusts {
 						g := gust_at(w, x, y, l.wind_layer, hour)
@@ -969,12 +984,21 @@ layers_draw_ground :: proc(w: ^World) {
 						}
 					}
 					col.a = u8(f32(col.a) * belgium_fade(w, x, y))
-					colors[(gy * (GROUND_W - 1) + gx) * 6 + k] = {col.r, col.g, col.b, col.a}
+					grid[gy * GROUND_W + gx] = {col.r, col.g, col.b, col.a}
 				}
 			}
+			colors := make([][4]u8, GROUND_VERTICES, context.temp_allocator)
+			for gy in 0 ..< GROUND_H - 1 {
+				for gx in 0 ..< GROUND_W - 1 {
+					corners := ground_quad(gx, gy)
+					base := (gy * (GROUND_W - 1) + gx) * 6
+					for c, k in corners {
+						colors[base + k] = grid[c.y * GROUND_W + c.x]
+					}
+				}
+			}
+			rl.UpdateMeshBuffer(lm.ground, 3, raw_data(colors), i32(len(colors) * size_of(colors[0])), 0)
 		}
-		lm := &w.line_meshes
-		rl.UpdateMeshBuffer(lm.ground, 3, raw_data(colors), i32(len(colors) * size_of(colors[0])), 0)
 		rl.DrawMesh(lm.ground, lm.ground_material, rl.Matrix(1))
 	}
 	if !l.hide_no_fly {

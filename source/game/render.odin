@@ -216,6 +216,8 @@ Line_Meshes :: struct {
 	// ground layers (plan_ui layers_draw_ground): a vertex colored grid over the map
 	ground:          rl.Mesh,
 	ground_material: rl.Material,
+	ground_key:      Ground_Key,
+	line_cache:      Line_Shader_Cache,
 	// land use (draw order 1): the baked area triangles, vertex colors from the palette
 	areas:           rl.Mesh,
 	area_colors:     [Area_Kind]rl.Color, // the colors areas was built with (settings_apply rebuilds it)
@@ -384,6 +386,71 @@ line_meshes_unload :: proc(lm: ^Line_Meshes) {
 	rl.UnloadMaterial(lm.ground_material)
 	rl.UnloadMaterial(lm.material)
 	lm^ = {}
+}
+
+Ground_Key :: struct {
+	valid:        bool,
+	hour:         int,
+	wind_layer:   int,
+	hide_gusts:   bool,
+	hide_solar:   bool,
+	ground_sun:   f32,
+	ground_shade: f32,
+	warning:      rl.Color,
+	red:          rl.Color,
+	sun:          rl.Color,
+	weather:      [32]u8,
+}
+
+Line_Shader_Cache :: struct {
+	valid:      bool,
+	screen:     [2]f32,
+	fog_c:      [3]f32,
+	fog_r:      [2]f32,
+	bias:       f32,
+	dash_width: f32,
+	dash_on:    f32,
+	dash_off:   f32,
+	colors:     [LINE_COLORS][4]f32,
+	widths:     [LINE_COLORS]f32,
+}
+
+// Uniform upload helpers that skip unchanged values on a shader.
+shader_set :: proc(
+	sh: rl.Shader,
+	loc: i32,
+	cached: ^$T,
+	val: T,
+	type: rl.ShaderUniformDataType,
+	force := false,
+) {
+	if !force && cached^ == val do return
+	cached^ = val
+	if loc < 0 do return
+	v := val
+	rl.SetShaderValue(sh, loc, &v, type)
+}
+
+shader_set_v :: proc(
+	sh: rl.Shader,
+	loc: i32,
+	cached: ^[$N]$T,
+	val: [N]T,
+	type: rl.ShaderUniformDataType,
+	force := false,
+) {
+	if !force && cached^ == val do return
+	cached^ = val
+	if loc < 0 do return
+	v := val
+	rl.SetShaderValueV(sh, loc, &v, type, N)
+}
+
+shader_set_mat :: proc(sh: rl.Shader, loc: i32, cached: ^rl.Matrix, val: rl.Matrix, force := false) {
+	if !force && cached^ == val do return
+	cached^ = val
+	if loc < 0 do return
+	rl.SetShaderValueMatrix(sh, loc, val)
 }
 
 // The palette color of each land use kind, baked into the areas mesh.

@@ -44,11 +44,20 @@ Car_Part :: struct {
 	pivot: [3]f32,
 }
 
+Car_Shader_Locs :: struct {
+	light, view, sky, ground, sun: i32,
+	valid:                         bool,
+	last_light, last_view:         [3]f32,
+	last_sky, last_ground:         [3]f32,
+	last_sun:                      [3]f32,
+}
+
 Airship :: struct {
 	parts:      [CAR_MAX_PARTS]Car_Part,
 	part_count: int,
 	glow:       rl.Mesh, // thruster disc under a folded wheel
 	material:   rl.Material,
+	loc:        Car_Shader_Locs,
 	ready:      bool,
 	skins:      [Car_Skin]Skin_Mesh, // generated bodies (car_models.odin), Concept unused
 	preview:    rl.RenderTexture2D, // dropdown thumbnails, built on first open (car_preview_atlas)
@@ -261,7 +270,15 @@ airship_build :: proc(w: ^World) {
 	}
 
 	a.material = rl.LoadMaterialDefault()
-	a.material.shader = rl.LoadShaderFromMemory(CAR_VS, CAR_FS)
+	sh := rl.LoadShaderFromMemory(CAR_VS, CAR_FS)
+	a.material.shader = sh
+	a.loc = {
+		light  = rl.GetShaderLocation(sh, "light_dir"),
+		view   = rl.GetShaderLocation(sh, "view_dir"),
+		sky    = rl.GetShaderLocation(sh, "sky"),
+		ground = rl.GetShaderLocation(sh, "ground"),
+		sun    = rl.GetShaderLocation(sh, "sun"),
+	}
 	a.ready = a.part_count > 0
 	if a.ready do car_skins_build(w, tmp)
 	logf(w, "car", "car model: %d parts", a.part_count)
@@ -441,6 +458,7 @@ car_preview_atlas :: proc(w: ^World) -> rl.Texture2D {
 }
 
 airship_unload :: proc(a: ^Airship) {
+	a.loc.valid = false
 	if a.preview.id != 0 {
 		rl.UnloadRenderTexture(a.preview)
 		a.preview = {}
@@ -454,13 +472,16 @@ car_shader_light :: proc(w: ^World, light, view: [3]f32) {
 }
 
 car_shader_set :: proc(w: ^World, light, view, sky, gnd, sun: [3]f32) {
-	sh := w.airship.material.shader
-	light, view, sky, gnd, sun := light, view, sky, gnd, sun
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "light_dir"), &light, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "view_dir"), &view, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sky"), &sky, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "ground"), &gnd, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sun"), &sun, .VEC3)
+	a := &w.airship
+	sh := a.material.shader
+	l := &a.loc
+	force := !l.valid
+	shader_set(sh, l.light, &l.last_light, light, .VEC3, force)
+	shader_set(sh, l.view, &l.last_view, view, .VEC3, force)
+	shader_set(sh, l.sky, &l.last_sky, sky, .VEC3, force)
+	shader_set(sh, l.ground, &l.last_ground, gnd, .VEC3, force)
+	shader_set(sh, l.sun, &l.last_sun, sun, .VEC3, force)
+	l.valid = true
 }
 
 // Body and wheels of one skin with model matrix m (inside BeginMode3D). Wheels roll on the road and fold flat

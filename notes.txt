@@ -1358,3 +1358,10 @@ Measured on Windows (Ryzen 7940HS, Radeon 780M + RTX 4060), profile build, 1440 
 Main results: street view 4.1 ms p50 in profile and 17.9 ms in debug (trees_draw 12.1 ms there), route planning
 up to 44 ms in the frame loop, route lines 2.5-4.2 ms per frame, the game starts on the integrated GPU, ship_step
 13 us against the 1 us budget (road_try_land), first frame 623 ms. Not measured: cache misses, the live network path.
+- #98 (cache ground layer colors + shader uniforms): Ground_Layers caches the (hour, layer, toggles, cloud_edit,
+  palette, weather_hash) key in Line_Meshes.ground_key and evaluates each GROUND_W x GROUND_H corner once when dirty;
+  car_shader_set caches Airship.loc locations and skips unchanged uniforms; street_light_set caches per-shader
+  light uniforms in Street_Light_Locs.cache; Map_Lines caches Line_Shader_Cache in Line_Meshes and skips unused
+  globe/wind/redundant color+width uploads (invalidated in line_meshes_unload, street_unload, game_hot_reloaded).
+  Measured on Apple M2 (profile build, 1440 x 900): Ground_Layers 1.854 ms -> 0.015 ms (Draw 5.39 -> 4.04 ms);
+  street_low Street_Draw excl 0.762 ms -> 0.655 ms.

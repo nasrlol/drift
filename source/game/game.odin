@@ -217,6 +217,7 @@ game_hot_reloaded :: proc(memory: rawptr) {
 	line_meshes_unload(&w.line_meshes)
 	street_unload(&w.street)
 	globe_unload(&w.globe)
+	w.airship.loc.valid = false
 }
 
 @(export)
@@ -617,48 +618,58 @@ game_update :: proc(memory: rawptr) -> bool {
 			// Fog starts a bit beyond the ship in the chase view, none from above (view_edit.odin).
 			fog := view_fog_range(w)
 			sh := lm.material.shader
+			lc := &lm.line_cache
+			force := !lc.valid
 			// Border widths and the sea border's dashes come from the border editor (border_edit.odin). Only the
 			// sea border is dashed and it has no casing: the casing pass draws dashed segments 0 wide.
 			dash_on, dash_off := w.border_edit.dash_on, w.border_edit.dash_off
 			no_dash: f32 = 0
-			rl.SetShaderValue(sh, lm.loc_dash_on, &dash_on, .FLOAT)
-			rl.SetShaderValue(sh, lm.loc_dash_off, &dash_off, .FLOAT)
-			rl.SetShaderValue(sh, lm.loc_dash_width, &no_dash, .FLOAT)
-			rl.SetShaderValue(sh, lm.loc_screen, &screen, .VEC2)
-			rl.SetShaderValue(sh, lm.loc_fog_c, &horizon, .VEC3)
-			rl.SetShaderValue(sh, lm.loc_fog_r, &fog, .VEC2)
-			{
+			shader_set(sh, lm.loc_dash_on, &lc.dash_on, dash_on, .FLOAT, force)
+			shader_set(sh, lm.loc_dash_off, &lc.dash_off, dash_off, .FLOAT, force)
+			shader_set(sh, lm.loc_dash_width, &lc.dash_width, no_dash, .FLOAT, force)
+			shader_set(sh, lm.loc_screen, &lc.screen, screen, .VEC2, force)
+			shader_set(sh, lm.loc_fog_c, &lc.fog_c, horizon, .VEC3, force)
+			shader_set(sh, lm.loc_fog_r, &lc.fog_r, fog, .VEC2, force)
+			if w.globe.ready &&
+			   (w.globe.lines[.Coastline].vertexCount > 0 ||
+					   w.globe.lines[.Country_Border].vertexCount > 0) {
 				bias := f32(0.5 * LINE_DEPTH_BIAS)
-				rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
-				rl.SetShaderValueV(sh, lm.loc_colors, &colors, .VEC4, LINE_COLORS)
+				shader_set(sh, lm.loc_bias, &lc.bias, bias, .FLOAT, force)
+				shader_set_v(sh, lm.loc_colors, &lc.colors, colors, .VEC4, force)
 				// The globe's lines take the Border slot, one kind per draw.
 				for set, kind in ([World_Line_Kind]Border_Set{.Coastline = .Coastlines, .Country_Border = .Countries}) {
+					if w.globe.lines[kind].vertexCount <= 0 do continue
 					fill[Map_Kind.Border] = border_width(w, set)
-					rl.SetShaderValueV(sh, lm.loc_widths, &fill, .FLOAT, LINE_COLORS)
+					shader_set_v(sh, lm.loc_widths, &lc.widths, fill, .FLOAT, force)
+					force = false
 					globe_draw_lines(w, kind)
 				}
 			}
 			fill[Map_Kind.Border] = border_width(w, .Belgium_Land)
 			if lm.map_lines.vertexCount > 0 {
 				bias := f32(LINE_DEPTH_BIAS)
-				rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
-				rl.SetShaderValueV(sh, lm.loc_colors, &casing_colors, .VEC4, LINE_COLORS)
-				rl.SetShaderValueV(sh, lm.loc_widths, &casing, .FLOAT, LINE_COLORS)
+				shader_set(sh, lm.loc_bias, &lc.bias, bias, .FLOAT, force)
+				shader_set_v(sh, lm.loc_colors, &lc.colors, casing_colors, .VEC4, force)
+				shader_set_v(sh, lm.loc_widths, &lc.widths, casing, .FLOAT, force)
+				force = false
 				rl.DrawMesh(lm.map_lines, lm.material, rl.Matrix(1))
 				bias = 2 * LINE_DEPTH_BIAS
 				sea := border_width(w, .Belgium_Sea)
-				rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
-				rl.SetShaderValue(sh, lm.loc_dash_width, &sea, .FLOAT)
-				rl.SetShaderValueV(sh, lm.loc_colors, &colors, .VEC4, LINE_COLORS)
-				rl.SetShaderValueV(sh, lm.loc_widths, &fill, .FLOAT, LINE_COLORS)
+				shader_set(sh, lm.loc_bias, &lc.bias, bias, .FLOAT)
+				shader_set(sh, lm.loc_dash_width, &lc.dash_width, sea, .FLOAT)
+				shader_set_v(sh, lm.loc_colors, &lc.colors, colors, .VEC4)
+				shader_set_v(sh, lm.loc_widths, &lc.widths, fill, .FLOAT)
 				rl.DrawMesh(lm.map_lines, lm.material, rl.Matrix(1))
-				rl.SetShaderValue(sh, lm.loc_dash_width, &no_dash, .FLOAT)
+				shader_set(sh, lm.loc_dash_width, &lc.dash_width, no_dash, .FLOAT)
 			}
-			bias := f32(3 * LINE_DEPTH_BIAS)
-			rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
-			rl.SetShaderValueV(sh, lm.loc_colors, &colors, .VEC4, LINE_COLORS)
-			rl.SetShaderValueV(sh, lm.loc_widths, &fill, .FLOAT, LINE_COLORS)
-			if show_wind do rl.DrawMesh(lm.wind, lm.material, rl.Matrix(1))
+			if show_wind {
+				bias := f32(3 * LINE_DEPTH_BIAS)
+				shader_set(sh, lm.loc_bias, &lc.bias, bias, .FLOAT, force)
+				shader_set_v(sh, lm.loc_colors, &lc.colors, colors, .VEC4, force)
+				shader_set_v(sh, lm.loc_widths, &lc.widths, fill, .FLOAT, force)
+				rl.DrawMesh(lm.wind, lm.material, rl.Matrix(1))
+			}
+			lc.valid = true
 
 			// Draw order 4: the 3D buildings around the cities and the trees, over the roads. They grow out of the
 			// ground by their size on the screen (buildings.odin).

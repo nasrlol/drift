@@ -285,7 +285,7 @@ PERFORMANCE (audit 2026-11-21: docs/performance, tracking issue #115; one issue 
 [x] perf: road_try_land scans every road point (ship_step 13x over budget) (#95)
 [ ] perf: draw_path_strip is the largest CPU cost on the plan and nav screens (#96)
 [x] perf: draw the A* scan animation as one mesh (#97)
-[ ] perf: cache the ground layer colors and unchanged shader uniforms (#98)
+[x] perf: cache the ground layer colors and unchanged shader uniforms (#98)
 [x] perf: present frames in step with the display (#99)
 [ ] perf: run route planning outside the frame (#100)
 [ ] perf: trees_draw rebuilds all tree matrices twice per frame (#101)
