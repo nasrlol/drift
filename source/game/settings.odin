@@ -7,7 +7,7 @@ import "core:strings"
 import rl "vendor:raylib"
 
 // Settings panel (nasr, 2026-11-22): F2 opens one panel with a tab per group: Speed (tune.odin), Borders
-// (border_edit.odin), Clouds (cloud_edit.odin), Wind (wind_edit.odin), Grass (grass_edit.odin), View (view_edit.odin), and the look of the game here: Colors (every palette entry),
+// (border_edit.odin), Clouds (cloud_edit.odin), Wind (wind_edit.odin), Grass (grass_edit.odin), View (view_edit.odin), Sky (sky_edit.odin), and the look of the game here: Colors (every palette entry),
 // Fonts (text size, line spacing and which family stands in for each of the design's three) and Corners (one scale for every
 // rounded corner). Debug builds only (nasr: the release runs with the project's settings). The defaults are the
 // code with assets/settings.txt on top (settings_store.odin); each tab's Reset goes back to them. Every change
@@ -20,6 +20,7 @@ Settings_Tab :: enum {
 	Wind,
 	Grass,
 	View,
+	Sky,
 	Colors,
 	Fonts,
 	Corners,
@@ -30,6 +31,7 @@ Settings :: struct {
 	tab:        int, // a Settings_Tab (ui_segment takes an int)
 	drag:       int, // slider id being dragged, 0 = none
 	color:      int, // the palette entry chosen in the Colors tab, index into the Palette fields
+	sky_color:  int, // the color chosen in the Sky tab: zenith, horizon, sunlight
 	height:     f32, // the panel's height last frame: the card is drawn before its tab knows its height
 	text_scale: f32, // the text size the font atlases were made for (settings_apply)
 	loaded:     bool, // cache/settings.txt was read (first frame of the panel)
@@ -166,6 +168,8 @@ settings_reset :: proc(w: ^World, tab: Settings_Tab) {
 		w.grass_edit = w.setting_defaults.grass
 	case .View:
 		w.view_edit = w.setting_defaults.view
+	case .Sky:
+		w.sky_edit = w.setting_defaults.sky
 	case .Colors:
 		w.look.palette = def.palette
 	case .Fonts:
@@ -239,6 +243,8 @@ settings_ui :: proc(w: ^World) {
 		y = grass_tab(w, x, y, inner, &s.drag)
 	case .View:
 		y = view_tab(w, x, y, inner, &s.drag)
+	case .Sky:
+		y = sky_tab(w, x, y, inner, &s.drag)
 	case .Colors:
 		y = colors_tab(w, x, y, inner, &s.drag)
 	case .Fonts:

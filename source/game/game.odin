@@ -96,6 +96,7 @@ World :: struct {
 	cloud_edit:       Cloud_Edit, // clouds, cloud_edit.odin
 	wind_edit:        Wind_Edit, // wind lines, wind_edit.odin
 	view_edit:        View_Edit, // the tilted map's horizon, view_edit.odin
+	sky_edit:         Sky_Edit, // street view sky and sun, sky_edit.odin
 	grass_edit:       Grass_Edit, // street view grass, grass_edit.odin
 	// Other cars from the presence gossip (presence.odin), copied from the node table every PRESENCE_COPY_S.
 	others:           [PRESENCE_SLOTS]Other_Car,
