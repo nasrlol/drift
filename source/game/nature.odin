@@ -24,8 +24,8 @@ nature_rand :: proc(seed: ^u32) -> f32 {
 // same way for every tile, a tile keeps the ones inside it.
 nature_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	pos := make([dynamic][3]f32, 0, 8192, context.temp_allocator)
+	norm := make([dynamic][3]f32, 0, 8192, context.temp_allocator)
 	col := make([dynamic][4]u8, 0, 8192, context.temp_allocator)
-	LIGHT :: [2]f32{-0.7071, -0.7071}
 	for a, ai in w.m.areas {
 		if Area_Kind(a.kind) != .Park do continue
 		pts := w.m.area_points[a.start:][:a.count]
@@ -56,15 +56,16 @@ nature_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 					q0 := c + [2]f32{math.cos(a0), math.sin(a0)} * r
 					q1 := c + [2]f32{math.cos(a1), math.sin(a1)} * r
 					normal := linalg.normalize([2]f32{math.cos((a0 + a1) / 2), math.sin((a0 + a1) / 2)})
-					light := 0.7 + 0.25 * linalg.dot(normal, LIGHT)
-					low, top := u8(light * 0.75 * 255), u8(min(light * 1.15, 1) * 255)
+					cn := linalg.normalize([3]f32{normal.x, normal.y, -0.5})
+					low, top := u8(191), u8(255)
 					append(&pos, [3]f32{q0.x, q0.y, -h * 0.3}, [3]f32{q1.x, q1.y, -h * 0.3}, apex)
+					append(&norm, cn, cn, cn)
 					append(&col, [4]u8{low, 0, 255, 255}, [4]u8{low, 0, 255, 255}, [4]u8{top, 0, 255, 255})
 				}
 			}
 		}
 	}
-	return tile_mesh(pos[:], col[:])
+	return tile_mesh(pos[:], col[:], norm[:])
 }
 
 // Inside BeginMode3D, right after buildings_draw (which sets the shader's uniforms), around target (km).

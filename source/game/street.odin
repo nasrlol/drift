@@ -1823,6 +1823,7 @@ street_hud :: proc(w: ^World) {
 	box_h := max(f32(92), 12 + size.y + 4 + row_h + 12)
 	box := rl.Rectangle{PAD, screen.y - PAD - box_h, 210, box_h}
 	round_rect(w, box, 14, rl.ColorAlpha(pal.surface, 0.72))
+	ui_decorate_rect(w, box, 14, 0.72)
 	ui_text(w, {box.x + 18, box.y + 12}, speed, .Figtree_700, 40, pal.text)
 	ui_text(w, {box.x + 22 + size.x, box.y + 32}, "km/h", .Roboto_500, 14, pal.text_2)
 	row_y := box.y + 12 + size.y + 4

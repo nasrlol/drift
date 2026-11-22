@@ -219,8 +219,8 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   w.font: Roboto rasterized by raylib on the first frame (needs a window, so never in headless),
                   FONT_PX 14, codepoints 32..255. Falls back to the raylib font with a log line if loading fails.
                   Unloaded in game_shutdown. The profiler overlay still uses the raylib font.
-                  "(c) OpenStreetMap contributors" (with a real copyright sign) bottom right on a white box,
-                  required by the ODbL wherever the map is shown.
+                  "(c) OpenStreetMap contributors, car model: Eric Chadwick (CC BY 4.0)" (with a real copyright
+                  sign) bottom right, without a background box, required by the ODbL / CC BY 4.0.
                   Camera: w.view (View) = pan (km from the map centre to the screen centre) + zoom (log2 relative
                   to the fitted view, ZOOM_MIN -1 .. ZOOM_MAX 7). Zero = the whole map fitted to 95% of the window.
                   Each frame it becomes a Camera2D, zoom = px per km. Pan is clamped so the screen centre stays on
@@ -244,7 +244,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   colors go to the line shader as a uniform. The profiler overlay keeps its own fixed colors.
                   Map colors (same Palette, design "Kaart" table): land, city, park, farmland, marsh, beach, water,
                   roof, wall, motorway / main_road / street / track with their _casing, route / alt_route with their
-                  _casing, sky, horizon. Used now: land (clear color), water (rivers), motorway; the border has no
+                  _casing, sky, horizon, space. Used now: land -> space (clear color, lerped by zoom < 0), water (rivers), motorway; the border has no
                   design color and uses text_2. Wind trails use text: the design names a speed ramp (white < 6 m/s,
                   mint < 10, yellow < 14, coral above) without values, open question.
                   Line meshes (Line_Meshes in render.odin, built inline in game_update): map lines and wind trails
@@ -740,12 +740,17 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   BORDER_DEFAULT_PX (picked in the panel, nasr 2026-11-22: land 0.8, sea 0.3, countries 0.6,
                   coastlines 0 px) and LINE_DASH_*_PX. LINE_VS takes dash_width for dashed segments instead of
                   their widths entry (0 in every pass but the fill pass of map_lines).
-                  Sky (sky_edit.odin, w.sky_edit): the street view's sky and sun. Zenith, horizon and sunlight
-                  colors (sRGB swatches with R, G, B sliders, lin = squared sRGB as STREET_GLSL), gradient curve
-                  (sky_col: mix(sky_hor, sky_zen, e^sky_curve)), horizon glow, sun strength, height and direction
-                  (sun_dir, so the shadows follow), and a preview strip of the gradient. street_look(w) = STREET_LOOK
-                  with these applied, read by every street pass instead of the constant; amb_up and sky_amb take
-                  the sky's tint. Defaults from STREET_LOOK (colors to within 8 bit rounding).
+                  Sky (sky_edit.odin, w.sky_edit): the street view and 2D map's sky and sun. Zenith, horizon and
+                  sunlight colors (sRGB swatches with R, G, B sliders, lin = squared sRGB as STREET_GLSL), gradient
+                  curve (sky_col: mix(sky_hor, sky_zen, e^sky_curve)), horizon glow, sun strength, height and
+                  direction (sun_dir, so shadows and directional lighting follow), and a preview strip of the
+                  gradient. street_look(w) = STREET_LOOK with these applied, read by every street pass instead of
+                  the constant; amb_up and sky_amb take the sky's tint. Defaults from STREET_LOOK (colors to
+                  within 8 bit rounding). On the 2D map, sky_edit also drives the tilted sky gradient, directional
+                  sun glow and horizon fog (view_horizon_draw, LINE_VS, BUILDINGS_VS via map_horizon_color),
+                  terrain hillshade normals and tints (HILL_FS from w.m.heights in hill_build / hill_draw),
+                  3D city buildings and tree clumps (vertexNormal + sun_dir / sun_tint / amb_tint in BUILDINGS_VS,
+                  buildings.odin, towns.odin, nature.odin), clouds (clouds_draw), and the car shader (car_draw).
                   Clouds (cloud_edit.odin, w.cloud_edit): on / off, cover (x the forecast, drawn clouds only), size,
                   spacing (cell km), lowest / highest altitude, opacity, shadow, drift (x the wind), the zoom range
                   they fade in over, and the solar layer's ground shade and sunlight (SOLAR_SHADE_ALPHA,
@@ -770,9 +775,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Roboto Mono, Space Grotesk, Lora, JetBrains) drawn in its place, closest weight (font_remap in
                   font_get; italic faces in Figtree and Lora). The map's water labels are remapped but not scaled
                   (they call font_get themselves).
-                  Corners (w.look.radius_scale): one scale 0 .. 2.5 for every corner of round_rect /
-                  round_rect_lines (which now take w). A square drawn fully round stays a circle (round buttons
-                  are circles with a round_rect shadow).
+                  Style (w.look.radius_scale, w.look.ornament): corner roundness 0 .. 2.5 for round_rect /
+                  round_rect_lines (squares stay circles on round buttons), plus configurable Solarpunk widget
+                  ornamentation (Ornament: None, Brass, Botanical, Sunburst), detail scale, dial ticks,
+                  corner motifs, trim brass and leaf green colors drawn by ui_decorate_rect (cards, sheets,
+                  street HUD box) and ui_decorate_circle (round buttons, speed/battery gauges).
   presence.odin   (author andrei) other cars on the map, peer-to-peer (Lars: "geen relay service, gossiping"): every
                   PRESENCE_S 2 s the game signs its position (Presence, 136 bytes, ed25519 identity) and the node swaps
                   the fresh positions it knows with up to 8 recently synced peers (op 'Q'), so they spread over several

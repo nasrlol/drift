@@ -60,15 +60,18 @@ pilot_ui :: proc(w: ^World) {
 		music_button(w, r)
 		button_label(w, "Music", r.x - BUTTON_LABEL_GAP, r.y + r.height / 2, pal.pill, rl.WHITE)
 		r.y += NAV_BUTTON + NAV_BUTTON_GAP
+		ui_tip(w, r, "Toggle wind flow particles")
 		if ui_round_button(w, r, .Wind, w.nav_wind) do w.nav_wind = !w.nav_wind
 		button_label(w, "Wind", r.x - BUTTON_LABEL_GAP, r.y + r.height / 2, pal.pill, rl.WHITE)
 		r.y += NAV_BUTTON + NAV_BUTTON_GAP
 		button_label(w, "Report gust", r.x - BUTTON_LABEL_GAP, r.y + r.height / 2, pal.pill, rl.WHITE)
 		// Report gust: reroutes around a gust here, same icon as the reroute banner.
 		id, hot, fired := ui_widget(w, r)
+		if hot do ui_tip_set(w, r, "Report turbulence ahead and reroute around it")
 		c := [2]f32{r.x + r.width / 2, r.y + r.height / 2}
 		ui_shadow(w, r, r.width / 2)
 		rl.DrawCircleV(c, r.width / 2, hot ? pal.surface_2 : pal.surface)
+		ui_decorate_circle(w, c, r.width / 2)
 		ui_icon(w, .Reroute, c, 30, pal.warning)
 		ui_focus_ring(w, id, r, r.width / 2)
 		ui_block(w, r)
@@ -94,6 +97,7 @@ pilot_ui :: proc(w: ^World) {
 		sc := [2]f32{16 + r, sheet.y - 84 - dia - 12 - r}
 		ui_shadow(w, {sc.x - r, sc.y - r, dia, dia}, r)
 		rl.DrawCircleV(sc, r, pal.surface)
+		ui_decorate_circle(w, sc, r)
 		stop := sc.y - spd_h / 2
 		ui_text(w, {sc.x - svs.x / 2, stop}, sv, .Figtree_700, 25, pal.text)
 		ui_text(w, {sc.x - sus.x / 2, stop + svs.y + 2}, "km/h", .Figtree_700, 11, pal.text_2)
@@ -101,37 +105,49 @@ pilot_ui :: proc(w: ^World) {
 		ui_battery_circle(w, {16 + r, sheet.y - 84 - r}, dia, bat)
 	}
 
-	// Re-centre after the user moved the map.
-	if w.cam.dragged {
-		lbl := "Re-centre"
-		ls := ui_text_size(w, lbl, .Figtree_500, 18)
-		rw := max(170, 52 + ls.x + 20)
-		rh := max(56, ls.y + 20)
-		r := rl.Rectangle{16, sheet.y - 16 - rh, rw, rh}
-		id, hot, fired := ui_widget(w, r)
-		dark := rl.Color{32, 33, 36, 255}
-		round_rect(w, r, rh / 2, hot ? rl.ColorBrightness(dark, 0.15) : dark)
-		ui_icon(w, .Navigate, {r.x + 30, r.y + rh / 2}, 24, {138, 180, 248, 255})
-		ui_text(w, {r.x + 52, r.y + (rh - ls.y) / 2}, lbl, .Figtree_500, 18, rl.WHITE)
-		ui_focus_ring(w, id, r, rh / 2)
-		ui_block(w, r)
-		if fired do cam_recentre(w)
-	}
-
-	// Self-fly and Exit (Done on arrival) in the sheet, right.
+	// Re-centre, self-fly and Exit (Done on arrival) in the sheet, right.
 	{
 		passenger := carpool_is_passenger(w)
-		exit_text := passenger ? "Plan" : n.banner == .Arrived && n.active ? "Done" : "Exit"
-		ew := ui_text_size(w, exit_text, .Figtree_500, 21).x + 60
-		exit := rl.Rectangle{sheet.x + sheet.width - 24 - ew, sheet.y + 26, ew, 66}
-		if ui_pill_button(w, exit, exit_text, .Danger) do pilot_exit(w)
+		done := !passenger && n.banner == .Arrived && n.active
+		exit_text := passenger ? "Plan" : done ? "Done" : "Exit"
+		exit_icon := done ? Icon.Check : Icon.Leave
+		label_sz := ui_text_size(w, exit_text, .Figtree_500, 21)
+		icon_px := text_px(w, 22)
+		ew := label_sz.x + icon_px + 56
+		exit := rl.Rectangle{sheet.x + sheet.width - 24 - ew, sheet.y + 26, ew, SELF_FLY_BUTTON}
+		{
+			id, hot, fired := ui_widget(w, exit)
+			if hot do ui_tip_set(w, exit, "Return to route planning")
+			bg := hot ? pal.surface_3 : pal.surface_2
+			fg := done ? pal.green : pal.red
+			round_rect(w, exit, exit.height / 2, bg)
+			round_rect_lines(w, exit, exit.height / 2, 1, pal.line)
+			ui_decorate_rect(w, exit, exit.height / 2)
+			icon_w := icon_px + 8
+			tx := exit.x + (exit.width - label_sz.x - icon_w) / 2
+			ui_icon(w, exit_icon, {tx + icon_px / 2, exit.y + exit.height / 2}, icon_px, fg)
+			ui_text(
+				w,
+				{tx + icon_w, exit.y + (exit.height - label_sz.y) / 2},
+				exit_text,
+				.Figtree_500,
+				21,
+				fg,
+			)
+			ui_focus_ring(w, id, exit, exit.height / 2)
+			if fired do pilot_exit(w)
+		}
+		left_x := exit.x
 		if !passenger && n.active {
 			fly := rl.Rectangle{exit.x - 14 - SELF_FLY_BUTTON, exit.y, SELF_FLY_BUTTON, SELF_FLY_BUTTON}
+			left_x = fly.x
 			id, hot, fired := ui_widget(w, fly)
+			if hot do ui_tip_set(w, fly, "Switch between manual flight and autopilot")
 			c := [2]f32{fly.x + fly.width / 2, fly.y + fly.height / 2}
 			on := n.manual
-			bg := on ? pal.accent : pal.surface_2
-			rl.DrawCircleV(c, SELF_FLY_BUTTON / 2, hot && !on ? rl.ColorBrightness(bg, 0.1) : bg)
+			bg := on ? pal.accent : (hot ? pal.surface_3 : pal.surface_2)
+			rl.DrawCircleV(c, SELF_FLY_BUTTON / 2, bg)
+			ui_decorate_circle(w, c, SELF_FLY_BUTTON / 2)
 			ui_icon(w, .Steer, c, 32, on ? pal.sheet : pal.accent)
 			ui_focus_ring(w, id, fly, SELF_FLY_BUTTON / 2)
 			if fired do nav_set_manual(w, !n.manual)
@@ -147,6 +163,18 @@ pilot_ui :: proc(w: ^World) {
 				pill_bg,
 				pill_fg,
 			)
+		}
+		if w.cam.dragged {
+			rec := rl.Rectangle{left_x - 14 - SELF_FLY_BUTTON, exit.y, SELF_FLY_BUTTON, SELF_FLY_BUTTON}
+			ui_tip(w, rec, "Snap camera back to your car")
+			id, hot, fired := ui_widget(w, rec)
+			c := [2]f32{rec.x + rec.width / 2, rec.y + rec.height / 2}
+			rl.DrawCircleV(c, SELF_FLY_BUTTON / 2, hot ? pal.surface_3 : pal.surface_2)
+			ui_decorate_circle(w, c, SELF_FLY_BUTTON / 2)
+			ui_icon(w, .Recentre, c, 30, pal.accent)
+			ui_focus_ring(w, id, rec, SELF_FLY_BUTTON / 2)
+			ui_block(w, rec)
+			if fired do cam_recentre(w)
 		}
 	}
 

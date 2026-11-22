@@ -250,6 +250,8 @@ Icon :: enum u8 {
 	Logo,
 	Steer,
 	Speaker_Off,
+	Recentre,
+	Leave,
 }
 
 // Codepoints in the Google Fonts file; a few icons keep their older Material Icons codepoint there (schedule,
@@ -293,6 +295,8 @@ ICON_CODEPOINTS :: [Icon]rune {
 	.Logo         = 0,
 	.Steer        = 0,
 	.Speaker_Off  = 0,
+	.Recentre     = 0,
+	.Leave        = 0,
 }
 
 // Fixed colors of the logo (design "Iconen"): they are part of the mark, not of the palette.
@@ -339,6 +343,27 @@ ui_icon :: proc(w: ^World, icon: Icon, centre: [2]f32, px: f32, color: rl.Color)
 		s := px / 24
 		ui_icon(w, .Speaker, centre, px, color)
 		rl.DrawLineEx(centre + {-9 * s, -9 * s}, centre + {9 * s, 9 * s}, 2.4 * s, color)
+	case .Recentre:
+		// Target reticle: outer ring, cardinal crosshairs and centre dot on the 24 px icon grid.
+		s := px / 24
+		r := 6.8 * s
+		sw := max(2.0 * s, 1.5)
+		rl.DrawRing(centre, r - sw, r, 0, 360, 36, color)
+		rl.DrawCircleV(centre, 2.5 * s, color)
+		rl.DrawLineEx(centre + {0, -9.8 * s}, centre + {0, -5.8 * s}, sw, color)
+		rl.DrawLineEx(centre + {0, 5.8 * s}, centre + {0, 9.8 * s}, sw, color)
+		rl.DrawLineEx(centre + {-9.8 * s, 0}, centre + {-5.8 * s, 0}, sw, color)
+		rl.DrawLineEx(centre + {5.8 * s, 0}, centre + {9.8 * s, 0}, sw, color)
+	case .Leave:
+		// Open doorway bracket and exit arrow pointing right, on the 24 px icon grid.
+		s := px / 24
+		sw := max(2.2 * s, 1.5)
+		rl.DrawLineEx(centre + {-2 * s, -7.5 * s}, centre + {-7.5 * s, -7.5 * s}, sw, color)
+		rl.DrawLineEx(centre + {-7.5 * s, -7.5 * s}, centre + {-7.5 * s, 7.5 * s}, sw, color)
+		rl.DrawLineEx(centre + {-7.5 * s, 7.5 * s}, centre + {-2 * s, 7.5 * s}, sw, color)
+		rl.DrawLineEx(centre + {-2 * s, 0}, centre + {8 * s, 0}, sw, color)
+		rl.DrawLineEx(centre + {4 * s, -4 * s}, centre + {8 * s, 0}, sw, color)
+		rl.DrawLineEx(centre + {4 * s, 4 * s}, centre + {8 * s, 0}, sw, color)
 	case .Leaf ..= .Arrow_Right:
 		codepoints := ICON_CODEPOINTS
 		size := f32(i32(px + 0.5))
@@ -385,6 +410,9 @@ Ui :: struct {
 	toast:        [64]u8,
 	toast_len:    int,
 	toast_t:      f32, // seconds since the toast appeared
+	tip_rect:     rl.Rectangle,
+	tip_buf:      [256]u8,
+	tip_len:      int,
 	anims:        [MAX_UI_ANIMS]f32, // 0..1 per widget id: toggle knob position
 }
 
@@ -398,6 +426,7 @@ ui_begin :: proc(w: ^World) {
 	u.block_count = 0
 	u.last_popup = u.popup
 	u.popup = {}
+	u.tip_len = 0
 	u.cancelled = false
 	tab := rl.IsKeyPressed(.TAB)
 	back := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
@@ -525,6 +554,7 @@ ui_shadow :: proc(w: ^World, r: rl.Rectangle, radius: f32) {
 ui_card :: proc(w: ^World, r: rl.Rectangle) {
 	ui_shadow(w, r, 18)
 	round_rect(w, r, 18, palette(w).surface)
+	ui_decorate_rect(w, r, 18)
 	ui_block(w, r)
 }
 
@@ -535,6 +565,7 @@ ui_round_button :: proc(w: ^World, r: rl.Rectangle, icon: Icon, on: bool) -> boo
 	c := [2]f32{r.x + r.width / 2, r.y + r.height / 2}
 	ui_shadow(w, r, r.width / 2)
 	rl.DrawCircleV(c, r.width / 2, hot ? pal.surface_2 : pal.surface)
+	if r.width >= 44 do ui_decorate_circle(w, c, r.width / 2)
 	ui_icon(w, icon, c, r.width >= 60 ? 30 : 24, on ? pal.accent : pal.text)
 	ui_focus_ring(w, id, r, r.width / 2)
 	ui_block(w, r)
@@ -572,9 +603,10 @@ ui_pill_button :: proc(
 		font = .Figtree_500
 	}
 	size := ui_text_size(w, text, font, px)
-	icon_w: f32 = has_icon ? 26 : 0
+	icon_px := text_px(w, kind == .Danger ? 22 : 20)
+	icon_w: f32 = has_icon ? icon_px + 8 : 0
 	x := r.x + (r.width - size.x - icon_w) / 2
-	if has_icon do ui_icon(w, icon, {x + 10, r.y + r.height / 2}, 20, fg)
+	if has_icon do ui_icon(w, icon, {x + icon_px / 2, r.y + r.height / 2}, icon_px, fg)
 	ui_text(w, {x + icon_w, r.y + (r.height - size.y) / 2}, text, font, px, fg)
 	ui_focus_ring(w, id, r, radius)
 	return fired
@@ -742,6 +774,7 @@ ui_zoom_pill :: proc(w: ^World, r: rl.Rectangle) -> int {
 		h := rl.Rectangle{r.x, r.y + f32(half) * r.height / 2, r.width, r.height / 2}
 		id, hot, fired := ui_widget(w, h)
 		if hot do round_rect(w, h, 24, pal.surface_2)
+		if hot do ui_tip_set(w, h, half == 0 ? "Zoom in" : "Zoom out")
 		ui_icon(w, half == 0 ? .Plus : .Minus, {h.x + h.width / 2, h.y + h.height / 2}, 24, pal.text)
 		ui_focus_ring(w, id, h, 24)
 		if fired do out = half == 0 ? 1 : -1
@@ -782,6 +815,58 @@ ui_toast_draw :: proc(w: ^World) {
 	ui_text(w, {r.x + 16, r.y + 10}, text, .Roboto_400, 14, rl.ColorAlpha({232, 234, 237, 255}, alpha))
 }
 
+// Records a hover tooltip for r when the mouse is over it; drawn at the end of the frame by ui_tip_draw.
+ui_tip :: proc(w: ^World, r: rl.Rectangle, text: string) {
+	u := &w.ui
+	if !u.in_popup && u.last_popup.width > 0 && rl.CheckCollisionPointRec(rl.GetMousePosition(), u.last_popup) do return
+	if rl.CheckCollisionPointRec(rl.GetMousePosition(), r) do ui_tip_set(w, r, text)
+}
+
+ui_tip_set :: proc(w: ^World, r: rl.Rectangle, text: string) {
+	u := &w.ui
+	n := min(len(text), len(u.tip_buf))
+	copy(u.tip_buf[:n], text[:n])
+	u.tip_len = n
+	u.tip_rect = r
+}
+
+ui_tip_draw :: proc(w: ^World) {
+	u := &w.ui
+	if u.tip_len == 0 do return
+	pal := palette(w)
+	full := string(u.tip_buf[:u.tip_len])
+	max_w: f32
+	lines := 0
+	rest := full
+	for line in strings.split_lines_iterator(&rest) {
+		font: Font = lines == 0 ? .Figtree_600 : .Roboto_400
+		max_w = max(max_w, ui_text_size(w, line, font, 12).x)
+		lines += 1
+	}
+	if lines == 0 do return
+	pad_x, pad_y :: f32(12), f32(8)
+	lh := text_line_px(w, 12)
+	box_w := max_w + 2 * pad_x
+	box_h := f32(lines) * lh + 2 * pad_y - (lh - text_px(w, 12))
+	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
+	r := u.tip_rect
+	x := clamp(r.x + (r.width - box_w) / 2, 12, max(sw - box_w - 12, 12))
+	y := r.y - box_h - 8
+	if y < 12 do y = min(r.y + r.height + 8, max(sh - box_h - 12, 12))
+	box := rl.Rectangle{x, y, box_w, box_h}
+	ui_shadow(w, box, 10)
+	round_rect(w, box, 10, pal.surface)
+	round_rect_lines(w, box, 10, 1, pal.line)
+	rest = full
+	i := 0
+	for line in strings.split_lines_iterator(&rest) {
+		font: Font = i == 0 ? .Figtree_600 : .Roboto_400
+		col := i == 0 ? pal.text : pal.text_2
+		ui_text(w, {box.x + pad_x, box.y + pad_y + f32(i) * lh}, line, font, 12, col)
+		i += 1
+	}
+}
+
 Battery_Badge :: struct {
 	charge: f32,
 	bv:     string,
@@ -802,16 +887,180 @@ ui_battery_badge :: proc(w: ^World, min_dia: f32) -> Battery_Badge {
 	return {charge = charge, bv = bv, bvs = bvs, bus = bus, h = h, dia = dia}
 }
 
-// Draws the circular battery gauge (charge ring from the top, clockwise) centred at c.
+// Draws the circular battery gauge (wavy elixir fill + charge ring) centred at c.
 ui_battery_circle :: proc(w: ^World, c: [2]f32, dia: f32, b: Battery_Badge, alpha: f32 = 1) {
 	pal := palette(w)
 	r := dia / 2
 	if alpha >= 0.99 do ui_shadow(w, {c.x - r, c.y - r, dia, dia}, r)
 	rl.DrawCircleV(c, r, alpha < 1 ? rl.ColorAlpha(pal.surface, alpha) : pal.surface)
+
+	liquid := b.charge < 0.2 ? pal.warning : pal.green
+	ir := r - 6
+	if b.charge > 0.005 && ir > 2 {
+		t := f32(rl.GetTime())
+		y_base := c.y + ir - 2 * ir * b.charge
+		amp := min(f32(2.6), 16 * b.charge * (1 - b.charge))
+		draw_wave :: proc(c: [2]f32, ir, y_base, amp, freq, phase: f32, col: rl.Color) {
+			SLICES :: 32
+			for i in 0 ..< SLICES {
+				x0 := -ir + 2 * ir * f32(i) / SLICES
+				x1 := -ir + 2 * ir * f32(i + 1) / SLICES
+				d0 := math.sqrt(max(ir * ir - x0 * x0, 0))
+				d1 := math.sqrt(max(ir * ir - x1 * x1, 0))
+				y0 := clamp(y_base + amp * math.sin(x0 * freq + phase), c.y - d0, c.y + d0)
+				y1 := clamp(y_base + amp * math.sin(x1 * freq + phase), c.y - d1, c.y + d1)
+				p00 := [2]f32{c.x + x0, y0}
+				p01 := [2]f32{c.x + x0, c.y + d0}
+				p11 := [2]f32{c.x + x1, c.y + d1}
+				p10 := [2]f32{c.x + x1, y1}
+				rl.DrawTriangle(p00, p01, p11, col)
+				rl.DrawTriangle(p00, p11, p10, col)
+			}
+		}
+		draw_wave(c, ir, y_base, amp * 0.8, 0.14, -t * 2.3 + 1.4, rl.ColorAlpha(liquid, 0.20 * alpha))
+		draw_wave(c, ir, y_base, amp, 0.17, t * 3.1, rl.ColorAlpha(liquid, 0.34 * alpha))
+	}
+
 	track := alpha < 1 ? rl.ColorAlpha(pal.surface_3, alpha) : pal.surface_3
 	rl.DrawRing(c, r - 6, r - 2, 0, 360, 48, track)
-	rl.DrawRing(c, r - 6, r - 2, -90, -90 + 360 * b.charge, 48, pal.green)
+	rl.DrawRing(c, r - 6, r - 2, -90, -90 + 360 * b.charge, 48, rl.ColorAlpha(liquid, alpha))
+	ui_decorate_circle(w, c, r, alpha)
 	top := c.y - b.h / 2
 	ui_text(w, {c.x - b.bvs.x / 2, top}, b.bv, .Figtree_700, 20, pal.text)
 	ui_text(w, {c.x - b.bus.x / 2, top + b.bvs.y + 2}, "battery", .Figtree_700, 10, pal.text_2)
+}
+
+// Draws a pointed botanical leaf from stem along unit vector dir, scaled by length and width.
+ui_draw_leaf :: proc(stem, dir: [2]f32, length, width: f32, color: rl.Color) {
+	perp := [2]f32{-dir.y, dir.x}
+	tip := stem + dir * length
+	mid := stem + dir * (length * 0.45)
+	hw := width * 0.5
+	// Negative 2D cross-product winding for raylib's y-down screen coordinates.
+	rl.DrawTriangle(stem, tip, mid - perp * hw, color)
+	rl.DrawTriangle(stem, mid + perp * hw, tip, color)
+}
+
+// Draws Solarpunk ornamentation (Brass, Botanical, Sunburst) inside/around a rectangular widget.
+ui_decorate_rect :: proc(w: ^World, r: rl.Rectangle, radius: f32, alpha: f32 = 1) {
+	orn := w.look.ornament
+	if orn == .None || min(r.width, r.height) < 28 do return
+	detail := clamp(w.look.ornament_detail, 0.25, 2)
+	trim := rl.ColorAlpha(w.look.ornament_color, alpha * 0.8)
+	leaf := rl.ColorAlpha(w.look.leaf_color, alpha * 0.9)
+	line_w := max(f32(1), 1.3 * detail)
+
+	inset := min(f32(4), min(r.width, r.height) * 0.12)
+	ir := rl.Rectangle{r.x + inset, r.y + inset, r.width - 2 * inset, r.height - 2 * inset}
+	in_r := max(radius - inset, 0)
+	round_rect_lines(w, ir, in_r, line_w * 0.85, rl.ColorAlpha(trim, 0.55))
+
+	if !w.look.corner_brackets do return
+	arm := min(14 * detail, min(ir.width, ir.height) * 0.28)
+	off := min(in_r * corner_scale_factor(w) * 0.22, arm * 0.35)
+	corners := [4]struct {
+		pos, dir: [2]f32,
+	} {
+		{{ir.x, ir.y}, {1, 1}},
+		{{ir.x + ir.width, ir.y}, {-1, 1}},
+		{{ir.x, ir.y + ir.height}, {1, -1}},
+		{{ir.x + ir.width, ir.y + ir.height}, {-1, -1}},
+	}
+	for c, i in corners {
+		p := c.pos + c.dir * off
+		hx := [2]f32{c.dir.x, 0}
+		vy := [2]f32{0, c.dir.y}
+		switch orn {
+		case .None:
+		case .Brass:
+			rl.DrawLineEx(p, p + hx * arm, line_w, trim)
+			rl.DrawLineEx(p, p + vy * arm, line_w, trim)
+			rl.DrawCircleV(p, 2.2 * detail, trim)
+		case .Botanical:
+			rl.DrawLineEx(p, p + hx * (arm * 0.7), line_w * 0.9, trim)
+			rl.DrawLineEx(p, p + vy * (arm * 0.7), line_w * 0.9, trim)
+			// Full leaf pair on top-left and bottom-right corners; small bud elsewhere to stay uncluttered.
+			if i == 0 || i == 3 || min(ir.width, ir.height) >= 120 {
+				l_len := min(10 * detail, arm * 0.85)
+				d1 := linalg.normalize([2]f32{c.dir.x, c.dir.y * 0.35})
+				d2 := linalg.normalize([2]f32{c.dir.x * 0.35, c.dir.y})
+				ui_draw_leaf(p + hx * 2, d1, l_len, l_len * 0.45, leaf)
+				ui_draw_leaf(p + vy * 2, d2, l_len, l_len * 0.45, leaf)
+			}
+			rl.DrawCircleV(p, 2.0 * detail, trim)
+		case .Sunburst:
+			rays :: 4
+			ray_len := min(12 * detail, arm)
+			base := math.atan2(c.dir.y, c.dir.x)
+			for k in 0 ..< rays {
+				a := base + (f32(k) - 1.5) * 0.38
+				d := [2]f32{math.cos(a), math.sin(a)}
+				l := k % 2 == 0 ? ray_len : ray_len * 0.68
+				rl.DrawLineEx(p + d * (2.5 * detail), p + d * l, line_w * 0.85, trim)
+			}
+			rl.DrawCircleV(p, 2.4 * detail, trim)
+		}
+	}
+}
+
+corner_scale_factor :: proc(w: ^World) -> f32 {
+	return clamp(w.look.radius_scale, 0, SETTINGS_MAX_RADIUS_SCALE)
+}
+
+// Draws Solarpunk ornamentation (bezel ring, radial dial ticks, petals, sun flares) around a circular widget.
+ui_decorate_circle :: proc(w: ^World, c: [2]f32, r: f32, alpha: f32 = 1) {
+	orn := w.look.ornament
+	if orn == .None || r < 14 do return
+	detail := clamp(w.look.ornament_detail, 0.25, 2)
+	trim := rl.ColorAlpha(w.look.ornament_color, alpha * 0.85)
+	leaf := rl.ColorAlpha(w.look.leaf_color, alpha * 0.92)
+	line_w := max(f32(1), 1.3 * detail)
+
+	// Rim brass bezel around the circle edge.
+	rl.DrawRing(c, max(r - 1.2, 1), r + line_w * 0.7, 0, 360, 48, trim)
+
+	if w.look.dial_ticks {
+		ticks :: 12
+		for k in 0 ..< ticks {
+			a := f32(k) * (math.TAU / ticks)
+			d := [2]f32{math.cos(a), math.sin(a)}
+			major := k % 3 == 0
+			len := (major ? 5.0 : 3.0) * detail
+			col := major ? trim : rl.ColorAlpha(trim, 0.55)
+			rl.DrawLineEx(c + d * (r + 0.5), c + d * (r + len), major ? line_w : line_w * 0.75, col)
+		}
+	}
+
+	switch orn {
+	case .None:
+	case .Brass:
+		for k in 0 ..< 4 {
+			a := f32(k) * (math.TAU / 4)
+			d := [2]f32{math.cos(a), math.sin(a)}
+			rl.DrawCircleV(c + d * (r + 0.5), 2.3 * detail, trim)
+		}
+	case .Botanical:
+		// Twin asymmetrical vine sprigs hugging opposite arcs of the circle.
+		sprigs := [2]f32{-0.75, 2.39}
+		for base_a in sprigs {
+			for k in -1 ..= 1 {
+				a := base_a + f32(k) * 0.24
+				tang := [2]f32{-math.sin(a), math.cos(a)}
+				radial := [2]f32{math.cos(a), math.sin(a)}
+				stem := c + radial * (r + 1.5)
+				ldir := linalg.normalize(tang * (k == 0 ? 0.6 : 0.9) + radial * 0.45)
+				l_len := (k == 0 ? 9.5 : 7.0) * detail
+				ui_draw_leaf(stem, ldir, l_len, l_len * 0.46, leaf)
+			}
+			rl.DrawCircleV(c + [2]f32{math.cos(base_a), math.sin(base_a)} * (r + 1), 2.1 * detail, trim)
+		}
+	case .Sunburst:
+		rays :: 16
+		for k in 0 ..< rays {
+			a := f32(k) * (math.TAU / rays)
+			d := [2]f32{math.cos(a), math.sin(a)}
+			l := (k % 2 == 0 ? 6.5 : 3.8) * detail
+			rl.DrawLineEx(c + d * (r + 0.5), c + d * (r + l), line_w * 0.85, trim)
+		}
+	}
 }

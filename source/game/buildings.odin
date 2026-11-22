@@ -37,18 +37,32 @@ Buildings :: struct {
 	count:    int,
 	material: rl.Material,
 	loc:      struct {
-		roof, solar_roof, green_roof, wall, tree, city, park, fog_c, fog_r, fade_px, feature_px: i32,
+		roof,
+		solar_roof,
+		green_roof,
+		wall,
+		tree,
+		city,
+		park,
+		fog_c,
+		fog_r,
+		fade_px,
+		feature_px,
+		sun_dir,
+		sun_tint,
+		amb_tint: i32,
 	},
 	ready:    bool,
 }
 
-// vertexColor.r = light (0..1), .g = 1 on the roof, .b = 1 for a tree clump (nature.odin, same shader), .a the
-// roof kind (roof_alpha). The roof and wall colors come from the palette as uniforms, city and park are the
-// ground under a building and a clump.
+// vertexColor.r = ambient occlusion (0..1), .g = 1 on the roof, .b = 1 for a tree clump (nature.odin, same
+// shader), .a the roof kind (roof_alpha). vertexNormal is the surface normal in map space (x east, y south, z
+// down). The roof, wall and sun/sky tint colors come from the palette and sky_edit as uniforms.
 // feature_px: the size of BUILDINGS_FEATURE_KM on the screen at a view depth (clip w) of 1 km, so w gives its
 // size at a vertex; fade_px as BUILDINGS_FADE_PX_0 and _1. Fog as LINE_VS.
 BUILDINGS_VS :: `#version 330
 in vec3 vertexPosition;
+in vec3 vertexNormal;
 in vec4 vertexColor;
 uniform mat4 mvp;
 uniform vec3 roof;
@@ -62,6 +76,9 @@ uniform vec3 fog_color;
 uniform vec2 fog_range;
 uniform vec2 fade_px;
 uniform float feature_px;
+uniform vec3 sun_dir;
+uniform vec3 sun_tint;
+uniform vec3 amb_tint;
 out vec4 fragColor;
 void main() {
 	float w = (mvp * vec4(vertexPosition.xy, 0.0, 1.0)).w;
@@ -70,7 +87,9 @@ void main() {
 	gl_Position = p;
 	bool is_tree = vertexColor.b > 0.5;
 	vec3 top = vertexColor.a > 0.75 ? roof : (vertexColor.a > 0.25 ? green_roof : solar_roof);
-	vec3 c = (is_tree ? tree : mix(wall, top, vertexColor.g)) * vertexColor.r;
+	float ndl = max(dot(normalize(vertexNormal), sun_dir), 0.0);
+	vec3 lit = (amb_tint + sun_tint * ndl) * vertexColor.r;
+	vec3 c = (is_tree ? tree : mix(wall, top, vertexColor.g)) * lit;
 	c = mix(is_tree ? park : city, c, grow);
 	float f = clamp((p.w - fog_range.x) / max(fog_range.y - fog_range.x, 1e-3), 0.0, 1.0);
 	fragColor = vec4(mix(c, fog_color, f * f), 1.0);
@@ -191,8 +210,7 @@ buildings_build :: proc(w: ^World) {
 		return {i32(x), i32(y)}
 	}
 
-	// Light from the north-west like the hillshade; the bottom of a wall a little darker.
-	LIGHT :: [2]f32{-0.7071, -0.7071}
+	// Vertical AO: wall bases slightly darker than eaves; directional sun/sky shading runs in BUILDINGS_VS.
 	bi, vi := 0, 0
 	ring := make([dynamic][2]f32, 0, 64, tmp)
 	idx := make([]int, 64, tmp)
@@ -200,6 +218,7 @@ buildings_build :: proc(w: ^World) {
 	for c in cities {
 		origin := [2]f32{f32(c.origin.x), f32(c.origin.y)}
 		pos := make([dynamic][3]f32, 0, int(c.vertex_count) * 9, tmp)
+		norm := make([dynamic][3]f32, 0, int(c.vertex_count) * 9, tmp)
 		col := make([dynamic][4]u8, 0, int(c.vertex_count) * 9, tmp)
 		for _ in 0 ..< c.building_count {
 			n, height := int(counts[bi]), f32(heights[bi]) / 1000
@@ -224,12 +243,12 @@ buildings_build :: proc(w: ^World) {
 				d := e - a
 				l := math.sqrt(d.x * d.x + d.y * d.y)
 				if l <= 0 do continue
-				normal := [2]f32{-d.y, d.x} / l
-				light := 0.68 + 0.22 * (normal.x * LIGHT.x + normal.y * LIGHT.y)
-				top, low := u8(light * 255), u8(light * 0.7 * 255)
+				wn := [3]f32{-d.y / l, d.x / l, 0}
+				top, low := u8(255), u8(178)
 				// Counter-clockwise seen from outside: bottom a, bottom e, top e and bottom a, top e, top a.
 				append(&pos, [3]f32{a.x, a.y, 0}, [3]f32{e.x, e.y, 0}, [3]f32{e.x, e.y, -height})
 				append(&pos, [3]f32{a.x, a.y, 0}, [3]f32{e.x, e.y, -height}, [3]f32{a.x, a.y, -height})
+				append(&norm, wn, wn, wn, wn, wn, wn)
 				append(&col, [4]u8{low, 0, 0, 255}, [4]u8{low, 0, 0, 255}, [4]u8{top, 0, 0, 255})
 				append(&col, [4]u8{low, 0, 0, 255}, [4]u8{top, 0, 0, 255}, [4]u8{top, 0, 0, 255})
 			}
@@ -238,6 +257,7 @@ buildings_build :: proc(w: ^World) {
 			kind := roof_alpha(u32(bi) * 2654435761 + 11)
 			for p in roof {
 				append(&pos, [3]f32{p.x, p.y, -height})
+				append(&norm, [3]f32{0, 0, -1})
 				append(&col, [4]u8{255, 255, 0, kind})
 			}
 		}
@@ -246,10 +266,11 @@ buildings_build :: proc(w: ^World) {
 			vertexCount   = i32(len(pos)),
 			triangleCount = i32(len(pos) / 3),
 			vertices      = ([^]f32)(raw_data(pos)),
+			normals       = ([^]f32)(raw_data(norm)),
 			colors        = ([^]u8)(raw_data(col)),
 		}
 		rl.UploadMesh(&m, false)
-		m.vertices, m.colors = nil, nil
+		m.vertices, m.normals, m.colors = nil, nil, nil
 		b.meshes[b.count] = m
 		b.origins[b.count] = origin
 		b.count += 1
@@ -269,6 +290,9 @@ buildings_build :: proc(w: ^World) {
 		fog_r      = rl.GetShaderLocation(sh, "fog_range"),
 		fade_px    = rl.GetShaderLocation(sh, "fade_px"),
 		feature_px = rl.GetShaderLocation(sh, "feature_px"),
+		sun_dir    = rl.GetShaderLocation(sh, "sun_dir"),
+		sun_tint   = rl.GetShaderLocation(sh, "sun_tint"),
+		amb_tint   = rl.GetShaderLocation(sh, "amb_tint"),
 	}
 	b.ready = true
 	logf(w, "buildings", "%d buildings in %d cities", total_b, b.count)
@@ -289,7 +313,7 @@ buildings_feature_px :: proc(c: ^Cam) -> (px: f32, shown: bool) {
 // buildings_feature_px, cities within reach (km) of target are drawn where place puts them (a city mesh is
 // relative to its origin). look gives the roof, wall, tree and fog colors and the ground under them.
 Buildings_Look :: struct {
-	roof, solar_roof, green_roof, wall, tree, city, park, fog: [3]f32,
+	roof, solar_roof, green_roof, wall, tree, city, park, fog, sun_dir, sun_tint, amb_tint: [3]f32,
 }
 
 buildings_draw :: proc(
@@ -306,6 +330,7 @@ buildings_draw :: proc(
 	if !b.ready do return
 	roof, solar_roof, green_roof := look.roof, look.solar_roof, look.green_roof
 	wall, tree, city, park, horizon := look.wall, look.tree, look.city, look.park, look.fog
+	sun_dir, sun_tint, amb_tint := look.sun_dir, look.sun_tint, look.amb_tint
 	fog := fog
 	fade := [2]f32{BUILDINGS_FADE_PX_0, BUILDINGS_FADE_PX_1}
 	feature_px := feature_px
@@ -321,6 +346,9 @@ buildings_draw :: proc(
 	rl.SetShaderValue(sh, b.loc.fog_r, &fog, .VEC2)
 	rl.SetShaderValue(sh, b.loc.fade_px, &fade, .VEC2)
 	rl.SetShaderValue(sh, b.loc.feature_px, &feature_px, .FLOAT)
+	rl.SetShaderValue(sh, b.loc.sun_dir, &sun_dir, .VEC3)
+	rl.SetShaderValue(sh, b.loc.sun_tint, &sun_tint, .VEC3)
+	rl.SetShaderValue(sh, b.loc.amb_tint, &amb_tint, .VEC3)
 	for i in 0 ..< b.count {
 		d := b.origins[i] - target
 		if math.sqrt(d.x * d.x + d.y * d.y) > reach do continue
@@ -328,9 +356,10 @@ buildings_draw :: proc(
 	}
 }
 
-// The map's colors for the buildings, trees and fog.
+// The map's colors and golden-hour sun/sky lighting for the buildings, trees and fog.
 buildings_map_look :: proc(w: ^World) -> Buildings_Look {
 	pal := palette(w)
+	sun_tint, amb_tint := map_sun_tints(w)
 	return {
 		roof = rl.ColorNormalize(pal.roof).rgb,
 		solar_roof = rl.ColorNormalize(pal.solar_roof).rgb,
@@ -339,7 +368,10 @@ buildings_map_look :: proc(w: ^World) -> Buildings_Look {
 		tree = rl.ColorNormalize(pal.tree).rgb,
 		city = rl.ColorNormalize(pal.city).rgb,
 		park = rl.ColorNormalize(pal.park).rgb,
-		fog = rl.ColorNormalize(pal.horizon).rgb,
+		fog = rl.ColorNormalize(map_horizon_color(w)).rgb,
+		sun_dir = map_sun_dir(street_look(w)),
+		sun_tint = sun_tint,
+		amb_tint = amb_tint,
 	}
 }
 

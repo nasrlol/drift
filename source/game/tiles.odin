@@ -136,15 +136,16 @@ tiles_unload :: proc(cache: ^Tile_Cache) {
 }
 
 // Uploads the arrays as a mesh and lets go of them (they live in the frame arena).
-tile_mesh :: proc(pos: [][3]f32, col: [][4]u8) -> rl.Mesh {
+tile_mesh :: proc(pos: [][3]f32, col: [][4]u8, norm: [][3]f32 = nil) -> rl.Mesh {
 	if len(pos) == 0 do return {}
 	m := rl.Mesh {
 		vertexCount   = i32(len(pos)),
 		triangleCount = i32(len(pos) / 3),
 		vertices      = ([^]f32)(raw_data(pos)),
+		normals       = norm != nil ? ([^]f32)(raw_data(norm)) : nil,
 		colors        = ([^]u8)(raw_data(col)),
 	}
 	rl.UploadMesh(&m, false)
-	m.vertices, m.colors = nil, nil
+	m.vertices, m.normals, m.colors = nil, nil, nil
 	return m
 }

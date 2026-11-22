@@ -151,8 +151,8 @@ towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	houses := make([dynamic]Town_House, 0, 1024, context.temp_allocator)
 	town_houses(w, lo, hi, &houses)
 	pos := make([dynamic][3]f32, 0, len(houses) * 30, context.temp_allocator)
+	norm := make([dynamic][3]f32, 0, len(houses) * 30, context.temp_allocator)
 	col := make([dynamic][4]u8, 0, len(houses) * 30, context.temp_allocator)
-	LIGHT :: [2]f32{-0.7071, -0.7071}
 	for th in houses {
 		ring := th.ring
 		height := th.height / 1000 * BUILDINGS_HEIGHT_X
@@ -160,20 +160,22 @@ towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 		for e in 0 ..< 4 {
 			p, q := ring[e], ring[(e + 1) % 4]
 			d := linalg.normalize(q - p)
-			light := 0.68 + 0.22 * linalg.dot([2]f32{-d.y, d.x}, LIGHT)
-			top, low := u8(light * 255), u8(light * 0.7 * 255)
+			wn := [3]f32{-d.y, d.x, 0}
+			top, low := u8(255), u8(178)
 			append(&pos, [3]f32{p.x, p.y, 0}, [3]f32{q.x, q.y, 0}, [3]f32{q.x, q.y, -height})
 			append(&pos, [3]f32{p.x, p.y, 0}, [3]f32{q.x, q.y, -height}, [3]f32{p.x, p.y, -height})
+			append(&norm, wn, wn, wn, wn, wn, wn)
 			append(&col, [4]u8{low, 0, 0, 255}, [4]u8{low, 0, 0, 255}, [4]u8{top, 0, 0, 255})
 			append(&col, [4]u8{low, 0, 0, 255}, [4]u8{top, 0, 0, 255}, [4]u8{top, 0, 0, 255})
 		}
 		kind := roof_alpha(th.seed)
 		for v in ([6]int{0, 1, 2, 0, 2, 3}) {
 			append(&pos, [3]f32{ring[v].x, ring[v].y, -height})
+			append(&norm, [3]f32{0, 0, -1})
 			append(&col, [4]u8{255, 255, 0, kind})
 		}
 	}
-	return tile_mesh(pos[:], col[:])
+	return tile_mesh(pos[:], col[:], norm[:])
 }
 
 // Inside BeginMode3D, right after buildings_draw (which sets the shader's uniforms), around target (km).

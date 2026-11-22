@@ -178,8 +178,12 @@ clouds_draw :: proc(w: ^World) {
 		col.a = u8(f32(col.a) * c.alpha)
 		rl.DrawTexturePro(s.puff, src, {centre.x - r, centre.y - r * 0.7, 2 * r, 1.4 * r}, {}, 0, col)
 	}
-	lit := rl.Color{255, 255, 255, 255}
-	shade := rl.Color{226, 231, 240, 255}
+	lit := rl.ColorLerp(rl.WHITE, w.sky_edit.sun_color, clamp(w.sky_edit.sun_strength * 0.22, 0, 0.65))
+	shade := rl.ColorLerp(
+		{216, 222, 234, 255},
+		rl.ColorLerp(w.sky_edit.zenith, w.sky_edit.horizon, 0.25),
+		0.3,
+	)
 	for c in clouds {
 		centre, r, ok := cloud_px(w, c.pos, c.size)
 		if !ok || r < 1.5 do continue

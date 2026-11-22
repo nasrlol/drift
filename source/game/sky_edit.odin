@@ -2,6 +2,7 @@ package game
 
 import "core:fmt"
 import "core:math"
+import "core:math/linalg"
 import rl "vendor:raylib"
 
 // The street view's sky and sun (nasr, 2026-11-22): the Sky tab of the settings panel. Colors are picked in sRGB
@@ -65,6 +66,73 @@ street_look :: proc(w: ^World) -> Street_Look {
 	return look
 }
 
+// Sky color in linear light along ray r (street space: +x east, +y up, +z south), matching STREET_GLSL sky_col.
+sky_color_at :: proc(look: Street_Look, r: [3]f32, with_sun := true) -> [3]f32 {
+	e := clamp(r.y, 0, 1)
+	c := look.sky_hor + (look.sky_zen - look.sky_hor) * math.pow(e, look.sky_curve)
+	c += look.sky_hor * look.sky_glow * math.pow(1 - e, 12)
+	if with_sun {
+		s := max(linalg.dot(r, look.sun_dir), 0)
+		c += look.sun_col * (0.035 * math.pow(s, 4) + 0.1 * math.pow(s, 48))
+	}
+	return c
+}
+
+// Linear RGB to sRGB rl.Color, scaling down only when HDR channels exceed 1 so warm highlights keep their hue.
+sky_srgb :: proc(c: [3]f32) -> rl.Color {
+	peak := max(c.r, c.g, c.b, 1)
+	v := linalg.max(c / peak, [3]f32{0, 0, 0})
+	return {
+		u8(math.round(math.sqrt(v.r) * 255)),
+		u8(math.round(math.sqrt(v.g) * 255)),
+		u8(math.round(math.sqrt(v.b) * 255)),
+		255,
+	}
+}
+
+// Street-space sun_dir turned into map space (x east, y south, z down).
+map_sun_dir :: proc(look: Street_Look) -> [3]f32 {
+	return {look.sun_dir.x, look.sun_dir.z, -look.sun_dir.y}
+}
+
+// Horizontal look direction of the map camera in map space (x east, y south).
+map_cam_fwd_2d :: proc(w: ^World) -> [2]f32 {
+	fwd := w.cam.view.target.xy - w.cam.view.position.xy
+	if linalg.length(fwd) > 1e-4 do return linalg.normalize(fwd)
+	return {math.sin(w.cam.pose.yaw), -math.cos(w.cam.pose.yaw)}
+}
+
+// Horizon color of the tilted 2D map in the camera's look direction, matching the street view's low sky.
+map_horizon_color :: proc(w: ^World) -> rl.Color {
+	look := street_look(w)
+	h := map_cam_fwd_2d(w)
+	r := linalg.normalize([3]f32{h.x, 0.03, h.y})
+	return sky_srgb(sky_color_at(look, r))
+}
+
+// Warm sunlight and cool sky ambient tints in sRGB [0, 1] for 2D map geometry (buildings, trees, terrain).
+map_sun_tints :: proc(w: ^World) -> (sun_tint, amb_tint: [3]f32) {
+	e := &w.sky_edit
+	sun_norm := [3]f32{f32(e.sun_color.r), f32(e.sun_color.g), f32(e.sun_color.b)} / 255
+	sun_k := clamp(e.sun_strength / 2.2, 0, 1.3)
+	zen := [3]f32{f32(e.zenith.r), f32(e.zenith.g), f32(e.zenith.b)} / 255
+	hor := [3]f32{f32(e.horizon.r), f32(e.horizon.g), f32(e.horizon.b)} / 255
+	sky_mix := linalg.lerp(zen, hor, 0.3)
+	amb_tint = linalg.lerp([3]f32{0.58, 0.58, 0.58}, sky_mix * 1.15, 0.45)
+	sun_tint = sun_norm * (0.42 * sun_k)
+	return
+}
+
+// Terrain hillshade highlight and shadow tints in sRGB [0, 1] from w.sky_edit.
+map_hill_tints :: proc(w: ^World) -> (sun_tint, shade_tint: [3]f32) {
+	e := &w.sky_edit
+	sun_norm := [3]f32{f32(e.sun_color.r), f32(e.sun_color.g), f32(e.sun_color.b)} / 255
+	zen := [3]f32{f32(e.zenith.r), f32(e.zenith.g), f32(e.zenith.b)} / 255
+	sun_tint = linalg.lerp([3]f32{1, 1, 1}, sun_norm, 0.85) * clamp(e.sun_strength / 2.0, 0.25, 1.15)
+	shade_tint = linalg.lerp([3]f32{0.08, 0.10, 0.14}, zen * 0.45, 0.65)
+	return
+}
+
 // The Sky tab from y down, width wide; returns the y under it.
 sky_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 	e := &w.sky_edit
@@ -80,11 +148,9 @@ sky_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 		look := street_look(w)
 		for i in 0 ..< STRIPS {
 			el := 1 - (f32(i) + 0.5) / STRIPS
-			c := look.sky_hor + (look.sky_zen - look.sky_hor) * math.pow(el, look.sky_curve)
-			c += look.sky_hor * look.sky_glow * math.pow(1 - el, 12)
-			s := [3]f32{math.sqrt(min(c.r, 1)), math.sqrt(min(c.g, 1)), math.sqrt(min(c.b, 1))} * 255
+			c := sky_color_at(look, {0, el, 0}, false)
 			strip := rl.Rectangle{x, y + f32(i) * PREVIEW_H / STRIPS, width, PREVIEW_H / STRIPS + 1}
-			rl.DrawRectangleRec(strip, {u8(s.r), u8(s.g), u8(s.b), 255})
+			rl.DrawRectangleRec(strip, sky_srgb(c))
 		}
 		round_rect_lines(w, {x, y, width, PREVIEW_H}, 6, 1, pal.line)
 		y += PREVIEW_H + 14

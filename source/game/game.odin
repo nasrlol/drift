@@ -373,8 +373,7 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	rl.BeginDrawing()
 	t = prof_begin(w, .Draw)
-	space := pal.sky
-	bg := rl.ColorLerp(pal.land, space, clamp(-w.cam.pose.zoom, 0, 1))
+	bg := rl.ColorLerp(pal.land, pal.space, clamp(-w.cam.pose.zoom, 0, 1))
 	rl.ClearBackground(bg)
 	if w.street.on do street_draw(w)
 	if !w.street.on {
@@ -533,16 +532,18 @@ game_update :: proc(memory: rawptr) -> bool {
 			rl.UpdateMeshBuffer(lm.wind, 3, raw_data(color), i32(len(color) * size_of(color[0])), 0)
 		}
 
-		// A tilted camera: the far land fades into the horizon color (design "Kaart").
-		if tilt := w.cam.pose.tilt; tilt > 0.05 {
+		// A tilted camera: the far land fades into the horizon color (w.sky_edit).
+		hor_col := map_horizon_color(w)
+		if view_tilted(w) {
+			tilt := w.cam.pose.tilt
 			h := i32(w.cam.screen.y * 0.45)
 			rl.DrawRectangleGradientV(
 				0,
 				0,
 				i32(w.cam.screen.x),
 				h,
-				rl.ColorAlpha(pal.horizon, min(tilt / 0.9, 1)),
-				rl.ColorAlpha(pal.horizon, 0),
+				rl.ColorAlpha(hor_col, min(tilt / 0.9, 1)),
+				rl.ColorAlpha(hor_col, 0),
 			)
 		}
 
@@ -607,7 +608,7 @@ game_update :: proc(memory: rawptr) -> bool {
 			casing_colors[Map_Kind.Primary] = rl.ColorNormalize(pal.main_road_casing)
 			casing_colors[Map_Kind.Trunk] = rl.ColorNormalize(pal.main_road_casing)
 			casing_colors[Map_Kind.Motorway] = rl.ColorNormalize(pal.motorway_casing)
-			horizon := rl.ColorNormalize(pal.horizon).rgb
+			horizon := rl.ColorNormalize(hor_col).rgb
 			// Fog starts a bit beyond the ship in the chase view, none from above (view_edit.odin).
 			fog := view_fog_range(w)
 			sh := lm.material.shader
@@ -741,15 +742,16 @@ game_update :: proc(memory: rawptr) -> bool {
 		// The OpenStreetMap license (ODbL) asks for this credit wherever the map is shown, CC BY 4.0 for the car
 		// model (assets/car-LICENSE.txt).
 		CREDIT :: "© OpenStreetMap contributors, car model: Eric Chadwick (CC BY 4.0)"
-		PAD :: 4
-		text := ui_text_size(w, CREDIT, .Roboto_400, 12)
+		PAD :: 6
+		PX :: 9
+		text := ui_text_size(w, CREDIT, .Roboto_400, PX)
 		screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
-		box := linalg.floor(screen - text - 2 * PAD)
-		rl.DrawRectangleV(box, text + 2 * PAD, rl.ColorAlpha(pal.surface, 0.8))
-		ui_text(w, box + PAD, CREDIT, .Roboto_400, 12, pal.text_2)
+		pos := linalg.floor(screen - text - PAD)
+		ui_text(w, pos, CREDIT, .Roboto_400, PX, pal.text_2)
 	}
 	when DRIFT_DEBUG do settings_ui(w)
 	ui_toast_draw(w)
+	ui_tip_draw(w)
 
 	prof_end(w, .Draw, t)
 

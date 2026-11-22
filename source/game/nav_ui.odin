@@ -433,7 +433,9 @@ nav_ui :: proc(w: ^World) {
 	// Bottom sheet: remaining time (green + leaf), "km, arrive hh:mm", stat chips. Dario adds the buttons
 	// (pilot_ui).
 	sheet := nav_sheet_rect(w)
-	round_rect(w, {sheet.x, sheet.y, sheet.width, sheet.height + 22}, 22, pal.sheet)
+	sheet_box := rl.Rectangle{sheet.x, sheet.y, sheet.width, sheet.height + 22}
+	round_rect(w, sheet_box, 22, pal.sheet)
+	ui_decorate_rect(w, sheet_box, 22)
 	ui_block(w, sheet)
 	x := sheet.x + 24
 	y := sheet.y + 18

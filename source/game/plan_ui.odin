@@ -325,7 +325,9 @@ plan_ui :: proc(w: ^World) {
 			p.car_open = false
 		}
 	}
-	if ui_round_button(w, {a.x + a.width - 16 - 40, y + 26, 40, 40}, .Swap, false) {
+	swap_r := rl.Rectangle{a.x + a.width - 16 - 40, y + 26, 40, 40}
+	ui_tip(w, swap_r, "Swap start and destination")
+	if ui_round_button(w, swap_r, .Swap, false) {
 		p.from, p.to = p.to, p.from
 		p.has_from, p.has_to = p.has_to, p.has_from
 	}
@@ -341,6 +343,7 @@ plan_ui :: proc(w: ^World) {
 		ui_text(w, {dep.x + 38, dep.y + 10}, label, .Roboto_400, 14, pal.text)
 		ui_icon(w, .Expand, {dep.x + dep.width - 18, dep.y + 19}, 20, pal.text_2)
 		ui_focus_ring(w, id, dep, 8)
+		if hot do ui_tip_set(w, dep, "Pick departure hour for wind and solar forecast")
 		if fired {
 			p.departure_open = !p.departure_open
 			p.car_open = false
@@ -359,6 +362,7 @@ plan_ui :: proc(w: ^World) {
 		ui_text(w, {car.x + 52, car.y + 10}, skin_names[w.car_skin], .Roboto_400, 14, pal.text)
 		ui_icon(w, .Expand, {car.x + car.width - 18, car.y + 19}, 20, pal.text_2)
 		ui_focus_ring(w, id, car, 8)
+		if hot do ui_tip_set(w, car, "Choose your car body")
 		if fired {
 			p.car_open = !p.car_open
 			p.departure_open = false
@@ -448,6 +452,47 @@ plan_ui :: proc(w: ^World) {
 				)
 			}
 			ui_focus_ring(w, id, row, 0)
+			if hot && r.ok {
+				tip_buf: [256]u8
+				tip: string
+				switch mode {
+				case .Greenest:
+					saved_pct := max(-r.sum.vs_straight * 100, 0)
+					denom := 1 + r.sum.vs_straight
+					straight_kwh := denom > 0.01 ? r.sum.net_kwh / denom : r.sum.net_kwh
+					saved_kwh := max(straight_kwh - r.sum.net_kwh, 0)
+					tip = fmt.bprintf(
+						tip_buf[:],
+						"Greenest ecological wind route\nSaves %.1f kWh (%.0f%%) vs straight line\nUsed %.1f kWh, solar +%.1f kWh, tailwind %+.1f m/s",
+						saved_kwh,
+						saved_pct,
+						r.sum.used_kwh,
+						r.sum.solar_kwh,
+						r.sum.tail_ms,
+					)
+				case .Fastest:
+					tip = fmt.bprintf(
+						tip_buf[:],
+						"Fastest route (%.0f km/h avg)\nUses %+.0f%% energy vs Greenest\nUsed %.1f kWh, solar +%.1f kWh, tailwind %+.1f m/s",
+						r.sum.kmh,
+						r.sum.vs_greenest * 100,
+						r.sum.used_kwh,
+						r.sum.solar_kwh,
+						r.sum.tail_ms,
+					)
+				case .Calmest:
+					tip = fmt.bprintf(
+						tip_buf[:],
+						"Calmest route (gust index %.2f)\nUses %+.0f%% energy vs Greenest\nUsed %.1f kWh, solar +%.1f kWh, climb %.0f m",
+						r.sum.gust,
+						r.sum.vs_greenest * 100,
+						r.sum.used_kwh,
+						r.sum.solar_kwh,
+						r.sum.climb_m,
+					)
+				}
+				ui_tip_set(w, row, tip)
+			}
 			if fired && r.ok do p.mode = mode
 		}
 		p.carpool_h = plan_carpool_ui(w, routes_box, routes_box.y + 3 * row_h - p.scroll)
@@ -473,19 +518,24 @@ plan_ui :: proc(w: ^World) {
 		ay := b.y + b.height - ACTIONS_H + 16
 		rl.DrawLineEx({b.x, ay - 16}, {b.x + b.width, ay - 16}, 1, pal.line)
 		ok := w.routes[p.mode].ok
-		preview := ui_pill_button(w, {b.x + 16, ay, 128, 44}, "Preview", .Secondary, .Play, true)
+		prev_r := rl.Rectangle{b.x + 16, ay, 128, 44}
+		ui_tip(w, prev_r, "Fly the camera along the chosen route")
+		preview := ui_pill_button(w, prev_r, "Preview", .Secondary, .Play, true)
 		start_r := rl.Rectangle{b.x + 16 + 128 + 10, ay, b.width - 32 - 138, 44}
 		if p.request_id != {} {
+			ui_tip(w, start_r, "Waiting for a driver to accept your ride request")
 			if ui_pill_button(w, start_r, "Waiting...", .Secondary, .Clock, true) {
 				ui_toast(w, "Cancel ride request first to fly solo")
 			}
 			if preview && ok do cam_preview(w, p.mode)
 		} else if carpool_is_passenger(w) {
+			ui_tip(w, start_r, "Board your driver's car and follow the trip")
 			if ui_pill_button(w, start_r, "Board ride", .Primary, .Navigate, true) {
 				carpool_board(w)
 			}
 			if preview && ok do cam_preview(w, p.mode)
 		} else {
+			ui_tip(w, start_r, "Start flying the selected route")
 			start := ui_pill_button(w, start_r, "Start", .Primary, .Navigate, true)
 			if (preview || start) && !ok do plan_nudge(w)
 			if preview && ok do cam_preview(w, p.mode)
@@ -707,8 +757,10 @@ plan_map_controls :: proc(w: ^World) {
 		cam_zoom_by(w, -1, w.cam.screen / 2)
 	}
 	compass := rl.Rectangle{x, zoom.y - MAP_BUTTON_GAP - MAP_BUTTON, MAP_BUTTON, MAP_BUTTON}
+	ui_tip(w, compass, "Reset map north up")
 	if compass_button(w, compass) do cam_north(w)
 	layers := rl.Rectangle{x, compass.y - MAP_BUTTON_GAP - MAP_BUTTON, MAP_BUTTON, MAP_BUTTON}
+	ui_tip(w, layers, "Map type & weather overlays")
 	if ui_round_button(w, layers, .Layers, p.layers_open) do p.layers_open = !p.layers_open
 	music_button(w, {x, layers.y - MAP_BUTTON_GAP - MAP_BUTTON, MAP_BUTTON, MAP_BUTTON})
 
@@ -774,6 +826,7 @@ compass_button :: proc(w: ^World, r: rl.Rectangle) -> bool {
 	c := [2]f32{r.x + r.width / 2, r.y + r.height / 2}
 	ui_shadow(w, r, r.width / 2)
 	rl.DrawCircleV(c, r.width / 2, hot ? pal.surface_2 : pal.surface)
+	ui_decorate_circle(w, c, r.width / 2)
 	yaw := -w.cam.pose.yaw
 	fwd := [2]f32{math.sin(yaw), -math.cos(yaw)}
 	side := [2]f32{-fwd.y, fwd.x}

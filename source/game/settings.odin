@@ -8,11 +8,11 @@ import rl "vendor:raylib"
 
 // Settings panel (nasr, 2026-11-22): F2 opens one panel with a tab per group: Speed (tune.odin), Borders
 // (border_edit.odin), Clouds (cloud_edit.odin), Wind (wind_edit.odin), Grass (grass_edit.odin), View (view_edit.odin), Sky (sky_edit.odin), and the look of the game here: Colors (every palette entry),
-// Fonts (text size, line spacing and which family stands in for each of the design's three) and Corners (one scale for every
-// rounded corner). Debug builds only (nasr: the release runs with the project's settings). The defaults are the
-// code with assets/settings.txt on top (settings_store.odin); each tab's Reset goes back to them. Every change
-// is saved to cache/settings.txt and loaded at the next start; Bake writes the values into
-// assets/settings.txt, which ships once committed.
+// Fonts (text size, line spacing and which family stands in for each of the design's three) and Style (corner
+// radius and widget ornament design). Debug builds only (nasr: the release runs with the project's settings).
+// The defaults are the code with assets/settings.txt on top (settings_store.odin); each tab's Reset goes back
+// to them. Every change is saved to cache/settings.txt and loaded at the next start; Bake writes the values
+// into assets/settings.txt, which ships once committed.
 Settings_Tab :: enum {
 	Speed,
 	Borders,
@@ -23,7 +23,14 @@ Settings_Tab :: enum {
 	Sky,
 	Colors,
 	Fonts,
-	Corners,
+	Style,
+}
+
+Ornament :: enum u8 {
+	None,
+	Brass,
+	Botanical,
+	Sunburst,
 }
 
 Settings :: struct {
@@ -32,6 +39,7 @@ Settings :: struct {
 	drag:       int, // slider id being dragged, 0 = none
 	color:      int, // the palette entry chosen in the Colors tab, index into the Palette fields
 	sky_color:  int, // the color chosen in the Sky tab: zenith, horizon, sunlight
+	deco_color: int, // the color chosen in the Style tab: trim, leaf
 	height:     f32, // the panel's height last frame: the card is drawn before its tab knows its height
 	text_scale: f32, // the text size the font atlases were made for (settings_apply)
 	loaded:     bool, // cache/settings.txt was read (first frame of the panel)
@@ -59,11 +67,17 @@ FONT_FAMILY_NAMES :: [Font_Family]string {
 }
 
 Look :: struct {
-	palette:      Palette,
-	text_scale:   f32, // times every text size of ui_text
-	line_spacing: f32, // line height of wrapped text, in text sizes
-	family:       [Font_Family]Font_Family, // the family drawn where the design asks for this one
-	radius_scale: f32, // times every corner radius of round_rect
+	palette:         Palette,
+	text_scale:      f32, // times every text size of ui_text
+	line_spacing:    f32, // line height of wrapped text, in text sizes
+	family:          [Font_Family]Font_Family, // the family drawn where the design asks for this one
+	radius_scale:    f32, // times every corner radius of round_rect
+	ornament:        Ornament, // widget decoration design (Brass, Botanical, Sunburst)
+	ornament_detail: f32, // trim thickness and flourish size
+	ornament_color:  rl.Color, // brass/gold trim color
+	leaf_color:      rl.Color, // botanical leaf motif color
+	dial_ticks:      bool, // radial ticks on circular gauges and round buttons
+	corner_brackets: bool, // corner flourishes on cards, sheets, and HUD boxes
 }
 
 SETTINGS_W :: 400
@@ -71,6 +85,7 @@ SETTINGS_TEXT_SCALE :: [2]f32{0.7, 1.6}
 SETTINGS_LINE_SPACING :: [2]f32{1, 2.2}
 SETTINGS_TEXT_STEP :: 0.05 // the text size snaps to this, so dragging makes few font atlases
 SETTINGS_MAX_RADIUS_SCALE :: 2.5
+SETTINGS_ORNAMENT_DETAIL :: [2]f32{0.3, 1.6}
 SETTINGS_COLOR_COLS :: 10
 SETTINGS_TAB_COLS :: 4 // tabs per row of the tab bar: eight in one row run their labels together
 SETTINGS_PICKER_COLS :: 3 // themes and font families per row so labels never crowd
@@ -89,6 +104,12 @@ look_defaults :: proc() -> Look {
 			.JetBrains = .JetBrains,
 		},
 		radius_scale = 1,
+		ornament = .None,
+		ornament_detail = 1,
+		ornament_color = {200, 155, 62, 255},
+		leaf_color = {62, 142, 90, 255},
+		dial_ticks = true,
+		corner_brackets = true,
 	}
 }
 
@@ -231,8 +252,14 @@ settings_reset :: proc(w: ^World, tab: Settings_Tab) {
 		w.look.text_scale = def.text_scale
 		w.look.line_spacing = def.line_spacing
 		w.look.family = def.family
-	case .Corners:
+	case .Style:
 		w.look.radius_scale = def.radius_scale
+		w.look.ornament = def.ornament
+		w.look.ornament_detail = def.ornament_detail
+		w.look.ornament_color = def.ornament_color
+		w.look.leaf_color = def.leaf_color
+		w.look.dial_ticks = def.dial_ticks
+		w.look.corner_brackets = def.corner_brackets
 	}
 }
 
@@ -300,8 +327,8 @@ settings_ui :: proc(w: ^World) {
 		y = colors_tab(w, x, y, inner, &s.drag)
 	case .Fonts:
 		y = fonts_tab(w, x, y, inner, &s.drag)
-	case .Corners:
-		y = corners_tab(w, x, y, inner, &s.drag)
+	case .Style:
+		y = style_tab(w, x, y, inner, &s.drag)
 	}
 
 	name := names[int(tab)]
@@ -488,20 +515,82 @@ fonts_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 	return y
 }
 
-// One scale for every rounded corner, with the design's corners as samples: a list (12 px), a card (18 px),
-// a round button (24 px) and a pill.
-corners_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
+// Corner roundness and widget ornamentation (Brass, Botanical, Sunburst): geometry, toggles, trim/leaf colors,
+// and live shape samples.
+style_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
+	s := &w.settings
 	pal := palette(w)
+	look := &w.look
 	def := w.setting_defaults.look
 	y := y
+
+	ui_text(w, {x, y}, "Decoration", .Roboto_400, 13, pal.text)
+	y += 22
+	styles: [len(Ornament)]string
+	for o in Ornament do styles[int(o)] = fmt.tprint(o)
+	sel := int(look.ornament)
+	if ui_segment(w, {x, y, width, 32}, styles[:], &sel) do look.ornament = Ornament(sel)
+	y += 42
+
+	ui_slider_row(
+		w,
+		x,
+		y,
+		width,
+		"Detail",
+		fmt.tprintf("x %.2f", look.ornament_detail),
+		&look.ornament_detail,
+		SETTINGS_ORNAMENT_DETAIL.x,
+		SETTINGS_ORNAMENT_DETAIL.y,
+		def.ornament_detail,
+		drag,
+		2,
+	)
+	y += UI_SLIDER_ROW_H
+
+	Toggle_Row :: struct {
+		label: string,
+		val:   ^bool,
+	}
+	toggles := [?]Toggle_Row{{"Dial ticks", &look.dial_ticks}, {"Corner motifs", &look.corner_brackets}}
+	for row in toggles {
+		ui_text(w, {x, y + 3}, row.label, .Roboto_400, 13, pal.text)
+		ui_toggle(w, {x + width - 36, y + 2, 36, 20}, row.val)
+		y += 28
+	}
+	y += 6
+
+	swatches := [?]^rl.Color{&look.ornament_color, &look.leaf_color}
+	def_swatches := [?]rl.Color{def.ornament_color, def.leaf_color}
+	swatch_names := [?]string{"Trim brass", "Leaf green"}
+	s.deco_color = clamp(s.deco_color, 0, len(swatches) - 1)
+	cell := (width - 8) / 2
+	for i in 0 ..< len(swatches) {
+		r := rl.Rectangle{x + f32(i) * (cell + 8), y, cell, 32}
+		id, hot, fired := ui_widget(w, r)
+		if fired do s.deco_color = i
+		round_rect(w, r, 8, hot ? pal.surface_3 : pal.surface_2)
+		round_rect(w, {r.x + 8, r.y + 7, 18, 18}, 5, swatches[i]^)
+		ui_text(w, {r.x + 32, r.y + 9}, swatch_names[i], .Roboto_400, 12, pal.text)
+		if i == s.deco_color do round_rect_lines(w, r, 8, 2, pal.accent)
+		ui_focus_ring(w, id, r, 8)
+	}
+	y += 40
+	cc := swatches[s.deco_color]
+	dc := def_swatches[s.deco_color]
+	settings_channel(w, x, y, width, "Red", &cc.r, dc.r, drag, 3)
+	settings_channel(w, x, y + UI_SLIDER_ROW_H, width, "Green", &cc.g, dc.g, drag, 4)
+	settings_channel(w, x, y + 2 * UI_SLIDER_ROW_H, width, "Blue", &cc.b, dc.b, drag, 5)
+	y += 3 * UI_SLIDER_ROW_H + 4
+
 	ui_slider_row(
 		w,
 		x,
 		y,
 		width,
 		"Corner radius",
-		fmt.tprintf("x %.2f", w.look.radius_scale),
-		&w.look.radius_scale,
+		fmt.tprintf("x %.2f", look.radius_scale),
+		&look.radius_scale,
 		0,
 		SETTINGS_MAX_RADIUS_SCALE,
 		def.radius_scale,
@@ -520,6 +609,7 @@ corners_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 		r := rl.Rectangle{x + f32(i) * (side + gap), y, side, 56}
 		round_rect(w, r, sample.radius, pal.surface_2)
 		round_rect_lines(w, r, sample.radius, 1, pal.line)
+		ui_decorate_rect(w, r, sample.radius)
 		size := ui_text_size(w, sample.label, .Roboto_400, 11)
 		ui_text(
 			w,
@@ -530,5 +620,5 @@ corners_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 			pal.text_2,
 		)
 	}
-	return y + 56 + 28
+	return y + 56 + 26
 }

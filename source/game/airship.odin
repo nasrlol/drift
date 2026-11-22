@@ -78,7 +78,7 @@ uniform vec3 light_dir;
 uniform vec3 view_dir;
 uniform vec3 sky;
 uniform vec3 ground;
-uniform float sun;
+uniform vec3 sun;
 out vec4 finalColor;
 void main() {
 	vec3 n = normalize(normal);
@@ -367,7 +367,21 @@ car_draw :: proc(
 		fovy       = screen.y,
 		projection = .ORTHOGRAPHIC,
 	}
-	car_shader_light(w, {-0.45, 1.3, 0.3}, {0, cos_t, sin_t})
+	look := street_look(w)
+	cy, sy := math.cos(w.cam.pose.yaw), math.sin(w.cam.pose.yaw)
+	light := [3]f32 {
+		look.sun_dir.x * cy + look.sun_dir.z * sy,
+		look.sun_dir.y,
+		-look.sun_dir.x * sy + look.sun_dir.z * cy,
+	}
+	se := &w.sky_edit
+	sun_srgb := [3]f32{f32(se.sun_color.r), f32(se.sun_color.g), f32(se.sun_color.b)} / 255
+	sun_k := clamp(se.sun_strength / 2.2, 0, 1.3)
+	zen := [3]f32{f32(se.zenith.r), f32(se.zenith.g), f32(se.zenith.b)} / 255
+	hor := [3]f32{f32(se.horizon.r), f32(se.horizon.g), f32(se.horizon.b)} / 255
+	sky_c := linalg.lerp(zen, hor, 0.45)
+	gnd_c := rl.ColorNormalize(palette(w).land).rgb * 0.35
+	car_shader_set(w, light, {0, cos_t, sin_t}, sky_c, gnd_c, sun_srgb * sun_k)
 
 	yaw := math.PI / 2 - (heading - w.cam.pose.yaw)
 	bob := math.sin(an.time * 2.2) * CAR_BOB_M * an.fly
@@ -433,20 +447,20 @@ airship_unload :: proc(a: ^Airship) {
 	}
 }
 
-// Sky, ground and sun of the map view for CAR_FS, with the light and view direction.
+// Studio sky, ground and sun for CAR_FS (dropdown previews).
 car_shader_light :: proc(w: ^World, light, view: [3]f32) {
-	sky, gnd, sun := [3]f32{0.72, 0.82, 0.98}, [3]f32{0.24, 0.26, 0.3}, f32(1)
+	sky, gnd, sun := [3]f32{0.72, 0.82, 0.98}, [3]f32{0.24, 0.26, 0.3}, [3]f32{1, 1, 1}
 	car_shader_set(w, light, view, sky, gnd, sun)
 }
 
-car_shader_set :: proc(w: ^World, light, view, sky, gnd: [3]f32, sun: f32) {
+car_shader_set :: proc(w: ^World, light, view, sky, gnd, sun: [3]f32) {
 	sh := w.airship.material.shader
 	light, view, sky, gnd, sun := light, view, sky, gnd, sun
 	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "light_dir"), &light, .VEC3)
 	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "view_dir"), &view, .VEC3)
 	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sky"), &sky, .VEC3)
 	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "ground"), &gnd, .VEC3)
-	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sun"), &sun, .FLOAT)
+	rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "sun"), &sun, .VEC3)
 }
 
 // Body and wheels of one skin with model matrix m (inside BeginMode3D). Wheels roll on the road and fold flat
@@ -518,7 +532,7 @@ car_draw_street :: proc(
 	a := &w.airship
 	if !a.ready do return
 	view := linalg.normalize(w.street.view.position - pos)
-	if own == nil do car_shader_set(w, look.sun_dir, view, look.sky_amb, look.gnd_amb, look.sun)
+	if own == nil do car_shader_set(w, look.sun_dir, view, look.sky_amb, look.gnd_amb, look.sun_col)
 	// Model space: x forward, y up, z right. Heading 0 is north (-z in street space).
 	m := linalg.matrix4_translate_f32(pos)
 	m = m * linalg.matrix4_rotate_f32(math.PI / 2 - an.heading, {0, 1, 0})

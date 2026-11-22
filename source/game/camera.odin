@@ -221,10 +221,13 @@ cam_overview :: proc(w: ^World) {
 	cam_glide(w, {}, CAM_FIT_S)
 }
 
-// North up again (compass button), keeps position and zoom.
+// North up again (compass button), exits preview/orbit, levels tilt, keeps position and zoom.
 cam_north :: proc(w: ^World) {
+	w.cam.mode = .Free
 	to := w.cam.pose
 	to.yaw = 0
+	to.tilt = 0
+	to.globe_rot = {}
 	cam_glide(w, to, CAM_ZOOM_GLIDE_S)
 }
 

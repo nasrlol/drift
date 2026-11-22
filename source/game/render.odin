@@ -1,6 +1,8 @@
 // author: nasr
 package game
 
+import "core:math"
+import "core:math/linalg"
 import rl "vendor:raylib"
 import rlgl "vendor:raylib/rlgl"
 
@@ -89,6 +91,7 @@ Palette :: struct {
 	sun:                rl.Color, // solar layer, sunlit ground
 	sky:                rl.Color,
 	horizon:            rl.Color,
+	space:              rl.Color, // outer space behind the globe
 	// labels and markers (design "Labels en markers")
 	area_label:         rl.Color,
 	water_label:        rl.Color,
@@ -158,6 +161,7 @@ PALETTE :: Palette {
 	sun                = {255, 190, 50, 255},
 	sky                = {188, 220, 242, 255},
 	horizon            = {230, 239, 242, 255},
+	space              = {4, 7, 15, 255},
 	area_label         = {60, 64, 67, 255},
 	water_label        = {58, 110, 170, 255},
 	label_halo         = {255, 255, 255, 255},
@@ -215,9 +219,12 @@ Line_Meshes :: struct {
 	// land use (draw order 1): the baked area triangles, vertex colors from the palette
 	areas:           rl.Mesh,
 	area_colors:     [Area_Kind]rl.Color, // the colors areas was built with (settings_apply rebuilds it)
-	// hillshade (terrain map type): one quad over the map with the baked shading as a texture
+	// hillshade (terrain map type): one quad over the map with packed terrain normals, shaded by sky_edit sun
 	hill:            rl.Mesh,
 	hill_material:   rl.Material,
+	hill_loc:        struct {
+		sun_dir, sun_tint, shade_tint: i32,
+	},
 	// A* scan animation: one square per node of the last route search (grid.expanded), revealed by draw count
 	scan:            rl.Mesh,
 	scan_material:   rl.Material,
@@ -368,7 +375,10 @@ line_meshes_unload :: proc(lm: ^Line_Meshes) {
 	rl.UnloadMesh(lm.wind)
 	rl.UnloadMesh(lm.ground)
 	if lm.areas.vertexCount > 0 do rl.UnloadMesh(lm.areas)
-	if lm.hill.vertexCount > 0 do rl.UnloadMesh(lm.hill)
+	if lm.hill.vertexCount > 0 {
+		rl.UnloadMesh(lm.hill)
+		rl.UnloadMaterial(lm.hill_material)
+	}
 	if lm.scan.vertexCount > 0 do rl.UnloadMesh(lm.scan)
 	rl.UnloadMaterial(lm.scan_material)
 	rl.UnloadMaterial(lm.ground_material)
@@ -465,23 +475,67 @@ areas_draw :: proc(w: ^World) {
 	rl.DrawMesh(lm.areas, lm.ground_material, rl.Matrix(1))
 }
 
-// Shading below this baked value darkens, above it lightens: 180 = cos 45 deg, flat ground under the 45 deg sun.
-HILL_FLAT :: 180
-HILL_SHADOW_ALPHA :: 130
-HILL_LIGHT_ALPHA :: 70
+// Vertical exaggeration matching bake_map.
+HILL_Z :: 4
+HILL_VS :: `#version 330
+in vec3 vertexPosition;
+in vec2 vertexTexCoord;
+uniform mat4 mvp;
+out vec2 fragTexCoord;
+void main() {
+	fragTexCoord = vertexTexCoord;
+	gl_Position = mvp * vec4(vertexPosition, 1.0);
+}
+`
+HILL_FS :: `#version 330
+in vec2 fragTexCoord;
+uniform sampler2D texture0;
+uniform vec3 sun_dir;
+uniform vec3 sun_tint;
+uniform vec3 shade_tint;
+out vec4 finalColor;
+void main() {
+	vec4 t = texture(texture0, fragTexCoord);
+	vec3 n = normalize(vec3(t.r * 2.0 - 1.0, t.g * 2.0 - 1.0, t.b));
+	float fade = t.a;
+	float flat_l = max(sun_dir.z, 0.08);
+	float lit = dot(n, sun_dir);
+	if (lit < flat_l) {
+		float a = clamp((flat_l - lit) / flat_l, 0.0, 1.0) * (130.0 / 255.0) * fade;
+		finalColor = vec4(shade_tint, a);
+	} else {
+		float a = clamp((lit - flat_l) / max(1.0 - flat_l, 0.05), 0.0, 1.0) * (95.0 / 255.0) * fade;
+		finalColor = vec4(sun_tint, a);
+	}
+}
+`
 
-// The hillshade of belgium.bin as one texture on a quad over the whole map (todo: "draw it as one quad"). Shadows
-// are black and highlights white with alpha, so it shades whatever land use is under it.
+// Horn's 3 x 3 terrain normals from heights packed into an RGBA texture on one quad over the map, shaded in
+// real time from w.sky_edit so sun direction and golden-hour colors match the street view.
 hill_build :: proc(w: ^World, lm: ^Line_Meshes) {
-	hs := w.m.hillshade
-	if len(hs) != HEIGHT_W * HEIGHT_H do return
-	pixels := make([][4]u8, len(hs), context.temp_allocator)
-	for v, i in hs {
-		fade := f32(w.belgium[i]) / BELGIUM_DEPTH
-		if v < HILL_FLAT {
-			pixels[i] = {0, 0, 0, u8(f32(HILL_FLAT - v) / HILL_FLAT * HILL_SHADOW_ALPHA * fade)}
-		} else {
-			pixels[i] = {255, 255, 255, u8(f32(v - HILL_FLAT) / (255 - HILL_FLAT) * HILL_LIGHT_ALPHA * fade)}
+	heights := w.m.heights
+	if len(heights) != HEIGHT_W * HEIGHT_H do return
+	pixels := make([][4]u8, len(heights), context.temp_allocator)
+	at :: proc(heights: []i16, x, y: int) -> f32 {
+		return f32(heights[clamp(y, 0, HEIGHT_H - 1) * HEIGHT_W + clamp(x, 0, HEIGHT_W - 1)])
+	}
+	cell_m := f32(HEIGHT_CELL_KM * 1000)
+	for y in 0 ..< HEIGHT_H {
+		for x in 0 ..< HEIGHT_W {
+			i := y * HEIGHT_W + x
+			nw, n, ne := at(heights, x - 1, y - 1), at(heights, x, y - 1), at(heights, x + 1, y - 1)
+			w0, e := at(heights, x - 1, y), at(heights, x + 1, y)
+			sw, s, se := at(heights, x - 1, y + 1), at(heights, x, y + 1), at(heights, x + 1, y + 1)
+			dzdx := ((ne + 2 * e + se) - (nw + 2 * w0 + sw)) / (8 * cell_m) * HILL_Z
+			dzdn := ((nw + 2 * n + ne) - (sw + 2 * s + se)) / (8 * cell_m) * HILL_Z
+			n3 := linalg.normalize([3]f32{-dzdx, -dzdn, 1})
+			fade := f32(w.belgium[i]) / BELGIUM_DEPTH
+			pixels[i] = {
+				u8(math.round((n3.x * 0.5 + 0.5) * 255)),
+				u8(math.round((n3.y * 0.5 + 0.5) * 255)),
+				u8(math.round(clamp(n3.z, 0, 1) * 255)),
+				u8(math.round(fade * 255)),
+			}
 		}
 	}
 	img := rl.Image {
@@ -507,6 +561,14 @@ hill_build :: proc(w: ^World, lm: ^Line_Meshes) {
 	mesh.vertices, mesh.texcoords = nil, nil // uploaded, the stack arrays are not kept
 	lm.hill = mesh
 	lm.hill_material = rl.LoadMaterialDefault()
+	sh := rl.LoadShaderFromMemory(HILL_VS, HILL_FS)
+	if !rl.IsShaderValid(sh) do logf(w, "render", "hill shader did not compile")
+	lm.hill_material.shader = sh
+	lm.hill_loc = {
+		sun_dir    = rl.GetShaderLocation(sh, "sun_dir"),
+		sun_tint   = rl.GetShaderLocation(sh, "sun_tint"),
+		shade_tint = rl.GetShaderLocation(sh, "shade_tint"),
+	}
 	rl.SetMaterialTexture(&lm.hill_material, .ALBEDO, tex)
 }
 
@@ -517,6 +579,13 @@ hill_draw :: proc(w: ^World) {
 	prof_zone(w, .Hill)
 	lm := &w.line_meshes
 	if lm.hill.vertexCount == 0 || !w.plan.layers.terrain do return
+	look := street_look(w)
+	sun_dir := [3]f32{look.sun_dir.x, -look.sun_dir.z, look.sun_dir.y}
+	sun_tint, shade_tint := map_hill_tints(w)
+	sh := lm.hill_material.shader
+	rl.SetShaderValue(sh, lm.hill_loc.sun_dir, &sun_dir, .VEC3)
+	rl.SetShaderValue(sh, lm.hill_loc.sun_tint, &sun_tint, .VEC3)
+	rl.SetShaderValue(sh, lm.hill_loc.shade_tint, &shade_tint, .VEC3)
 	rlgl.DisableDepthTest()
 	rl.DrawMesh(lm.hill, lm.hill_material, rl.Matrix(1))
 	rlgl.EnableDepthTest()

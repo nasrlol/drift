@@ -94,6 +94,7 @@ music_toggle :: proc(w: ^World) {
 music_button :: proc(w: ^World, r: rl.Rectangle) {
 	m := &w.music
 	on := m.ready && !m.off
+	ui_tip(w, r, on ? "Mute music (M)" : "Play music (M)")
 	if !ui_round_button(w, r, on ? .Speaker : .Speaker_Off, on) do return
 	if !m.ready {
 		ui_toast(w, "No audio device")

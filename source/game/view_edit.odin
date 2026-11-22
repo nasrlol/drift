@@ -95,7 +95,7 @@ view_label_alpha :: proc(w: ^World, d: f32, end: f32) -> f32 {
 // one ground point per row gives its fog.
 view_horizon_draw :: proc(w: ^World) {
 	if !view_tilted(w) do return
-	pal := palette(w)
+	hor_col := map_horizon_color(w)
 	screen := w.cam.screen
 	mid := screen.x / 2
 	// The horizon row: ground below it, none above (bisection, rows grow downwards).
@@ -130,26 +130,55 @@ view_horizon_draw :: proc(w: ^World) {
 					i32(y0),
 					i32(screen.x),
 					i32(math.ceil(step)) + 1,
-					rl.ColorAlpha(pal.horizon, prev),
-					rl.ColorAlpha(pal.horizon, a1),
+					rl.ColorAlpha(hor_col, prev),
+					rl.ColorAlpha(hor_col, a1),
 				)
 			}
 			prev = a1
 		}
 	}
 	if horizon > 0 {
+		SKY_STRIPS :: 24
+		look := street_look(w)
+		h2 := map_cam_fwd_2d(w)
 		fade := clamp(w.view_edit.sky_fade, 0.01, 1) * screen.y
-		top := max(horizon - fade, 0)
-		rl.DrawRectangle(0, 0, i32(screen.x), i32(top) + 1, pal.sky)
-		t := clamp((horizon - top) / fade, 0, 1)
-		rl.DrawRectangleGradientV(
-			0,
-			i32(top),
-			i32(screen.x),
-			i32(math.ceil(horizon - top)) + 1,
-			lerp_color(pal.horizon, pal.sky, t),
-			pal.horizon,
-		)
+		for i in 0 ..< SKY_STRIPS {
+			y0 := f32(i) / SKY_STRIPS * horizon
+			y1 := f32(i + 1) / SKY_STRIPS * horizon
+			el0 := clamp((horizon - y0) / fade, 0, 1)
+			el1 := clamp((horizon - y1) / fade, 0, 1)
+			c0 := sky_srgb(sky_color_at(look, linalg.normalize([3]f32{h2.x, 0.03 + el0 * 0.97, h2.y})))
+			c1 := sky_srgb(sky_color_at(look, linalg.normalize([3]f32{h2.x, 0.03 + el1 * 0.97, h2.y})))
+			rl.DrawRectangleGradientV(0, i32(y0), i32(screen.x), i32(math.ceil(y1 - y0)) + 1, c0, c1)
+		}
+		sun_dir := map_sun_dir(look)
+		cam_fwd := linalg.normalize(w.cam.view.target - w.cam.view.position)
+		if linalg.dot(cam_fwd, sun_dir) > 0.05 && w.sky_edit.sun_strength > 0.01 {
+			sun_px := rl.GetWorldToScreenEx(
+				w.cam.view.position + sun_dir * 1000,
+				w.cam.view,
+				i32(screen.x),
+				i32(screen.y),
+			)
+			sun_k := clamp(w.sky_edit.sun_strength / 2.2, 0, 1)
+			sun_c := w.sky_edit.sun_color
+			core_c := lerp_color(sun_c, rl.WHITE, 0.55)
+			rl.BeginScissorMode(0, 0, i32(screen.x), i32(math.ceil(horizon)) + 1)
+			rl.DrawCircleGradient(
+				sun_px,
+				screen.x * 0.28,
+				rl.ColorAlpha(sun_c, 0.26 * sun_k),
+				rl.ColorAlpha(sun_c, 0),
+			)
+			rl.DrawCircleGradient(
+				sun_px,
+				screen.x * 0.075,
+				rl.ColorAlpha(core_c, 0.48 * sun_k),
+				rl.ColorAlpha(sun_c, 0),
+			)
+			rl.DrawCircleV(sun_px, max(screen.y * 0.012, 7), rl.ColorAlpha(core_c, 0.92 * sun_k))
+			rl.EndScissorMode()
+		}
 	}
 }
 
