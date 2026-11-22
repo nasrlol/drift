@@ -42,13 +42,13 @@ World_City :: struct {
 }
 
 World_Map :: struct {
-	mask:   []u8,
-	region: []u8, // finer land mask round Belgium (tools/bake_world), header fields below
+	mask:               []u8,
+	region:             []u8, // finer land mask round Belgium (tools/bake_world), header fields below
 	region_w, region_h: int,
-	region_rect: [4]f32, // lon0, lat_top, deg_w, deg_h
-	lines:  []World_Line,
-	points: [][2]f32,
-	cities: []World_City,
+	region_rect:        [4]f32, // lon0, lat_top, deg_w, deg_h
+	lines:              []World_Line,
+	points:             [][2]f32,
+	cities:             []World_City,
 }
 
 Globe_GPU :: struct {
@@ -145,11 +145,7 @@ globe_normal :: proc(lon_deg, lat_deg: f32) -> [3]f32 {
 globe_pos :: proc(lon_deg, lat_deg, depth: f32) -> [3]f32 {
 	n := globe_normal(lon_deg, lat_deg)
 	round := earth_centre() + n * (EARTH_RADIUS_KM - depth)
-	flat := [3]f32 {
-		(lon_deg - MAP_LON0) * KM_PER_DEG * MAP_COS_LAT,
-		(MAP_LAT0 - lat_deg) * KM_PER_DEG,
-		depth,
-	}
+	flat := [3]f32{(lon_deg - MAP_LON0) * KM_PER_DEG * MAP_COS_LAT, (MAP_LAT0 - lat_deg) * KM_PER_DEG, depth}
 	away := math.acos(clamp(-n.z, -1, 1)) * math.DEG_PER_RAD
 	t := math.smoothstep(f32(GLOBE_FLAT_DEG), f32(GLOBE_ROUND_DEG), away)
 	return linalg.lerp(flat, round, t)

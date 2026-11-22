@@ -53,10 +53,10 @@ region_bits: [REGION_W * REGION_H / 8]u8
 
 // An equirectangular raster: lon0 at the left edge, lat_top at the top, deg_w x deg_h degrees.
 Grid :: struct {
-	xor:               []u8,
-	w, h:              int,
-	lon0, lat_top:     f32,
-	deg_w, deg_h:      f32,
+	xor:           []u8,
+	w, h:          int,
+	lon0, lat_top: f32,
+	deg_w, deg_h:  f32,
 }
 
 json_num :: proc(v: json.Value) -> f32 {
@@ -154,7 +154,15 @@ load_geojson :: proc(path: string) -> json.Object {
 
 main :: proc() {
 	world := Grid{mask_xor[:], WORLD_MASK_W, WORLD_MASK_H, -180, 90, 360, 180}
-	region := Grid{region_xor[:], REGION_W, REGION_H, REGION_LON0, REGION_LAT_TOP, REGION_DEG_W, REGION_DEG_H}
+	region := Grid {
+		region_xor[:],
+		REGION_W,
+		REGION_H,
+		REGION_LON0,
+		REGION_LAT_TOP,
+		REGION_DEG_W,
+		REGION_DEG_H,
+	}
 	land := load_geojson("assets/geojson/ne_50m_land.geojson")
 	for feat in land["features"].(json.Array) {
 		geom := feat.(json.Object)["geometry"].(json.Object)
@@ -217,19 +225,19 @@ main :: proc() {
 	slice.sort_by(cities[:], proc(a, b: World_City) -> bool {return a.rank < b.rank})
 
 	header := World_Header {
-		magic       = WORLD_MAGIC,
-		version     = WORLD_VERSION,
-		mask_w      = WORLD_MASK_W,
-		mask_h      = WORLD_MASK_H,
-		line_count  = u32(len(lines)),
-		point_count = u32(len(points)),
-		city_count  = u32(len(cities)),
-		region_w = u32(REGION_W),
-		region_h = u32(REGION_H),
-		region_lon0 = REGION_LON0,
+		magic          = WORLD_MAGIC,
+		version        = WORLD_VERSION,
+		mask_w         = WORLD_MASK_W,
+		mask_h         = WORLD_MASK_H,
+		line_count     = u32(len(lines)),
+		point_count    = u32(len(points)),
+		city_count     = u32(len(cities)),
+		region_w       = u32(REGION_W),
+		region_h       = u32(REGION_H),
+		region_lon0    = REGION_LON0,
 		region_lat_top = REGION_LAT_TOP,
-		region_deg_w = REGION_DEG_W,
-		region_deg_h = REGION_DEG_H,
+		region_deg_w   = REGION_DEG_W,
+		region_deg_h   = REGION_DEG_H,
 	}
 
 	out := make([dynamic]u8, 0, 2 * 1024 * 1024)

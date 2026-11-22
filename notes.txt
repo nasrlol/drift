@@ -328,6 +328,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   coastlines and borders meet belgium.bin (left: Natural Earth 1:50m generalisation, ~1 km). world.bin
                   version 2 adds a coastal land mask lon 1 .. 5.5, lat 50.9 .. 52.5 at 1/80 deg (Zeeland, Scheldt),
                   sampled by GLOBE_FS inside u_region and faded into the world mask over its outer 10 %.
+  sea border      (andrei) Belgium's border from OSM runs 12 nm out round the territorial sea: those border
+                  segments are dashed (LINE_DASH_ON_PX 7 / LINE_DASH_OFF_PX 5 on screen). border_at_sea (render.odin):
+                  the surface model is 0 (|h| <= 0.05 m) at the segment middle and 0.5 km round it, so De Moeren (a
+                  polder at sea level on the French border) stays solid; 28 segments. LINE_VS: vertexColor.g 255 =
+                  dashed, vertexTexCoord = km along the line at A and B (line_mesh_upload along, map lines only).
   map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
                   load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
                   Hubs are copied into a fixed array w.m.hubs[:w.m.hub_count], hub id = index.
