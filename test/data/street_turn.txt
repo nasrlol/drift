@@ -1,0 +1,31 @@
+# A fast turn of the street camera (40 px of mouse per frame, ~8 degrees): the frames mid-turn must be as sharp as
+# the still one, without ghost copies of earlier frames (post.odin blended every frame with the one before until
+# 2026-11-22: the final pass keeps the luma in alpha and raylib blends by alpha). Compare the three shots.
+snapshot test/data/calm.snap
+wheel 2 40
+wheel 45 1
+ship 450 140.315 79.543 3 198
+shot 560 build/shots/turn_still.png
+mouse 561 40 0
+mouse 562 40 0
+mouse 563 40 0
+mouse 564 40 0
+mouse 565 40 0
+mouse 566 40 0
+mouse 567 40 0
+mouse 568 40 0
+mouse 569 40 0
+mouse 570 40 0
+mouse 571 40 0
+mouse 572 40 0
+mouse 573 40 0
+mouse 574 40 0
+mouse 575 40 0
+mouse 576 40 0
+mouse 577 40 0
+mouse 578 40 0
+mouse 579 40 0
+mouse 580 40 0
+shot 570 build/shots/turn_fast_a.png
+shot 571 build/shots/turn_fast_b.png
+quit 581

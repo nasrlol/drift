@@ -766,7 +766,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   shade, ACES, an S-curve (0.3), a soft vignette, +-0.5 % grain; then FXAA on strong edges only (the
                   float target has no MSAA; the first, unthresholded FXAA smeared windows and grass up to 8 px and
                   looked like motion blur, Lars: "er is nu echt te veel motion blur"). raylib forgets bound samplers
-                  when it flushes its batch (changing target does), so post_pass binds them inside the pass.
+                  when it flushes its batch (changing target does), so post_pass binds them inside the pass. The
+                  passes replace (color blending off) unless they add: with raylib's default alpha blending the
+                  final pass (luma in alpha) mixed every frame with the one before, ghost copies when turning
+                  (Lars: "als ik snel draai vervagen veel zaken"); test/data/street_turn.txt shoots a fast turn.
+                  Flicker with post: 0.011 % over the roofs, 0.003 % in a street (max 0.05 %).
                   Without a float target the shaders tonemap themselves (direct) and the scene goes to the screen.
                   The ground writes one more depth hair, so the sky (clear value 1) stays apart from it for the AO.
                   Frame (profile build, mean of 120 frames before each standard shot, now logged with every

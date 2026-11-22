@@ -382,7 +382,12 @@ Post_Tex :: struct {
 // changing the target does.
 post_pass :: proc(dst: rl.RenderTexture2D, sh: rl.Shader, texs: []Post_Tex, blend := false) {
 	if dst.id != 0 do rl.BeginTextureMode(dst)
+	rlgl.DrawRenderBatchActive()
+	// Replace, never blend, unless asked: raylib blends by alpha by default, and the final pass keeps the luma
+	// in alpha, so every frame was mixed with the one before (ghost copies when turning, Lars 2026-11-22:
+	// "te veel motion blur, als ik snel draai vervagen veel zaken").
 	if blend do rl.BeginBlendMode(.ADDITIVE)
+	else do rlgl.DisableColorBlend()
 	rl.BeginShaderMode(sh)
 	for t in texs do rl.SetShaderValueTexture(sh, rl.GetShaderLocation(sh, t.name), t.tex)
 	size :=
@@ -390,6 +395,7 @@ post_pass :: proc(dst: rl.RenderTexture2D, sh: rl.Shader, texs: []Post_Tex, blen
 	rl.DrawRectangle(0, 0, size.x, size.y, rl.WHITE)
 	rl.EndShaderMode()
 	if blend do rl.EndBlendMode()
+	else do rlgl.EnableColorBlend()
 	if dst.id != 0 do rl.EndTextureMode()
 }
 
