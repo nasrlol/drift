@@ -162,6 +162,12 @@ ui_text_size :: proc(w: ^World, text: string, font: Font, design_px: f32) -> [2]
 	)
 }
 
+// Draws one line of text and returns the y position for the line below it.
+ui_line :: proc(w: ^World, pos: [2]f32, text: string, font: Font, design_px: f32, color: rl.Color) -> f32 {
+	ui_text(w, pos, text, font, design_px, color)
+	return pos.y + text_line_px(w, design_px)
+}
+
 
 // Icons (design "Iconen"): Material Symbols Rounded, filled, weight 500 (static instance from Google Fonts with only
 // the icons below, Apache 2.0, license next to it in assets/fonts, source and sha256 in notes.txt), plus the design's own icons that are
@@ -606,13 +612,17 @@ ui_segment :: proc(w: ^World, r: rl.Rectangle, labels: []string, sel: ^int) -> b
 	return changed
 }
 
+ui_stat_chip_h :: proc(w: ^World) -> f32 {
+	return max(58, 8 + text_line_px(w, 11) + text_px(w, 17) + 10)
+}
+
 // Stat chip (navigation sheet): label 11 px capitals, value Roboto Mono 17 px. meter 0..1 draws the 4 px green
 // battery meter, meter < 0 none.
 ui_stat_chip :: proc(w: ^World, r: rl.Rectangle, label, value: string, meter: f32) {
 	pal := palette(w)
 	round_rect(w, r, 12, pal.chip)
-	ui_text(w, {r.x + 12, r.y + 8}, label, .Roboto_400, 11, pal.text_2)
-	ui_text(w, {r.x + 12, r.y + 24}, value, .Mono_600, 17, pal.text)
+	y := ui_line(w, {r.x + 12, r.y + 8}, label, .Roboto_400, 11, pal.text_2)
+	ui_text(w, {r.x + 12, y}, value, .Mono_600, 17, pal.text)
 	if meter >= 0 {
 		bar := rl.Rectangle{r.x + 12, r.y + r.height - 10, r.width - 24, 4}
 		round_rect(w, bar, 2, pal.surface_3)

@@ -918,9 +918,10 @@ plan_carpool_ui :: proc(w: ^World, box: rl.Rectangle, start_y: f32) -> f32 {
 	y := start_y + 6
 	rl.DrawLineEx({box.x + 16, y}, {box.x + box.width - 16, y}, 1, pal.line)
 	y += 12
-	ui_text(w, {box.x + 16, y}, "CARPOOL", .Figtree_600, 11, pal.text_2)
-	y += 22
+	y = ui_line(w, {box.x + 16, y}, "CARPOOL", .Figtree_600, 11, pal.text_2) + 4
 	buf: [64]u8
+	row_h := max(40, 4 + text_line_px(w, 13) + text_px(w, 12) + 8)
+	btn_h := max(28, text_px(w, 12) + 12)
 
 	if w.trip.active {
 		ui_text(w, {box.x + 16, y + 6}, "Carpool active, partner live", .Roboto_500, 13, pal.green)
@@ -965,10 +966,10 @@ plan_carpool_ui :: proc(w: ^World, box: rl.Rectangle, start_y: f32) -> f32 {
 	}
 	if p.offer_id != {} {
 		ui_text(w, {box.x + 16, y + 6}, "Your ride offer is live", .Roboto_500, 13, pal.accent)
-		if btn(w, {box.x + box.width - 84, y, 68, 28}, "Cancel", false, in_box) {
+		if btn(w, {box.x + box.width - 84, y, 68, btn_h}, "Cancel", false, in_box) {
 			p.offer_id = {}
 		}
-		y += 36
+		y += max(36, text_line_px(w, 13) + 12)
 		reqs: [8]Message
 		rn := carpool_incoming_requests(w, p.offer_id, reqs[:])
 		for ri in 0 ..< rn {
@@ -979,17 +980,17 @@ plan_carpool_ui :: proc(w: ^World, box: rl.Rectangle, start_y: f32) -> f32 {
 				hub_name(w, int(req.request.from_hub)),
 				hub_name(w, int(req.request.to_hub)),
 			)
-			ui_text(w, {box.x + 16, y + 2}, route_txt, .Roboto_500, 13, pal.text)
+			ly := ui_line(w, {box.x + 16, y + 2}, route_txt, .Roboto_500, 13, pal.text)
 			sub_buf: [48]u8
 			ui_text(
 				w,
-				{box.x + 16, y + 18},
+				{box.x + 16, ly},
 				rep_text(w, req.author, "New rider", sub_buf[:]),
 				.Roboto_400,
 				12,
 				pal.text_2,
 			)
-			if btn(w, {box.x + box.width - 88, y + 4, 72, 28}, "Accept", true, in_box) {
+			if btn(w, {box.x + box.width - 88, y + (row_h - btn_h) / 2, 72, btn_h}, "Accept", true, in_box) {
 				if acc, ok := carpool_accept_make(w, &req); ok {
 					if carpool_post(w, &acc) == .Added && trip_start(w, &req, &acc, true) {
 						p.partner_pub = req.author
@@ -999,10 +1000,16 @@ plan_carpool_ui :: proc(w: ^World, box: rl.Rectangle, start_y: f32) -> f32 {
 					}
 				}
 			}
-			y += 40
+			y += row_h
 		}
 	} else if p.from != p.to && w.routes[p.mode].ok {
-		if btn(w, {box.x + 16, y, box.width - 32, 32}, "Offer ride (1 seat)", false, in_box) {
+		if btn(
+			w,
+			{box.x + 16, y, box.width - 32, max(32, btn_h + 4)},
+			"Offer ride (1 seat)",
+			false,
+			in_box,
+		) {
 			depart := carpool_offer_depart(w, p.hour)
 			if m, ok := carpool_offer_make(w, p.from, p.to, p.mode, depart, 1); ok {
 				if carpool_post(w, &m) == .Added {
@@ -1013,22 +1020,21 @@ plan_carpool_ui :: proc(w: ^World, box: rl.Rectangle, start_y: f32) -> f32 {
 				}
 			}
 		}
-		y += 40
+		y += max(40, btn_h + 12)
 	}
 
 	if p.match_count > 0 {
-		ui_text(w, {box.x + 16, y + 2}, "Matching rides", .Roboto_500, 12, pal.text_2)
-		y += 22
+		y = ui_line(w, {box.x + 16, y + 2}, "Matching rides", .Roboto_500, 12, pal.text_2) + 4
 		for i in 0 ..< p.match_count {
 			mt := p.matches[i]
 			line1 := fmt.bprintf(buf[:], "%s -> %s", hub_name(w, mt.from_hub), hub_name(w, mt.to_hub))
-			ui_text(w, {box.x + 16, y + 2}, line1, .Roboto_500, 13, pal.text)
+			ly := ui_line(w, {box.x + 16, y + 2}, line1, .Roboto_500, 13, pal.text)
 			sub_buf: [64]u8
 			rep_buf: [32]u8
 			rep := rep_text(w, mt.author, "New driver", rep_buf[:])
 			line2 := fmt.bprintf(sub_buf[:], "%.1f kWh, %s", mt.passenger_kwh, rep)
-			ui_text(w, {box.x + 16, y + 18}, line2, .Roboto_400, 12, pal.text_2)
-			if btn(w, {box.x + box.width - 78, y + 4, 62, 28}, "Join", true, in_box) {
+			ui_text(w, {box.x + 16, ly}, line2, .Roboto_400, 12, pal.text_2)
+			if btn(w, {box.x + box.width - 78, y + (row_h - btn_h) / 2, 62, btn_h}, "Join", true, in_box) {
 				if req, ok := carpool_request_make(w, mt.offer, p.from, p.to, 1); ok {
 					if carpool_post(w, &req) == .Added {
 						p.request_id = msg_id(&req)
@@ -1036,11 +1042,10 @@ plan_carpool_ui :: proc(w: ^World, box: rl.Rectangle, start_y: f32) -> f32 {
 					}
 				}
 			}
-			y += 40
+			y += row_h
 		}
 	} else if p.offer_id == {} {
-		ui_text(w, {box.x + 16, y + 2}, "No matching rides from peers yet", .Roboto_400, 12, pal.text_2)
-		y += 24
+		y = ui_line(w, {box.x + 16, y + 2}, "No matching rides from peers yet", .Roboto_400, 12, pal.text_2)
 	}
 	return y - start_y + 8
 }
@@ -1054,17 +1059,24 @@ carpool_nav_ui :: proc(w: ^World) {
 	pal := palette(w)
 	sw := f32(rl.GetScreenWidth())
 	if carpool_is_passenger(w) {
-		r := rl.Rectangle{sw - 332, 16, 316, 66}
-		ui_shadow(w, r, 12)
-		round_rect(w, r, 12, pal.surface)
-		ui_text(w, {r.x + 14, r.y + 12}, "Riding as passenger", .Figtree_600, 14, pal.green)
-		ui_text(w, {r.x + 14, r.y + 34}, "Following driver (Esc for plan)", .Roboto_400, 12, pal.text_2)
-		btn_r := rl.Rectangle{r.x + r.width - 96, r.y + 18, 84, 30}
-		id, hot, fired := ui_widget(w, btn_r)
-		if w.street.on do hot, fired = false, false
-		round_rect(w, btn_r, 15, hot ? rl.ColorBrightness(pal.red, 0.1) : pal.red)
+		title := "Riding as passenger"
+		sub := "Following driver (Esc for plan)"
+		tw := max(ui_text_size(w, title, .Figtree_600, 14).x, ui_text_size(w, sub, .Roboto_400, 12).x)
 		lbl := "Abort"
 		sz := ui_text_size(w, lbl, .Roboto_500, 12)
+		bw := max(84, sz.x + 28)
+		bh := max(30, sz.y + 14)
+		cw := max(316, 14 + tw + 16 + bw + 12)
+		ch := max(66, 12 + text_line_px(w, 14) + text_px(w, 12) + 12)
+		r := rl.Rectangle{sw - cw - 16, 16, cw, ch}
+		ui_shadow(w, r, 12)
+		round_rect(w, r, 12, pal.surface)
+		ty := ui_line(w, {r.x + 14, r.y + 12}, title, .Figtree_600, 14, pal.green)
+		ui_text(w, {r.x + 14, ty}, sub, .Roboto_400, 12, pal.text_2)
+		btn_r := rl.Rectangle{r.x + r.width - bw - 12, r.y + (r.height - bh) / 2, bw, bh}
+		id, hot, fired := ui_widget(w, btn_r)
+		if w.street.on do hot, fired = false, false
+		round_rect(w, btn_r, bh / 2, hot ? rl.ColorBrightness(pal.red, 0.1) : pal.red)
 		ui_text(
 			w,
 			{btn_r.x + (btn_r.width - sz.x) / 2, btn_r.y + (btn_r.height - sz.y) / 2},
@@ -1073,7 +1085,7 @@ carpool_nav_ui :: proc(w: ^World) {
 			12,
 			rl.WHITE,
 		)
-		ui_focus_ring(w, id, btn_r, 15)
+		ui_focus_ring(w, id, btn_r, bh / 2)
 		if !w.street.on do ui_block(w, r)
 		if fired || key_pressed(w, .BACKSPACE) {
 			carpool_abort(w)
@@ -1085,9 +1097,6 @@ carpool_nav_ui :: proc(w: ^World) {
 	reqs: [1]Message
 	if carpool_incoming_requests(w, w.plan.offer_id, reqs[:]) == 0 do return
 	req := reqs[0]
-	r := rl.Rectangle{sw - 332, 16, 316, 66}
-	ui_shadow(w, r, 12)
-	round_rect(w, r, 12, pal.surface)
 	buf: [64]u8
 	route_txt := fmt.bprintf(
 		buf[:],
@@ -1095,18 +1104,26 @@ carpool_nav_ui :: proc(w: ^World) {
 		hub_name(w, int(req.request.from_hub)),
 		hub_name(w, int(req.request.to_hub)),
 	)
-	ui_text(w, {r.x + 14, r.y + 10}, "Ride request", .Figtree_600, 13, pal.accent)
-	ui_text(w, {r.x + 14, r.y + 28}, route_txt, .Roboto_500, 13, pal.text)
 	stars, n := carpool_reputation(w, req.author)
 	rep_buf: [32]u8
 	rep := n == 0 ? "New rider" : fmt.bprintf(rep_buf[:], "%.1f stars", stars)
-	ui_text(w, {r.x + 14, r.y + 44}, rep, .Roboto_400, 11, pal.text_2)
-	btn_r := rl.Rectangle{r.x + r.width - 96, r.y + 18, 84, 30}
-	id, hot, fired := ui_widget(w, btn_r)
-	if w.street.on do hot, fired = false, false
-	round_rect(w, btn_r, 15, hot ? rl.ColorBrightness(pal.accent, 0.1) : pal.accent)
+	tw := max(ui_text_size(w, route_txt, .Roboto_500, 13).x, ui_text_size(w, rep, .Roboto_400, 11).x)
 	lbl := "Accept (Y)"
 	sz := ui_text_size(w, lbl, .Roboto_500, 12)
+	bw := max(84, sz.x + 24)
+	bh := max(30, sz.y + 14)
+	cw := max(316, 14 + tw + 16 + bw + 12)
+	ch := max(66, 10 + text_line_px(w, 13) + text_line_px(w, 13) + text_px(w, 11) + 10)
+	r := rl.Rectangle{sw - cw - 16, 16, cw, ch}
+	ui_shadow(w, r, 12)
+	round_rect(w, r, 12, pal.surface)
+	ty := ui_line(w, {r.x + 14, r.y + 10}, "Ride request", .Figtree_600, 13, pal.accent)
+	ty = ui_line(w, {r.x + 14, ty}, route_txt, .Roboto_500, 13, pal.text)
+	ui_text(w, {r.x + 14, ty}, rep, .Roboto_400, 11, pal.text_2)
+	btn_r := rl.Rectangle{r.x + r.width - bw - 12, r.y + (r.height - bh) / 2, bw, bh}
+	id, hot, fired := ui_widget(w, btn_r)
+	if w.street.on do hot, fired = false, false
+	round_rect(w, btn_r, bh / 2, hot ? rl.ColorBrightness(pal.accent, 0.1) : pal.accent)
 	ui_text(
 		w,
 		{btn_r.x + (btn_r.width - sz.x) / 2, btn_r.y + (btn_r.height - sz.y) / 2},
@@ -1115,7 +1132,7 @@ carpool_nav_ui :: proc(w: ^World) {
 		12,
 		rl.WHITE,
 	)
-	ui_focus_ring(w, id, btn_r, 15)
+	ui_focus_ring(w, id, btn_r, bh / 2)
 	if !w.street.on do ui_block(w, r)
 	if fired || key_pressed(w, .Y) {
 		if acc, ok := carpool_accept_make(w, &req); ok {

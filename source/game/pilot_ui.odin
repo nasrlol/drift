@@ -83,44 +83,49 @@ pilot_ui :: proc(w: ^World) {
 
 	// Speed circle 16 px from the left, the battery circle under it, 84 px above the sheet.
 	{
-		c := [2]f32{16 + SPEED_CIRCLE / 2, sheet.y - 84 - SPEED_CIRCLE - 12 - SPEED_CIRCLE / 2}
-		ui_shadow(
-			w,
-			{c.x - SPEED_CIRCLE / 2, c.y - SPEED_CIRCLE / 2, SPEED_CIRCLE, SPEED_CIRCLE},
-			SPEED_CIRCLE / 2,
-		)
-		rl.DrawCircleV(c, SPEED_CIRCLE / 2, pal.surface)
-		v := fmt.tprintf("%.0f", s.speed * 3.6)
-		vs := ui_text_size(w, v, .Figtree_700, 25)
-		ui_text(w, {c.x - vs.x / 2, c.y - 19}, v, .Figtree_700, 25, pal.text)
-		us := ui_text_size(w, "km/h", .Figtree_700, 11)
-		ui_text(w, {c.x - us.x / 2, c.y + 8}, "km/h", .Figtree_700, 11, pal.text_2)
-	}
-	{
-		c := [2]f32{16 + SPEED_CIRCLE / 2, sheet.y - 84 - SPEED_CIRCLE / 2}
-		r := f32(SPEED_CIRCLE / 2)
-		ui_shadow(w, {c.x - r, c.y - r, SPEED_CIRCLE, SPEED_CIRCLE}, r)
-		rl.DrawCircleV(c, r, pal.surface)
-		// The charge as a ring from the top, clockwise.
+		sv := fmt.tprintf("%.0f", s.speed * 3.6)
+		svs := ui_text_size(w, sv, .Figtree_700, 25)
+		sus := ui_text_size(w, "km/h", .Figtree_700, 11)
 		charge := clamp(ship_battery_kwh(s) / BATTERY_KWH, 0, 1)
-		rl.DrawRing(c, r - 6, r - 2, 0, 360, 48, pal.surface_3)
-		rl.DrawRing(c, r - 6, r - 2, -90, -90 + 360 * charge, 48, pal.green)
-		v := fmt.tprintf("%.0f%%", charge * 100)
-		vs := ui_text_size(w, v, .Figtree_700, 20)
-		ui_text(w, {c.x - vs.x / 2, c.y - 16}, v, .Figtree_700, 20, pal.text)
-		bs := ui_text_size(w, "battery", .Figtree_700, 10)
-		ui_text(w, {c.x - bs.x / 2, c.y + 7}, "battery", .Figtree_700, 10, pal.text_2)
+		bv := fmt.tprintf("%.0f%%", charge * 100)
+		bvs := ui_text_size(w, bv, .Figtree_700, 20)
+		bus := ui_text_size(w, "battery", .Figtree_700, 10)
+		spd_h := svs.y + sus.y + 2
+		bat_h := bvs.y + bus.y + 2
+		dia := max(f32(SPEED_CIRCLE), spd_h + 18, bat_h + 18, max(svs.x, sus.x) + 18, max(bvs.x, bus.x) + 18)
+		r := dia / 2
+
+		sc := [2]f32{16 + r, sheet.y - 84 - dia - 12 - r}
+		ui_shadow(w, {sc.x - r, sc.y - r, dia, dia}, r)
+		rl.DrawCircleV(sc, r, pal.surface)
+		stop := sc.y - spd_h / 2
+		ui_text(w, {sc.x - svs.x / 2, stop}, sv, .Figtree_700, 25, pal.text)
+		ui_text(w, {sc.x - sus.x / 2, stop + svs.y + 2}, "km/h", .Figtree_700, 11, pal.text_2)
+
+		bc := [2]f32{16 + r, sheet.y - 84 - r}
+		ui_shadow(w, {bc.x - r, bc.y - r, dia, dia}, r)
+		rl.DrawCircleV(bc, r, pal.surface)
+		// The charge as a ring from the top, clockwise.
+		rl.DrawRing(bc, r - 6, r - 2, 0, 360, 48, pal.surface_3)
+		rl.DrawRing(bc, r - 6, r - 2, -90, -90 + 360 * charge, 48, pal.green)
+		btop := bc.y - bat_h / 2
+		ui_text(w, {bc.x - bvs.x / 2, btop}, bv, .Figtree_700, 20, pal.text)
+		ui_text(w, {bc.x - bus.x / 2, btop + bvs.y + 2}, "battery", .Figtree_700, 10, pal.text_2)
 	}
 
 	// Re-centre after the user moved the map.
 	if w.cam.dragged {
-		r := rl.Rectangle{16, sheet.y - 16 - 56, 170, 56}
+		lbl := "Re-centre"
+		ls := ui_text_size(w, lbl, .Figtree_500, 18)
+		rw := max(170, 52 + ls.x + 20)
+		rh := max(56, ls.y + 20)
+		r := rl.Rectangle{16, sheet.y - 16 - rh, rw, rh}
 		id, hot, fired := ui_widget(w, r)
 		dark := rl.Color{32, 33, 36, 255}
-		round_rect(w, r, 28, hot ? rl.ColorBrightness(dark, 0.15) : dark)
-		ui_icon(w, .Navigate, {r.x + 30, r.y + 28}, 24, {138, 180, 248, 255})
-		ui_text(w, {r.x + 52, r.y + 17}, "Re-centre", .Figtree_500, 18, rl.WHITE)
-		ui_focus_ring(w, id, r, 28)
+		round_rect(w, r, rh / 2, hot ? rl.ColorBrightness(dark, 0.15) : dark)
+		ui_icon(w, .Navigate, {r.x + 30, r.y + rh / 2}, 24, {138, 180, 248, 255})
+		ui_text(w, {r.x + 52, r.y + (rh - ls.y) / 2}, lbl, .Figtree_500, 18, rl.WHITE)
+		ui_focus_ring(w, id, r, rh / 2)
 		ui_block(w, r)
 		if fired do cam_recentre(w)
 	}
@@ -132,16 +137,16 @@ pilot_ui :: proc(w: ^World) {
 		ew := ui_text_size(w, exit_text, .Figtree_500, 21).x + 60
 		exit := rl.Rectangle{sheet.x + sheet.width - 24 - ew, sheet.y + 26, ew, 66}
 		if ui_pill_button(w, exit, exit_text, .Danger) do pilot_exit(w)
-		if !passenger {
+		if !passenger && n.active {
 			fly := rl.Rectangle{exit.x - 14 - SELF_FLY_BUTTON, exit.y, SELF_FLY_BUTTON, SELF_FLY_BUTTON}
 			id, hot, fired := ui_widget(w, fly)
 			c := [2]f32{fly.x + fly.width / 2, fly.y + fly.height / 2}
-			on := n.manual || !n.active
+			on := n.manual
 			bg := on ? pal.accent : pal.surface_2
 			rl.DrawCircleV(c, SELF_FLY_BUTTON / 2, hot && !on ? rl.ColorBrightness(bg, 0.1) : bg)
 			ui_icon(w, .Steer, c, 32, on ? pal.sheet : pal.accent)
 			ui_focus_ring(w, id, fly, SELF_FLY_BUTTON / 2)
-			if fired && n.active do nav_set_manual(w, !n.manual)
+			if fired do nav_set_manual(w, !n.manual)
 			// The flying state over the button, above the sheet: Manual in accent, Autopilot in the dark pill.
 			state := on ? "Manual" : "Autopilot"
 			size := ui_text_size(w, state, .Figtree_600, BUTTON_LABEL_PX)

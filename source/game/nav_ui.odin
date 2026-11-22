@@ -244,7 +244,8 @@ nav_draw_trip_markers :: proc(w: ^World) {
 nav_sheet_rect :: proc(w: ^World) -> rl.Rectangle {
 	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
 	width := min(SHEET_MAX_W, sw - 32)
-	return {(sw - width) / 2, sh - SHEET_H, width, SHEET_H}
+	h := max(f32(SHEET_H), 18 + text_line_px(w, 38) + text_line_px(w, 20) + 12 + ui_stat_chip_h(w) + 12)
+	return {(sw - width) / 2, sh - h, width, h}
 }
 
 // Navigation screen: road sign, layer pill, banner + Then, warning and the sheet. Draw order 7 and 8.
@@ -338,7 +339,12 @@ nav_ui :: proc(w: ^World) {
 			us = ui_text_size(w, dist_unit, .Figtree_500, 18)
 		}
 		col_w := max(BANNER_ICON_COL, vs.x + 2 + us.x + 2 * BANNER_COL_PAD)
-		banner.height = max(BANNER_MIN_H, BANNER_DIST_Y + vs.y + BANNER_COL_PAD)
+		title_px: f32 = kind == .Flying ? 34 : 30
+		banner.height = max(
+			BANNER_MIN_H,
+			BANNER_DIST_Y + vs.y + BANNER_COL_PAD,
+			16 + text_line_px(w, title_px) + text_line_px(w, 17) + 20,
+		)
 		then := kind == .Flying && n.then_visible && n.next + 1 < len(r.maneuvers)
 		round_rect(w, banner, 18, color)
 		if then do rl.DrawRectangleRec({banner.x, banner.y + banner.height - 18, 18, 18}, color)
@@ -430,40 +436,27 @@ nav_ui :: proc(w: ^World) {
 	round_rect(w, {sheet.x, sheet.y, sheet.width, sheet.height + 22}, 22, pal.sheet)
 	ui_block(w, sheet)
 	x := sheet.x + 24
+	y := sheet.y + 18
 	if r != nil {
-		ui_icon(w, .Leaf, {x + 16, sheet.y + 46}, 32, pal.green)
-		ui_text(
-			w,
-			{x + 38, sheet.y + 24},
-			format_duration(buf[:], n.eta_s / 60),
-			.Figtree_600,
-			38,
-			pal.green,
-		)
+		ui_icon(w, .Leaf, {x + 16, y + text_px(w, 38) / 2}, 32, pal.green)
+		y = ui_line(w, {x + 38, y}, format_duration(buf[:], n.eta_s / 60), .Figtree_600, 38, pal.green)
 		arrive :=
 			w.weather.start + i64(n.hour) * 3600 + i64(f64(w.tick - n.start_tick) * SIM_DT + f64(n.eta_s))
 		h, mi := belgian_time(arrive)
-		ui_text(
+		y = ui_line(
 			w,
-			{x, sheet.y + 72},
+			{x, y},
 			fmt.bprintf(sub[:], "%.1f km, arrive %02d:%02d", n.remaining_km, h, mi),
 			.Roboto_400,
 			20,
 			pal.text_2,
 		)
 	} else if carpool_is_passenger(w) {
-		ui_text(w, {x, sheet.y + 28}, "Passenger ride", .Figtree_600, 38, pal.green)
-		ui_text(
-			w,
-			{x, sheet.y + 72},
-			"Following driver, Backspace or Abort to leave",
-			.Roboto_400,
-			20,
-			pal.text_2,
-		)
+		y = ui_line(w, {x, y}, "Passenger ride", .Figtree_600, 38, pal.green)
+		y = ui_line(w, {x, y}, "Following driver, Backspace or Abort to leave", .Roboto_400, 20, pal.text_2)
 	} else {
-		ui_text(w, {x, sheet.y + 28}, "Free flight", .Figtree_600, 38, pal.text)
-		ui_text(w, {x, sheet.y + 72}, "No route, fly with W A S D, R and F", .Roboto_400, 20, pal.text_2)
+		y = ui_line(w, {x, y}, "Free flight", .Figtree_600, 38, pal.text)
+		y = ui_line(w, {x, y}, "No route, fly with W A S D, R and F", .Roboto_400, 20, pal.text_2)
 	}
 	// Speed and battery are the circles on the left (pilot_ui).
 	chips := [?]struct {
@@ -481,9 +474,11 @@ nav_ui :: proc(w: ^World) {
 		},
 		{"HEIGHT", fmt.tprintf("%.0f m", s.alt), -1},
 	}
+	chip_h := ui_stat_chip_h(w)
+	chip_y := max(y + 10, sheet.y + sheet.height - chip_h - 10)
 	cw := (sheet.width - 48 - f32(len(chips) - 1) * 8) / f32(len(chips))
 	for c, i in chips {
-		ui_stat_chip(w, {x + f32(i) * (cw + 8), sheet.y + 108, cw, 58}, c.label, c.value, c.meter)
+		ui_stat_chip(w, {x + f32(i) * (cw + 8), chip_y, cw, chip_h}, c.label, c.value, c.meter)
 	}
 }
 
