@@ -41,6 +41,6 @@ net_dial :: proc(ep: net.Endpoint, stop: ^bool) -> (s: net.TCP_Socket, ok: bool)
 		if r == 1 do break
 	}
 	if pfd.revents & (win.POLLERR | win.POLLHUP) != 0 do return
-	if net.set_blocking(s, true) != nil || !net_timeouts(s) do return
+	if net.set_blocking(s, true) != nil || !net_options(s) do return
 	return s, true
 }

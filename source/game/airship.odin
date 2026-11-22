@@ -620,15 +620,10 @@ others_draw :: proc(w: ^World) {
 	px: f32 = w.screen == .Navigate ? base_px : base_px * 0.6
 	for o in w.others[:w.other_count] {
 		if carpool_is_passenger(w) && o.author == w.plan.partner_pub do continue
-		an := Car_Anim {
-			fly  = o.on_road ? 0 : 1,
-			time = w.car_anim.time + f32(o.author[0]),
-		}
-		pos := others_draw_pos(w, o)
 		jam := traffic_near(w, o.pos, o.alt, o.on_road, TRAFFIC_RADIUS_KM) >= TRAFFIC_MIN_CARS
-		car_draw(w, pos, o.alt, o.heading, an, px, jam ? CAR_JAM_TINT : rl.WHITE, o.skin)
+		car_draw(w, o.pos, o.alt, o.heading, other_anim(w, o), px, jam ? CAR_JAM_TINT : rl.WHITE, o.skin)
 		if w.view_edit.peer_names {
-			if sp, ok := cam_to_screen(w, {pos.x, pos.y, -o.alt / 1000}); ok {
+			if sp, ok := cam_to_screen(w, {o.pos.x, o.pos.y, -o.alt / 1000}); ok {
 				peer_label_draw(w, {sp.x, sp.y - px * 0.24 - 6}, o.author)
 			}
 		}
@@ -640,12 +635,13 @@ peer_name_text :: proc(author: [32]u8, buf: []u8) -> string {
 	return fmt.bprintf(buf, "#%06x", key_short(author) & 0xffffff)
 }
 
-// Short readable handle derived from a peer's public key, drawn centred above p.
-peer_label_draw :: proc(w: ^World, p: [2]f32, author: [32]u8) {
+// Short readable handle derived from a peer's public key, drawn centred above p, with extra after it.
+peer_label_draw :: proc(w: ^World, p: [2]f32, author: [32]u8, extra := "") {
 	pal := palette(w)
 	px := max(w.view_edit.peer_name_px, 6)
 	buf: [16]u8
 	name := peer_name_text(author, buf[:])
+	if extra != "" do name = fmt.tprintf("%s  %s", name, extra)
 	size := ui_text_size(w, name, .Figtree_600, px)
 	pos := [2]f32{p.x - size.x / 2, p.y - size.y}
 	for o in ([?][2]f32{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}) {

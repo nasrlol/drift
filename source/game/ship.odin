@@ -272,16 +272,19 @@ FREE_GUST_ACCEL :: 2.2 // m/s^2 of turbulence at gust index 1
 // the ground or a roof lands the car, then it drives like a car: the wheels hold the velocity on the heading
 // (DRIVE_GRIP), the throttle drives to ROAD_MAX_SPEED and brakes, the steering turns by the speed over a 2.7 m
 // wheelbase (less lock at speed), up lifts it off, a drop of DRIVE_DROP_M (a roof edge) makes it fly. Our values.
+// Steering raised (Lars, 2026-11-22: "de sensitivity als je rijdt naar hoger"): more lock, 1.2 g instead of 0.7 g
+// in a bend (twice the turn rate at speed) with the grip raised to match, so it still does not slide, and a
+// quicker wheel. w.tune.drive_steer scales all three (the Speed tab).
 DRIVE_ACCEL :: 4.0
 DRIVE_BRAKE :: 9.0
 DRIVE_REVERSE_MS :: 6.0
 DRIVE_ROLL :: 0.04 // 1/s rolling loss
 DRIVE_AIR :: (DRIVE_ACCEL - DRIVE_ROLL * ROAD_MAX_SPEED) / (ROAD_MAX_SPEED * ROAD_MAX_SPEED) // top speed = ROAD_MAX_SPEED
-DRIVE_GRIP :: 9.0 // 1/s, how fast sideways speed dies out on the wheels
+DRIVE_GRIP :: 16.0 // 1/s, how fast sideways speed dies out on the wheels
 DRIVE_WHEELBASE_M :: 2.7
-DRIVE_STEER :: 0.6 // rad of lock when slow
-DRIVE_STEER_SMOOTH_S :: 0.15
-DRIVE_LAT_ACCEL :: 7.0 // m/s^2, the most the tyres hold in a bend (0.7 g)
+DRIVE_STEER :: 0.75 // rad of lock when slow
+DRIVE_STEER_SMOOTH_S :: 0.1
+DRIVE_LAT_ACCEL :: 12.0 // m/s^2, the most the tyres hold in a bend (1.2 g)
 DRIVE_LIFT_MS :: 3.0 // the jump off the ground on take-off
 DRIVE_DROP_M :: 0.5
 
@@ -310,10 +313,12 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 	// Turning: in the air quick when hovering, wider at speed; on the wheels by the speed and the steering lock.
 	vh := s.vel.xy
 	speed := linalg.length(vh)
+	// Zero (a World without settings_init) is the plain constants.
+	gain := w.tune.drive_steer > 0 ? w.tune.drive_steer : 1
 	if s.driving {
 		v := linalg.dot(vh, fwd)
-		steer := c.turn * DRIVE_STEER * (1 - 0.75 * clamp(abs(v) / ROAD_MAX_SPEED, 0, 1))
-		limit := DRIVE_LAT_ACCEL / max(abs(v), 1)
+		steer := c.turn * min(DRIVE_STEER * gain, 1.2) * (1 - 0.75 * clamp(abs(v) / ROAD_MAX_SPEED, 0, 1))
+		limit := DRIVE_LAT_ACCEL * gain / max(abs(v), 1)
 		// Keep a minimum pivot speed so A/D turns out of a wall at 0 km/h.
 		turn_v := v < -0.5 ? v : max(v, 1.5)
 		target := clamp(turn_v * math.tan(steer) / DRIVE_WHEELBASE_M, -limit, limit)
@@ -373,7 +378,7 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 		}
 		v += (drive - DRIVE_ROLL * v - DRIVE_AIR * v * abs(v)) * dt
 		if c.throttle == 0 && abs(v) < 0.3 do v = 0
-		side *= max(1 - DRIVE_GRIP * dt, 0)
+		side *= max(1 - DRIVE_GRIP * gain * dt, 0)
 		s.vel = {fwd.x * v + right.x * side, fwd.y * v + right.y * side, 0}
 	} else {
 		s.vel.xy += acc * dt

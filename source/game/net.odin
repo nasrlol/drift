@@ -989,7 +989,8 @@ node_serve_thread :: proc(t: ^thread.Thread) {
 	for !sync.atomic_load(&n.stop) {
 		client, source, err := net.accept_tcp(n.listener)
 		if err == .Would_Block {
-			time.sleep(50 * time.Millisecond)
+			// Short: a presence swap (PRESENCE_S) waits this long for its turn.
+			time.sleep(10 * time.Millisecond)
 			continue
 		}
 		if err != nil {
@@ -998,7 +999,7 @@ node_serve_thread :: proc(t: ^thread.Thread) {
 			continue
 		}
 		// Accepted sockets inherit non-blocking from the listener on BSD / macOS.
-		if net.set_blocking(client, true) == nil && net_timeouts(client) {
+		if net.set_blocking(client, true) == nil && net_options(client) {
 			node_serve(w, client, source)
 		}
 		net.close(client)
@@ -1186,9 +1187,9 @@ node_sync_thread :: proc(t: ^thread.Thread) {
 			node_live(w)
 			live_next = now + LIVE_S
 		}
-		if now_ms := time.time_to_unix_nano(time.now()) / 1e6; now_ms >= presence_next {
-			node_presence(w)
-			presence_next = now_ms + i64(PRESENCE_S * 1000)
+		if now_ms := unix_ms(); now_ms >= presence_next {
+			live := node_presence(w)
+			presence_next = now_ms + i64((live ? f32(PRESENCE_S) : PRESENCE_IDLE_S) * 1000)
 		}
 		if lan_on {
 			err: net.Network_Error
@@ -1229,7 +1230,8 @@ node_sync_thread :: proc(t: ^thread.Thread) {
 			if due >= 0 do p = n.peers[due]
 		}
 		if due < 0 {
-			time.sleep(100 * time.Millisecond)
+			// Up to the next presence swap, so it keeps its PRESENCE_S.
+			time.sleep(time.Duration(clamp(presence_next - unix_ms(), 1, 100)) * time.Millisecond)
 			continue
 		}
 		full := now - p.full_at >= SYNC_FULL_S
@@ -1556,9 +1558,15 @@ ep_text :: proc(ep: net.Endpoint, buf: []u8) -> string {
 	return net.endpoint_to_string(ep, &b)
 }
 
-net_timeouts :: proc(s: net.TCP_Socket) -> bool {
+// Timeouts, and TCP_NODELAY: every exchange is a few small sends in a row, and without it Nagle held each one
+// back until the delayed ACK of the one before (up to 200 ms per send on macOS and Windows).
+net_options :: proc(s: net.TCP_Socket) -> bool {
 	t := NET_TIMEOUT_MS * time.Millisecond
-	return net.set_option(s, .Receive_Timeout, t) == nil && net.set_option(s, .Send_Timeout, t) == nil
+	return(
+		net.set_option(s, .Receive_Timeout, t) == nil &&
+		net.set_option(s, .Send_Timeout, t) == nil &&
+		net.set_option(s, .TCP_Nodelay, true) == nil \
+	)
 }
 
 net_recv :: proc(s: net.TCP_Socket, buf: []u8) -> bool {
@@ -1585,7 +1593,9 @@ net_send :: proc(s: net.TCP_Socket, buf: []u8) -> bool {
 // A node that cannot listen is useless to others, so that is an error here (the game just dials out).
 NODE_STATUS_S :: 300
 
-node_run :: proc(port: int) -> bool {
+// With bot (--bot <x km> <y km> <height m>) it also drives a test car round bot_pose and logs every 2 s how the
+// other cars' positions reach it: reports per second, ms in transit (exact on one machine: one clock).
+node_run :: proc(port: int, bot: bool, bot_at: [3]f32) -> bool {
 	w := (^World)(game_init())
 	if w == nil do return false
 	defer game_shutdown(w)
@@ -1595,8 +1605,57 @@ node_run :: proc(port: int) -> bool {
 		logf(w, "node", "a node others cannot reach is no use to them, exiting (try another --port)")
 		return false
 	}
+	t := &w.node.presence
+	last: [PRESENCE_SLOTS]i64 // time_ms of each slot at the last look
+	reports, transit_max: [PRESENCE_SLOTS]i64
+	transit_sum: [PRESENCE_SLOTS]i64
+	status_at := unix_ms() + NODE_STATUS_S * 1000
+	bot_log_at := unix_ms() + 2000
 	for {
-		time.sleep(NODE_STATUS_S * time.Second)
+		time.sleep(bot ? 20 * time.Millisecond : time.Second)
+		now_ms := unix_ms()
+		if bot {
+			pos, heading := bot_pose(bot_at.xy, now_ms)
+			p := Presence {
+				time_ms = i64le(now_ms),
+				x       = f32le(pos.x),
+				y       = f32le(pos.y),
+				alt     = f32le(height_at(w, pos.x, pos.y) + bot_at.z),
+				heading = f32le(heading),
+				speed   = f32le(PRESENCE_BOT_MS),
+				skin    = u8(Car_Skin.Sport),
+			}
+			sync.mutex_lock(&t.lock)
+			t.next = p
+			t.has_next = true
+			for q, i in t.slots {
+				if q.magic == 0 || q.author == w.identity_pub || i64(q.time_ms) == last[i] do continue
+				last[i] = i64(q.time_ms)
+				transit := t.recv_ms[i] - i64(q.time_ms)
+				reports[i] += 1
+				transit_sum[i] += transit
+				transit_max[i] = max(transit_max[i], transit)
+			}
+			sync.mutex_unlock(&t.lock)
+			if now_ms >= bot_log_at {
+				bot_log_at = now_ms + 2000
+				for q, i in t.slots {
+					if reports[i] == 0 do continue
+					buf: [16]u8
+					fmt.eprintfln(
+						"[bot] car %s: %.1f reports/s, %d ms in transit (max %d), last %.2f s ago",
+						peer_name_text(q.author, buf[:]),
+						f32(reports[i]) / 2,
+						transit_sum[i] / reports[i],
+						transit_max[i],
+						f32(now_ms - i64(q.time_ms)) / 1000,
+					)
+					reports[i], transit_sum[i], transit_max[i] = 0, 0, 0
+				}
+			}
+		}
+		if now_ms < status_at do continue
+		status_at = now_ms + NODE_STATUS_S * 1000
 		now := time.time_to_unix(time.now())
 		ok := 0
 		{
