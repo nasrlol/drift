@@ -989,7 +989,8 @@ node_serve_thread :: proc(t: ^thread.Thread) {
 	for !sync.atomic_load(&n.stop) {
 		client, source, err := net.accept_tcp(n.listener)
 		if err == .Would_Block {
-			time.sleep(50 * time.Millisecond)
+			// Short: a presence swap (PRESENCE_S) waits this long for its turn.
+			time.sleep(10 * time.Millisecond)
 			continue
 		}
 		if err != nil {
@@ -998,7 +999,7 @@ node_serve_thread :: proc(t: ^thread.Thread) {
 			continue
 		}
 		// Accepted sockets inherit non-blocking from the listener on BSD / macOS.
-		if net.set_blocking(client, true) == nil && net_timeouts(client) {
+		if net.set_blocking(client, true) == nil && net_options(client) {
 			node_serve(w, client, source)
 		}
 		net.close(client)
@@ -1186,9 +1187,9 @@ node_sync_thread :: proc(t: ^thread.Thread) {
 			node_live(w)
 			live_next = now + LIVE_S
 		}
-		if now_ms := time.time_to_unix_nano(time.now()) / 1e6; now_ms >= presence_next {
-			node_presence(w)
-			presence_next = now_ms + i64(PRESENCE_S * 1000)
+		if now_ms := unix_ms(); now_ms >= presence_next {
+			live := node_presence(w)
+			presence_next = now_ms + i64((live ? f32(PRESENCE_S) : PRESENCE_IDLE_S) * 1000)
 		}
 		if lan_on {
 			err: net.Network_Error
@@ -1229,7 +1230,8 @@ node_sync_thread :: proc(t: ^thread.Thread) {
 			if due >= 0 do p = n.peers[due]
 		}
 		if due < 0 {
-			time.sleep(100 * time.Millisecond)
+			// Up to the next presence swap, so it keeps its PRESENCE_S.
+			time.sleep(time.Duration(clamp(presence_next - unix_ms(), 1, 100)) * time.Millisecond)
 			continue
 		}
 		full := now - p.full_at >= SYNC_FULL_S
@@ -1556,9 +1558,15 @@ ep_text :: proc(ep: net.Endpoint, buf: []u8) -> string {
 	return net.endpoint_to_string(ep, &b)
 }
 
-net_timeouts :: proc(s: net.TCP_Socket) -> bool {
+// Timeouts, and TCP_NODELAY: every exchange is a few small sends in a row, and without it Nagle held each one
+// back until the delayed ACK of the one before (up to 200 ms per send on macOS and Windows).
+net_options :: proc(s: net.TCP_Socket) -> bool {
 	t := NET_TIMEOUT_MS * time.Millisecond
-	return net.set_option(s, .Receive_Timeout, t) == nil && net.set_option(s, .Send_Timeout, t) == nil
+	return(
+		net.set_option(s, .Receive_Timeout, t) == nil &&
+		net.set_option(s, .Send_Timeout, t) == nil &&
+		net.set_option(s, .TCP_Nodelay, true) == nil \
+	)
 }
 
 net_recv :: proc(s: net.TCP_Socket, buf: []u8) -> bool {

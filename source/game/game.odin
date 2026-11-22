@@ -109,12 +109,9 @@ World :: struct {
 	cam_edit:         Cam_Edit, // map camera FOV, chase and glides, camera.odin
 	map_edit:         Map_Edit, // map road widths, labels and scan, render.odin
 	music_edit:       Music_Edit, // soundtrack volume, tempo and mix, music.odin
-	// Other cars from the presence gossip (presence.odin), copied from the node table every PRESENCE_COPY_S.
+	// Other cars from the presence gossip (presence.odin), rebuilt from the node table every frame.
 	others:           [PRESENCE_SLOTS]Other_Car,
 	other_count:      int,
-	others_copied_s:  f32, // seconds since that copy
-	presence_send_s:  f32,
-	presence_copy_s:  f32,
 	street:           Street, // the third-person street view, street.odin
 	pose_prev:        Ship_Pose, // the ship before the last fixed step
 	pose:             Ship_Pose, // where the ship is drawn this frame (ship.odin)

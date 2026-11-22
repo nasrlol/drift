@@ -623,7 +623,10 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   node, weather from "snapshot <file>" or the embedded fallback, the cursor is not locked, vsync
                   like the game (unlimited fps tore the window and looked like flicker). Commands: ship <frame> <x km> <y km> <height m>
                   <heading deg>, down / up / press <frame> <raylib key name>, mouse <frame> <dx> <dy>,
-                  wheel <frame> <notches>, shot <frame> <png> (LoadImageFromScreen + ExportImage after the frame
+                  wheel <frame> <notches>, nav <frame> <from hub> <to hub> <mode 0..2> (plan at hour 0 and Start,
+                  logs where the ship starts), car <frame> <x km> <y km> <height m> <heading deg> [road] (another
+                  car as if from the gossip, standing there; w.others is not rebuilt in a scripted run),
+                  shot <frame> <png> (LoadImageFromScreen + ExportImage after the frame
                   is drawn: TakeScreenshot drops the directory), quit <frame>, profile <from> <to> <prefix> (from >= 1, debug and profile builds: a spall trace
                   in <prefix>.spall and the mean per frame of every zone in <prefix>.csv, columns zone,
                   calls_per_frame, incl_ms_per_frame, excl_ms_per_frame, peak_ms as docs/performance/data, plus a
@@ -785,11 +788,31 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   ornamentation (Ornament: None, Brass, Botanical, Sunburst), detail scale, dial ticks,
                   corner motifs, trim brass and leaf green colors drawn by ui_decorate_rect (cards, sheets,
                   street HUD box) and ui_decorate_circle (round buttons, speed/battery gauges).
-  presence.odin   (author andrei) other cars on the map, peer-to-peer (Lars: "geen relay service, gossiping"): every
-                  PRESENCE_S 2 s the game signs its position (Presence, 136 bytes, ed25519 identity) and the node swaps
-                  the fresh positions it knows with up to 8 recently synced peers (op 'Q'), so they spread over several
-                  hops. Checked (magic, on the map, time within 20 s back / 30 s ahead, signature), newest per author,
-                  256 slots, copied into w.others every 0.25 s and moved on along heading x speed when drawn.
+  presence.odin   (author andrei) other cars on the map, peer-to-peer (Lars: "geen relay service, gossiping"): the
+                  game signs its position (Presence, 136 bytes, ed25519 identity) and the node swaps the fresh
+                  positions it knows with up to 8 recently synced peers (op 'Q'), so they spread over several hops.
+                  Checked (magic, on the map, time within 20 s back / 30 s ahead, signature), newest per author, 256
+                  slots, each with the local time it last took a newer position (recv_ms).
+                  Delay fixed (Lars, 2026-11-22: other cars showed seconds late): it was a 2 s signing interval, a
+                  2 s swap interval, Nagle + delayed ACK on every exchange (100-400 ms, no TCP_NODELAY on our
+                  sockets: net_options sets it now), a 50 ms accept poll (now 10 ms), and the drawing: report +
+                  heading x speed x age, where speed is the airspeed (not the drift) and on the map the simulation
+                  runs map_time x faster than the clock, so cars lagged and jumped at every report. Now:
+                    the frame loop leaves its newest position unsigned in the table (next); the sync thread signs it
+                      right before each swap (signing off the frame thread, see #108) and swaps every PRESENCE_S
+                      0.2 s while anything is live, every PRESENCE_IDLE_S 2 s otherwise; the sync loop sleeps up to
+                      the next swap (<= 100 ms).
+                    presence_frame rebuilds w.others every frame: velocity, turn and climb from the last two reports
+                      (their own times, no clock in between), the clock difference to the author = the lowest
+                      (receive - send) seen, rising 10 ms per s (PRESENCE_CLOCK_RELAX), so a skewed clock does not
+                      push the car ahead or back. other_predict moves the last report on to now (at most
+                      PRESENCE_AHEAD_S 1 s); a newer report's jump fades out at PRESENCE_SMOOTH 5/s (error offset, no
+                      lag behind the car) unless it is over PRESENCE_SNAP_KM 0.25 km. Not drawn once nothing new came
+                      in for PRESENCE_GONE_S 5 s. pos / alt / heading of Other_Car are the drawn values, so the map,
+                      the street view, traffic and the carpool all use them.
+                    other_anim: bank, pitch, steered and rolling wheels and an eased fly for the other cars too.
+                  Not measured with two machines yet (2026-11-22): expected delay is a few tenths of a second plus
+                  3 round trips per exchange (connect, hello, 'Q').
   traffic         (route.odin, ship.odin) traffic jams (Lars: "file ook"): every other flying car counts for the
                   grid nodes within TRAFFIC_RADIUS_KM 1 km in its own layer (traffic_build, per route). From
                   TRAFFIC_MIN_CARS 4 a node costs 1 + 0.5 per car over the minimum, at most 4x, in A*, line_cost and
@@ -988,12 +1011,32 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   grond, dan banden goed en dan rijden"): flying down onto the ground or a roof sets ship.driving,
                   the car animation unfolds the wheels (fly -> 0) and it drives like a car: grip 9/s against
                   sliding, 4 m/s^2 to ROAD_MAX_SPEED (126 km/h), brake 9, reverse to 6 m/s, steering over a 2.7 m
-                  wheelbase with less lock at speed and at most 0.7 g in a bend; up lifts it off (+3 m/s), a drop
+                  wheelbase with less lock at speed and at most 0.7 g in a bend (raised 2026-11-22, Lars: "de
+                  sensitivity als je rijdt naar hoger": lock 0.75 rad, 1.2 g, grip 16/s so it does not slide more,
+                  the wheel settles in 0.1 s; the Speed tab's "Steering (driving)", w.tune.drive_steer, scales lock,
+                  bend limit and grip together, 1 = these values); up lifts it off (+3 m/s), a drop
                   over 0.5 m (a roof edge) makes it fly. Entering free flight from the road graph starts on wheels.
                   The wheels unfold before the touchdown (Lars: "iets voor hij landt"): in free flight Car_Anim.fly
                   follows the height over the ground or a roof, down over the 4.8 m above 1.2 m, eased at 9/s. pos_frac
                   keeps the part of the position below the f32 resolution of pos. Leaving the street view hands the
                   forward speed back to ship_step. Not recorded in the replay yet (the free flag is not a control).
+  way to go       (street.odin street_draw step 6; Lars, 2026-11-22: "pijlen naar waar je moet gaan in 3d scene")
+                  while navigating a route in the street view: a chevron every GUIDE_STEP_M 30 m on the route from 20
+                  to 480 m ahead of the ship's place on it (nav.s_km), gliding forward at 12 m/s, tilted 55 degrees
+                  up from the path so the chase camera sees a V, fading in and out; and an arrow GUIDE_ABOVE_M over
+                  the car pointing at the route GUIDE_AHEAD_M 150 m ahead. That arrow lies in the ground plane turned
+                  GUIDE_TILT up about the camera's right (flat, the nearly level camera saw it edge on), its tip up
+                  or down with the route (at most 0.5 rad). rlgl triangles in vertex colours (route or green route),
+                  bent by the round world on the CPU like STREET_BEND_GLSL. Checked with --script (nav + shots).
+  minimap         (street.odin street_hud; Lars: "minimap") bottom right above the credit, MINIMAP_PX 105 px radius,
+                  turned with the camera (up = where it looks), MINIMAP_MIN_KM 0.35 km around the car at rest plus
+                  0.012 km per m/s (max 1.5), eased. Roads and rivers from st.road_segs (the 2 km cells around the
+                  car, casings then fills, clipped to the circle), the route from the ship on, the destination pin,
+                  the other cars in amber (accent and route are blue / green in the themes), all beyond the edge
+                  on the rim; the own car as a triangle, N on the rim. Land a shade darker than the map's so the
+                  white streets show.
+  other cars      in the street view: drawn in their skin with other_anim within STREET_REACH_KM, a name + distance
+                  label (peer_names) lowered with the round world like the car under it.
   route.odin      route(w, from, to, mode, hour) -> (path, ok). Points are [3]f32 (x km, y km, alt m).
                   ok = false means no safe route with this wind. Hub positions: w.m.hubs.
                   from.z / to.z are the tower tops (headless: height_at + HUB_TOWER_M).

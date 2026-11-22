@@ -265,7 +265,13 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 [ ] hedges, street furniture (lampposts, benches, bike racks)
 [ ] frame over 4 ms in parks: mean 3.1 ms now (profile, with post effects), worst 4.8 while tiles build after a jump
 [x] round world instead of fog: the end of the view lies behind a curved horizon (Abdellah via Lars)
-[ ] other cars (presence) tested in the street view with two nodes
+[~] lars: other cars (presence) tested in the street view with two nodes (drawn with animation and labels,
+    checked with --script car; the two-node test is still to do)
+[x] lars: other cars without delay: sign + swap 5x a second, TCP_NODELAY, prediction from the last two reports
+    with the clock difference measured, no jumps (presence.odin)
+[x] lars: arrows to the way to go in the street view: chevrons on the route and an arrow over the car
+[x] lars: minimap in the street view: roads, rivers, route, destination, other cars, turned with the camera
+[x] lars: higher steering on the wheels in the street view (lock, 1.2 g, grip) + "Steering (driving)" slider
 [x] land on the ground or a roof, wheels down, drive like a car; up takes off (test/ run_free_flight case 6)
 [~] gamepad: GTA-style mapping and a connect log line built; untested with a controller (the DualSense was not
     connected)

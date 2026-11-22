@@ -47,6 +47,26 @@ STREET_MOUSE_RAD_PER_PX :: 0.0035
 STREET_STICK_RAD_PER_S :: 2.5
 STREET_RECENTRE_S :: 1.6 // after this long without looking around the camera swings back behind the car
 STREET_FOV :: 62.0
+// The way to go while navigating (street_draw step 6): a chevron every GUIDE_STEP_M on the route from GUIDE_FIRST_M
+// to GUIDE_LAST_M ahead of the car, gliding forward at GUIDE_GLIDE_MS and tilted GUIDE_TILT up from the path; an
+// arrow GUIDE_ABOVE_M over the car pointing at the route GUIDE_AHEAD_M ahead, at most GUIDE_PITCH_MAX up or down.
+// Our values.
+GUIDE_STEP_M :: 30.0
+GUIDE_FIRST_M :: 20.0
+GUIDE_LAST_M :: 480.0
+GUIDE_GLIDE_MS :: 12.0
+GUIDE_TILT: f32 : 0.95 // rad, ~55 degrees
+GUIDE_TANGENT_M :: 15.0
+GUIDE_AHEAD_M :: 150.0
+GUIDE_ABOVE_M :: 2.9
+GUIDE_PITCH_MAX :: 0.5
+GUIDE_THICK_M :: 0.25
+// The minimap (street_hud), MINIMAP_PX radius, bottom right above the credit line: MINIMAP_MIN_KM around the car
+// at rest, MINIMAP_KM_PER_MS more per m/s up to MINIMAP_MAX_KM. Our values.
+MINIMAP_PX :: 105.0
+MINIMAP_MIN_KM :: 0.35
+MINIMAP_MAX_KM :: 1.5
+MINIMAP_KM_PER_MS :: 0.012
 STREET_FOV_FAST :: 10.0 // wider at top speed
 STREET_ROAD_TILE_KM :: 1.0
 STREET_ROAD_CELL_KM :: 2.0
@@ -114,6 +134,7 @@ Street :: struct {
 	dist:       f32, // zero = STREET_CAM_DIST_M
 	idle_s:     f32, // seconds since the player last looked around
 	on_s:       f32, // seconds in the street view this run, all visits (the key hint shows in the first)
+	minimap_km: f32, // the minimap's radius, eased with the speed, zero = MINIMAP_MIN_KM
 	origin:     [2]f32, // km
 	eye:        [3]f32, // the camera, street space, eased
 	seeded:     bool,
@@ -1813,6 +1834,128 @@ street_draw :: proc(w: ^World) {
 	// 5: the cars.
 	street_light_set(w, st.car.shader, &st.car_loc, st.view.position)
 	street_cars(w, &st.car)
+
+	// 6: the way to go (Lars, 2026-11-22: "pijlen naar waar je moet gaan in 3d scene"), while navigating a route:
+	// chevrons on the route ahead, gliding forward and tilted up so the chase camera sees them, and an arrow over
+	// the car that points at the route GUIDE_AHEAD_M ahead (up or down to it too). Plain vertex colours, bent by
+	// the round world on the CPU like STREET_BEND_GLSL does it on the GPU.
+	if r := nav_route(w); r != nil && w.nav.banner != .Arrived && len(r.path) >= 2 {
+		// Street space at s km along the path, and the direction there (over GUIDE_TANGENT_M).
+		path_at :: proc(w: ^World, r: ^Planned_Route, s: f32) -> (pos, dir: [3]f32) {
+			street :: proc(w: ^World, p: [3]f32) -> [3]f32 {
+				d := (p.xy - w.street.origin) * 1000
+				return {d.x, p.z - height_at(w, p.x, p.y), d.y}
+			}
+			at :: proc(r: ^Planned_Route, s: f32) -> [3]f32 {
+				i := 0
+				for i < len(r.dist) - 2 && r.dist[i + 1] < s do i += 1
+				seg := r.dist[i + 1] - r.dist[i]
+				return linalg.lerp(
+					r.path[i],
+					r.path[i + 1],
+					seg > 0 ? clamp((s - r.dist[i]) / seg, 0, 1) : 0,
+				)
+			}
+			pos = street(w, at(r, s))
+			ahead := street(w, at(r, s + GUIDE_TANGENT_M / 1000))
+			behind := street(w, at(r, s - GUIDE_TANGENT_M / 1000))
+			dir = linalg.normalize0(ahead - behind)
+			return
+		}
+		bent :: proc(st: ^Street, v: [3]f32) -> [3]f32 {
+			d := v.xz - st.view.position.xz
+			return {v.x, v.y - linalg.dot(d, d) * st.bend, v.z}
+		}
+		tri :: proc(st: ^Street, a, b, c: [3]f32, col: rl.Color) {
+			rlgl.Color4ub(col.r, col.g, col.b, col.a)
+			for v in ([3][3]f32{bent(st, a), bent(st, b), bent(st, c)}) do rlgl.Vertex3f(v.x, v.y, v.z)
+		}
+		pal := palette(w)
+		fill := w.nav.mode == .Greenest ? pal.green_route : pal.route
+		end_km := r.dist[len(r.dist) - 1]
+		rlgl.DrawRenderBatchActive()
+		rlgl.DisableBackfaceCulling()
+		rlgl.SetTexture(rlgl.GetTextureIdDefault())
+		rlgl.Begin(rlgl.TRIANGLES)
+		{
+			glide := math.mod(st.on_s * GUIDE_GLIDE_MS, GUIDE_STEP_M)
+			for k := GUIDE_FIRST_M + glide; k <= GUIDE_LAST_M; k += GUIDE_STEP_M {
+				s := w.nav.s_km + k / 1000
+				if s >= end_km do break
+				p, f := path_at(w, r, s)
+				if f == {} do continue
+				right := linalg.normalize0(linalg.cross(f, [3]f32{0, 1, 0}))
+				if right == {} do right = {1, 0, 0}
+				// Tilted up from the path towards the sky, so it reads as a V from behind and above.
+				up := linalg.normalize(f * math.cos(GUIDE_TILT) + [3]f32{0, 1, 0} * math.sin(GUIDE_TILT))
+				fade := clamp((k - GUIDE_FIRST_M) / 30, 0, 1) * clamp((GUIDE_LAST_M - k) / 120, 0, 1)
+				col := fill
+				col.a = u8(220 * fade)
+				W, L, T :: 7.0, 3.2, 1.3
+				for side in ([2]f32{-1, 1}) {
+					tip := p + up * (L / 2)
+					tip_in := tip - up * T
+					end := p + right * (side * W / 2) - up * (L / 2)
+					end_in := end - up * T
+					tri(st, tip, end, end_in, col)
+					tri(st, tip, end_in, tip_in, col)
+				}
+			}
+		}
+		{
+			car := street_ship_pos(w)
+			goal, _ := path_at(w, r, min(w.nav.s_km + GUIDE_AHEAD_M / 1000, end_km))
+			centre := car + {0, GUIDE_ABOVE_M + 0.15 * math.sin(st.on_s * 3), 0}
+			d := goal - centre
+			flat := linalg.length(d.xz)
+			if flat > 1 || abs(d.y) > 1 {
+				// Flat on the ground the chase camera, almost level with it, saw the arrow edge on. So it lies in
+				// the ground plane turned GUIDE_TILT up about the camera's right: ahead points up the screen, left
+				// points left, and the tip rises or sinks with the route above or below.
+				pitch := clamp(math.atan2(d.y, max(flat, 0.001)), -GUIDE_PITCH_MAX, GUIDE_PITCH_MAX)
+				dir := flat > 0.001 ? d.xz / flat : [2]f32{0, -1}
+				look := linalg.normalize0((st.view.target - st.view.position).xz)
+				if look == {} do look = {0, -1}
+				cam_right := [3]f32{-look.y, 0, look.x}
+				cam_fwd :=
+					[3]f32{look.x, 0, look.y} * math.cos(GUIDE_TILT) + [3]f32{0, math.sin(GUIDE_TILT), 0}
+				ax, ay := linalg.dot(dir, cam_right.xz), linalg.dot(dir, look)
+				f := linalg.normalize(cam_right * ax + cam_fwd * ay + [3]f32{0, math.sin(pitch), 0})
+				right := linalg.normalize(cam_right * ay - cam_fwd * ax)
+				up := linalg.normalize(linalg.cross(right, f))
+				// The outline in (right, forward), extruded GUIDE_THICK_M along up: top, bottom, then the walls.
+				outline := [7][2]f32 {
+					{-0.2, -0.9},
+					{0.2, -0.9},
+					{0.2, 0.15},
+					{0.55, 0.15},
+					{0, 1},
+					{-0.55, 0.15},
+					{-0.2, 0.15},
+				}
+				top, bottom: [7][3]f32
+				for o, i in outline {
+					v := centre + right * o.x + f * o.y
+					top[i], bottom[i] = v + up * (GUIDE_THICK_M / 2), v - up * (GUIDE_THICK_M / 2)
+				}
+				side := rl.ColorBrightness(fill, -0.35)
+				for face in ([2]^[7][3]f32{&top, &bottom}) {
+					col := face == &top ? fill : side
+					tri(st, face[0], face[1], face[2], col)
+					tri(st, face[0], face[2], face[6], col)
+					tri(st, face[3], face[4], face[5], col)
+				}
+				for i in 0 ..< 7 {
+					j := (i + 1) % 7
+					tri(st, top[i], top[j], bottom[j], side)
+					tri(st, top[i], bottom[j], bottom[i], side)
+				}
+			}
+		}
+		rlgl.End()
+		rlgl.DrawRenderBatchActive()
+		rlgl.EnableBackfaceCulling()
+	}
 	rl.EndMode3D()
 	if st.shadow_tex != 0 {
 		rlgl.ActiveTextureSlot(SHADOW_SLOT)
@@ -1841,16 +1984,11 @@ street_cars :: proc(w: ^World, mat: ^rl.Material) {
 	)
 	for o in w.others[:w.other_count] {
 		if carpool_is_passenger(w) && o.author == w.plan.partner_pub do continue
-		p := others_draw_pos(w, o)
-		d := (p - st.origin) * 1000
+		d := (o.pos - st.origin) * 1000
 		if linalg.length(d - car.xz) > STREET_REACH_KM * 1000 do continue
-		pos := [3]f32{d.x, max(o.alt - height_at(w, p.x, p.y), 0), d.y}
-		an := Car_Anim {
-			fly     = o.on_road ? 0 : 1,
-			heading = o.heading,
-		}
+		pos := [3]f32{d.x, max(o.alt - height_at(w, o.pos.x, o.pos.y), 0), d.y}
 		jam := traffic_near(w, o.pos, o.alt, o.on_road, TRAFFIC_RADIUS_KM) >= TRAFFIC_MIN_CARS
-		car_draw_street(w, pos, an, jam ? CAR_JAM_TINT : rl.WHITE, look, o.skin, mat)
+		car_draw_street(w, pos, other_anim(w, o), jam ? CAR_JAM_TINT : rl.WHITE, look, o.skin, mat)
 	}
 }
 
@@ -1916,12 +2054,18 @@ street_hud :: proc(w: ^World) {
 		fwd := st.view.target - st.view.position
 		car := street_ship_pos(w)
 		for o in w.others[:w.other_count] {
-			p := others_draw_pos(w, o)
-			d := (p - st.origin) * 1000
-			if linalg.length(d - car.xz) > STREET_REACH_KM * 1000 do continue
-			pos := [3]f32{d.x, max(o.alt - height_at(w, p.x, p.y), 0) + 2.2, d.y}
+			d := (o.pos - st.origin) * 1000
+			away := linalg.length(d - car.xz)
+			if away > STREET_REACH_KM * 1000 do continue
+			pos := [3]f32{d.x, max(o.alt - height_at(w, o.pos.x, o.pos.y), 0) + 2.2, d.y}
+			// Lowered like the car under it by the round world (STREET_BEND_GLSL).
+			flat := pos.xz - st.view.position.xz
+			pos.y -= linalg.dot(flat, flat) * st.bend
 			if linalg.dot(pos - st.view.position, fwd) <= 0 do continue
-			peer_label_draw(w, rl.GetWorldToScreen(pos, st.view), o.author)
+			buf: [16]u8
+			far :=
+				away < 1000 ? fmt.bprintf(buf[:], "%d m", int(away)) : fmt.bprintf(buf[:], "%.1f km", away / 1000)
+			peer_label_draw(w, rl.GetWorldToScreen(pos, st.view), o.author, far)
 		}
 	}
 	s := &w.ship
@@ -1950,6 +2094,132 @@ street_hud :: proc(w: ^World) {
 	}
 	bat := ui_battery_badge(w, max(f32(SPEED_CIRCLE), box_h))
 	ui_battery_circle(w, {box.x + box.width + 14 + bat.dia / 2, box.y + box_h / 2}, bat.dia, bat, 0.72)
+
+	// The minimap (Lars, 2026-11-22: "minimap"): roads and rivers around the car, the route, the other cars and
+	// the destination, turned with the camera so up is where it looks. Cars and the destination beyond its edge
+	// sit on the rim, so the way to them shows. Grows with the speed (MINIMAP_KM_PER_MS).
+	{
+		R :: MINIMAP_PX
+		mid := [2]f32{screen.x - PAD - R, screen.y - PAD - 14 - R}
+		speed_ms := s.free ? linalg.length(s.vel.xy) : s.speed
+		goal := clamp(MINIMAP_MIN_KM + speed_ms * MINIMAP_KM_PER_MS, MINIMAP_MIN_KM, MINIMAP_MAX_KM)
+		if st.minimap_km == 0 do st.minimap_km = goal
+		st.minimap_km += (goal - st.minimap_km) * (1 - math.exp(-frame_time(w) * 1.5))
+		px_per_km := R / st.minimap_km
+		look := linalg.normalize0((st.view.target - st.view.position).xz)
+		if look == {} do look = {0, -1}
+		right := [2]f32{-look.y, look.x}
+		car := [2]f32{f32(w.pose.pos.x), f32(w.pose.pos.y)}
+		// km on the map to px from mid
+		to_px :: proc(p, car, look, right: [2]f32, scale: f32) -> [2]f32 {
+			d := p - car
+			return {linalg.dot(d, right), -linalg.dot(d, look)} * scale
+		}
+		// The part of a-b (px from mid) inside the circle of radius r.
+		clip :: proc(a, b: [2]f32, r: f32) -> (p, q: [2]f32, ok: bool) {
+			d := b - a
+			qa, qb, qc := linalg.dot(d, d), 2 * linalg.dot(a, d), linalg.dot(a, a) - r * r
+			if qa < 1e-6 do return a, b, qc <= 0
+			disc := qb * qb - 4 * qa * qc
+			if disc <= 0 do return
+			root := math.sqrt(disc)
+			t0, t1 := max((-qb - root) / (2 * qa), 0), min((-qb + root) / (2 * qa), 1)
+			if t0 >= t1 do return
+			return a + d * t0, a + d * t1, true
+		}
+		// A point beyond the edge moved onto the rim.
+		rim :: proc(p: [2]f32, r: f32) -> (q: [2]f32, inside: bool) {
+			l := linalg.length(p)
+			if l <= r do return p, true
+			return p * (r / l), false
+		}
+		rl.DrawCircleV(mid, R + 3, rl.ColorAlpha(pal.surface, 0.85))
+		// A shade darker than the map's land, so the white streets stand out at this size.
+		rl.DrawCircleV(mid, R, rl.ColorBrightness(pal.land, -0.1))
+		if st.road_cells != nil {
+			reach := st.minimap_km + STREET_ROAD_CELL_KM / 2
+			x0 := clamp(int((car.x - reach) / STREET_ROAD_CELL_KM), 0, STREET_ROAD_W - 1)
+			x1 := clamp(int((car.x + reach) / STREET_ROAD_CELL_KM), 0, STREET_ROAD_W - 1)
+			y0 := clamp(int((car.y - reach) / STREET_ROAD_CELL_KM), 0, STREET_ROAD_H - 1)
+			y1 := clamp(int((car.y + reach) / STREET_ROAD_CELL_KM), 0, STREET_ROAD_H - 1)
+			// Casings first, then the fills, so crossings join.
+			for pass in 0 ..< 2 {
+				for cy in y0 ..= y1 {
+					for cx in x0 ..= x1 {
+						c := cy * STREET_ROAD_W + cx
+						for item in st.road_segs[st.road_cells[c]:st.road_cells[c + 1]] {
+							k := int(item & 0xffffff)
+							kind := Map_Kind(item >> 24)
+							a := to_px(w.m.points[k], car, look, right, px_per_km)
+							b := to_px(w.m.points[k + 1], car, look, right, px_per_km)
+							p, q, inside := clip(a, b, R - 1)
+							if !inside do continue
+							width: f32 = 2
+							fill, casing := pal.street, pal.street_casing
+							#partial switch kind {
+							case .River:
+								if pass == 0 do continue
+								width, fill = 3.5, pal.water
+							case .Primary, .Trunk:
+								width, fill, casing = 3, pal.main_road, pal.main_road_casing
+							case .Motorway:
+								width, fill, casing = 4, pal.motorway, pal.motorway_casing
+							}
+							if pass == 0 {
+								rl.DrawLineEx(mid + p, mid + q, width + 2, rl.ColorBrightness(casing, -0.15))
+							} else {
+								rl.DrawLineEx(mid + p, mid + q, width, fill)
+							}
+						}
+					}
+				}
+			}
+		}
+		if r := nav_route(w); r != nil {
+			fill := w.nav.mode == .Greenest ? pal.green_route : pal.route
+			casing := w.nav.mode == .Greenest ? pal.green_route_casing : pal.route_casing
+			for pass in 0 ..< 2 {
+				// From the car (path_index is the point at or before it) to the end.
+				first := w.nav.path_index + 1
+				for i in max(first, 1) ..< len(r.path) {
+					a := i == first ? [2]f32{} : to_px(r.path[i - 1].xy, car, look, right, px_per_km)
+					b := to_px(r.path[i].xy, car, look, right, px_per_km)
+					p, q, inside := clip(a, b, R - 1)
+					if !inside do continue
+					rl.DrawLineEx(mid + p, mid + q, pass == 0 ? 6 : 4, pass == 0 ? casing : fill)
+				}
+			}
+			end := r.path[len(r.path) - 1].xy
+			pin, inside := rim(to_px(end, car, look, right, px_per_km), R - 6)
+			rl.DrawCircleV(mid + pin, inside ? 6 : 4.5, pal.surface)
+			rl.DrawCircleV(mid + pin, inside ? 4.5 : 3.5, pal.red)
+		}
+		for o in w.others[:w.other_count] {
+			if carpool_is_passenger(w) && o.author == w.plan.partner_pub do continue
+			p, inside := rim(to_px(o.pos, car, look, right, px_per_km), R - 6)
+			rl.DrawCircleV(mid + p, inside ? 5.5 : 4, pal.surface)
+			// Amber: the accent and the route are blue or green in the themes.
+			rl.DrawCircleV(mid + p, inside ? 4 : 3, inside ? pal.warning : rl.ColorAlpha(pal.warning, 0.75))
+		}
+		{
+			// The own car: a triangle along its heading, as seen from where the camera looks.
+			h := w.pose.heading
+			f := to_px(car + [2]f32{math.sin(h), -math.cos(h)}, car, look, right, 1)
+			side := [2]f32{-f.y, f.x}
+			tip, l, rr := mid + f * 9, mid - f * 6 + side * 6, mid - f * 6 - side * 6
+			rl.DrawTriangle(tip + f * 2, l + (l - mid) * 0.25, rr + (rr - mid) * 0.25, pal.surface)
+			rl.DrawTriangle(tip, rr, l, pal.text)
+			rl.DrawTriangle(tip, l, rr, pal.text)
+		}
+		{
+			n := mid + to_px(car + {0, -1}, car, look, right, 1) * (R - 11)
+			n_size := ui_text_size(w, "N", .Figtree_700, 12)
+			rl.DrawCircleV(n, 9, rl.ColorAlpha(pal.surface, 0.9))
+			ui_text(w, n - n_size / 2, "N", .Figtree_700, 12, pal.text)
+		}
+		rl.DrawRing(mid, R - 0.5, R + 1, 0, 360, 72, pal.line)
+		ui_decorate_circle(w, mid, R + 3, 0.85)
+	}
 
 	if w.street.on_s < STREET_HINT_S {
 		alpha := 1 - clamp((w.street.on_s - (STREET_HINT_S - 1)) / 1, 0, 1)

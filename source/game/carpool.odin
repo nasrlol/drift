@@ -379,7 +379,7 @@ carpool_partner_target :: proc(
 ) {
 	for o in w.others[:w.other_count] {
 		if o.author != w.plan.partner_pub do continue
-		return others_draw_pos(w, o), o.alt, o.heading, o.speed, o.on_road, o.skin, true
+		return o.pos, o.alt, o.heading, o.speed, o.on_road, o.skin, true
 	}
 	if w.partner_seen {
 		return w.partner.xy, w.partner.z, w.ship.heading, 0, false, w.plan.partner_skin, true

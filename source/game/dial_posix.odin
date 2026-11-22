@@ -50,6 +50,6 @@ net_dial :: proc(ep: net.Endpoint, stop: ^bool) -> (s: net.TCP_Socket, ok: bool)
 	so_len := posix.socklen_t(size_of(so_err))
 	if posix.getsockopt(posix.FD(s), posix.SOL_SOCKET, .ERROR, &so_err, &so_len) != .OK do return
 	if so_err != 0 do return
-	if net.set_blocking(s, true) != nil || !net_timeouts(s) do return
+	if net.set_blocking(s, true) != nil || !net_options(s) do return
 	return s, true
 }

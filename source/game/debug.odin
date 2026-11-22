@@ -1115,6 +1115,10 @@ dump_world :: proc(w: ^World, out: ^strings.Builder) {
 //   frame_ms <ms> [<ms> ...]         frame times to repeat (up to 8) instead of SIM_DT: uneven frames, as on a
 //                                    real screen, so a frame steps the simulation 0, 1 or 2 times
 //   ship <frame> <x km> <y km> <height above ground m> <heading deg>   the car there, at rest
+//   nav <frame> <from hub> <to hub> <mode 0 fastest, 1 greenest, 2 calmest>   plan from -> to at hour 0 and
+//                                    start navigating that route (the Start button), the ship on its first point
+//   car <frame> <x km> <y km> <height above ground m> <heading deg> [road]   another car, as if from the
+//                                    presence gossip, standing there (on its wheels with road)
 //   down <frame> <KEY>   up <frame> <KEY>   press <frame> <KEY>    raylib key names: W, SPACE, LEFT_SHIFT, V
 //   mouse <frame> <dx px> <dy px>    wheel <frame> <notches>
 //   shot <frame> <png file>          after everything of that frame is drawn
@@ -1138,6 +1142,8 @@ Script_Kind :: enum u8 {
 	Mouse,
 	Wheel,
 	Ship,
+	Nav,
+	Car,
 	Shot,
 	Flicker,
 	Judder,
@@ -1258,6 +1264,29 @@ game_script :: proc(memory: rawptr, path: string) -> bool {
 			e.kind, e.v = .Ship, {x, y, h, deg}
 			on_map := x >= 0 && y >= 0 && x <= MAP_W_KM && y <= MAP_H_KM && h >= 0 && h <= SHIP_CEILING
 			ok = n == 6 && frame_ok && x_ok && y_ok && h_ok && deg_ok && on_map
+		case "nav":
+			from, from_ok := strconv.parse_int(f[2], 10)
+			to, to_ok := strconv.parse_int(f[3], 10)
+			mode, mode_ok := strconv.parse_int(f[4], 10)
+			e.kind, e.v = .Nav, {f32(from), f32(to), f32(mode), 0}
+			hubs_ok := from_ok && to_ok && from >= 0 && to >= 0 && from != to
+			ok = n == 5 && frame_ok && hubs_ok && mode_ok && mode >= 0 && mode < len(Route_Mode)
+		case "car":
+			x, x_ok := num(f[2])
+			y, y_ok := num(f[3])
+			h, h_ok := num(f[4])
+			deg, deg_ok := num(f[5])
+			e.kind, e.v = .Car, {x, y, h, deg}
+			if n == 7 do e.key = .R // on its wheels
+			on_map := x >= 0 && y >= 0 && x <= MAP_W_KM && y <= MAP_H_KM && h >= 0 && h <= SHIP_CEILING
+			ok =
+				(n == 6 || (n == 7 && f[6] == "road")) &&
+				frame_ok &&
+				x_ok &&
+				y_ok &&
+				h_ok &&
+				deg_ok &&
+				on_map
 		case "shot":
 			e.kind, e.path = .Shot, f[2]
 			ok = n == 3 && frame_ok && strings.has_suffix(f[2], ".png")
@@ -1341,6 +1370,60 @@ script_frame :: proc(w: ^World) {
 			w.pose_prev = ship_pose(s)
 			w.car_anim.seeded = false
 			w.street.seeded = false
+		case .Nav:
+			from, to := int(e.v.x), int(e.v.y)
+			if from >= w.m.hub_count || to >= w.m.hub_count {
+				logf(
+					w,
+					"script",
+					"frame %d: nav: hub %d or %d is not one of the %d hubs",
+					sc.frame,
+					from,
+					to,
+					w.m.hub_count,
+				)
+				break
+			}
+			w.plan.from, w.plan.to, w.plan.hour = from, to, 0
+			plan_routes(w, from, to, 0)
+			if !nav_start(w, Route_Mode(int(e.v.z))) {
+				logf(
+					w,
+					"script",
+					"frame %d: nav: no route from %s to %s",
+					sc.frame,
+					hub_name(w, from),
+					hub_name(w, to),
+				)
+				break
+			}
+			w.screen = .Navigate
+			w.pose_prev = ship_pose(&w.ship)
+			w.car_anim.seeded = false
+			s := &w.ship
+			logf(
+				w,
+				"script",
+				"frame %d: nav %s -> %s, ship at %.3f %.3f km, heading %.0f deg",
+				sc.frame,
+				hub_name(w, from),
+				hub_name(w, to),
+				s.pos.x,
+				s.pos.y,
+				s.heading * 180 / math.PI,
+			)
+		case .Car:
+			if w.other_count == len(w.others) do break
+			road := e.key == .R
+			w.others[w.other_count] = {
+				pos     = e.v.xy,
+				alt     = height_at(w, e.v.x, e.v.y) + e.v.z,
+				heading = e.v.w * math.PI / 180,
+				on_road = road,
+				fly     = road ? 0 : 1,
+			}
+			w.others[w.other_count].author[0] = u8(w.other_count + 1)
+			w.other_count += 1
 		case .Shot, .Flicker, .Judder, .Profile, .Quit:
 		}
 	}
@@ -1393,7 +1476,7 @@ script_end :: proc(w: ^World) -> (quit: bool) {
 		case .Quit:
 			quit = true
 			logf(w, "script", "frame %d: quit, %d shots or checks failed", sc.frame, sc.failures)
-		case .Down, .Up, .Mouse, .Wheel, .Ship, .Profile:
+		case .Down, .Up, .Mouse, .Wheel, .Ship, .Nav, .Car, .Profile:
 		}
 	}
 	sc.frame += 1
