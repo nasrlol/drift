@@ -913,6 +913,22 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   light around the crown, light through the leaves, a green per tree from its position, leaf
                   clumps); cast and receive shadows (STREET_TREE_DEPTH_VS). The map's tree clumps (nature.odin) are
                   no longer drawn in the street view.
+                  Leaf cards (Lars, 2026-11-22: "de texture van de bomen verbeteren, realistisch"): the crowns are no
+                  longer lumpy balls. Each kind is a trunk with bark coordinates, 4-6 branches into the crown, a dark
+                  core blob (so the crown is not see-through in the middle) and 170-340 leaf cards (tree_cards: in
+                  the crown's ellipsoid, biased to its surface, facing out give or take, deeper ones darker; spruce:
+                  220-280 drooping needle sprays round a dark cone, tree_sprays); the far mesh 48 / 56 larger cards.
+                  Cards are Street_Mat.Leaves | TREE_CARD (32) and lit with the crown's normal (85 %) so a crown
+                  shades as one soft volume and glows where the sun is behind it. Texture: tree_leaf_atlas makes a
+                  512 px RGBA atlas in code at street_build, four cells (twig of broad leaves, of lobed oak leaves, a
+                  spray of needles, a twig of small poplar leaves), pale colours the tint multiplies, the cell's mean
+                  colour under the holes; mipmapped, trilinear, 4x anisotropic. STREET_TREE_FS is STREET_FS_BODY with
+                  TREE defined: alpha test with a looser cut per mip level (the mips average the holes away), bark
+                  furrows along the trunk. The depth pass tests the same alpha, so the shadows have holes. Wind
+                  (TREE_WIND_GLSL, the simulated clock): the crown sways with the square of the height, cards
+                  flutter. Drawn two-sided. Profile build, park at 6 m and 25 m: 2.8-3.0 ms per frame (main the same
+                  run: 3.5-3.6 ms, noisy GPU), Trees_Draw CPU 1.1-1.2 ms both. street_flicker: 0.0013 / 0.0193 % (max 0.05 %;
+                  the fluttering, alpha-tested leaves add a little).
                   Measured (profile build, 2026-11-21): a tree tile builds in 0.27 ms mean, 3.1 ms worst
                   (Brussels); frame in a park 4.1 ms (shadow pass 0.4-1.3, trees 0.6-1.4, houses 0.25-0.9, roads
                   0.15-0.3 ms), in a town street 2.4 ms. Over the 4 ms budget in parks: see todo.

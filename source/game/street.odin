@@ -640,14 +640,20 @@ void main() {
 }
 `
 
-STREET_FS ::
-	`#version 330
-in vec3 v_world;
+STREET_FS :: "#version 330\n" + STREET_FS_BODY
+
+// The body of STREET_FS, shared with the trees (STREET_TREE_FS defines TREE: leaf cards and bark, trees.odin).
+STREET_FS_BODY ::
+	`in vec3 v_world;
 in vec3 v_normal;
 in vec2 v_uv;
 in vec2 v_lh;
 in vec4 v_color;
 out vec4 finalColor;
+#ifdef TREE
+in vec2 v_tex;
+uniform sampler2D texture0;
+#endif
 ` +
 	STREET_GLSL +
 	`
@@ -810,12 +816,34 @@ void main() {
 		base = sedum * 1.15;
 		rough = 1.0;
 	} else if (mat == 12) {
+#ifdef TREE
+		// Bark: furrows along the trunk (v_tex around, along), darker in the cracks.
+		vec2 bp = v_tex * vec2(9.0, 16.0);
+		float bw = max(length(fwidth(bp)), 1e-4);
+		float f = fnoise(bp, 1.0, bw) * 0.65 + fnoise(bp * vec2(1.0, 0.4) + 3.1, 2.3, bw) * 0.35;
+		base *= 0.55 + 0.75 * f * f;
+		rough = 0.95;
+#else
 		base *= 0.8 + 0.35 * fnoise(uv * vec2(1.0, 0.3), 3.0, fw);
+#endif
 	} else if (mat == 13) {
 		// A shade of green per tree (from its position), darker and lighter clumps of leaves.
 		float t = hash12(floor(v_lh * 0.37));
 		base *= mix(vec3(0.82, 0.95, 0.72), vec3(1.18, 1.06, 0.86), t) * (0.85 + 0.3 * hash12(floor(v_lh * 1.3) + 7.7));
+#ifdef TREE
+		if (shop) {
+			// A leaf card: the atlas' twig, alpha tested. Mipmaps average the holes away, so far away the test is
+			// looser and the crown keeps its leaves.
+			vec4 lt = texture(texture0, v_tex);
+			float mip = max(log2(max(length(fwidth(v_tex)) * 512.0, 1.0)), 0.0);
+			if (lt.a * (1.0 + 0.35 * mip) < 0.5) discard;
+			base *= lin(lt.rgb) * 2.0;
+		} else {
+			base *= 0.68 + 0.64 * fnoise(uv, 1.6, fw);
+		}
+#else
 		base *= 0.68 + 0.64 * fnoise(uv, 1.6, fw);
+#endif
 		leaf = 1.0;
 		rough = 0.95;
 	} else if (mat == 9) {

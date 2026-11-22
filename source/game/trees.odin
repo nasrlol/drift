@@ -3,14 +3,34 @@ package game
 import "core:math"
 import "core:math/linalg"
 import rl "vendor:raylib"
+import rlgl "vendor:raylib/rlgl"
 
 // Trees of the street view (Lars, 2026-11-21: "veel groen, solarpunk: parken, straatbomen, tuinen"): single
 // trees, a trunk and a crown of a few lumpy blobs, in TREE_KINDS kinds (lime, poplar, oak, spruce, young street
 // tree). Placed per TREES_TILE_KM tile from a hash, so the same everywhere every run: parks and woods (the Park
 // triangles of the land use map), street trees along the town roads on the outer edge of the sidewalk, trees in
 // the empty lots of the towns (gardens), rows along a share of the country roads; never in a building nor on a
-// road. Drawn instanced: the detailed meshes within TREES_NEAR_M, one lumpy blob (or cone) per tree beyond.
+// road. Drawn instanced: the detailed meshes within TREES_NEAR_M, a lighter mesh per tree beyond.
 // Sizes, densities and shapes are ours.
+// Realistic crowns (Lars, 2026-11-22: "de texture van de bomen verbeteren, realistisch"): not lumpy balls any more
+// but leaf cards, quads with a twig of leaves (or a spray of needles) in an alpha-tested texture, many per crown
+// around a dark core, lit with the crown's normal (from its centre) so the crown shades as one soft volume and
+// glows where the sun shines through. Branches reach into the crown, the bark has furrows, the crowns sway in the
+// wind and the leaves flutter. The leaf texture is made in code at street_build (tree_leaf_atlas), no photo.
+TREE_ATLAS_PX :: 512 // four cells of 256 px: broad leaves, oak leaves, needles, small leaves
+// Shared by the lit and the depth vertex shader, so the shadows sway with the trees.
+TREE_WIND_GLSL :: `
+uniform float time;
+vec3 tree_wind(vec3 p, vec4 col, mat4 inst) {
+	float ph = dot(inst[3].xz, vec2(0.131, 0.173));
+	float h = max(p.y - 0.25, 0.0);
+	vec2 sway = vec2(sin(time * 1.1 + ph) + 0.4 * sin(time * 2.3 + ph * 2.1), sin(time * 0.9 + ph * 1.3)) * 0.01 * h * h;
+	p.xz += sway;
+	int code = int(col.a * 255.0 + 0.5);
+	if ((code & 32) != 0) p += vec3(0.0035) * sin(time * 7.0 + dot(p, vec3(91.0, 57.0, 73.0)) + ph);
+	return p;
+}
+`
 TREES_TILE_KM :: 0.5
 TREES_REACH_KM :: STREET_VIEW_KM
 TREES_NEAR_M :: 250.0
@@ -45,22 +65,25 @@ Trees :: struct {
 	park_cells:         []u32,
 	park_items:         []u32,
 	near:               [TREE_KINDS]rl.Mesh, // height 1
-	far:                [2]rl.Mesh, // a lumpy blob, a cone
-	lit:                rl.Material, // STREET_TREE_VS / STREET_FS, instanced
-	depth:              rl.Material, // instanced depth for the shadow pass
+	far:                [2]rl.Mesh, // broadleaf, conifer
+	lit:                rl.Material, // STREET_TREE_VS / STREET_TREE_FS, instanced, the leaf atlas as texture0
+	depth:              rl.Material, // instanced depth for the shadow pass, leaf cards alpha tested
 	lit_loc:            Street_Light_Locs,
+	leaf_tex:           rl.Texture2D, // tree_leaf_atlas, mipmapped
+	time_loc:           [2]i32, // lit, depth
 	last_rural_trees:   bool,
 	last_rural_density: f32,
 	ready:              bool,
 }
 
 // The tree vertex shader: the instance transform places a height-1 tree; v_lh is the tree's position (a hash for
-// its colour), v_uv world coordinates for the leaf clumps.
+// its colour), v_uv world coordinates for the leaf clumps, v_tex the leaf atlas (cards) or around / along (bark).
 STREET_TREE_VS ::
 	`#version 330
 in vec3 vertexPosition;
 in vec3 vertexNormal;
 in vec4 vertexColor;
+in vec2 vertexTexCoord;
 in mat4 instanceTransform;
 uniform mat4 mvp;
 out vec3 v_world;
@@ -68,26 +91,54 @@ out vec3 v_normal;
 out vec2 v_uv;
 out vec2 v_lh;
 out vec4 v_color;
+out vec2 v_tex;
 ` +
 	STREET_BEND_GLSL +
+	TREE_WIND_GLSL +
 	`
 void main() {
-	vec4 wp = instanceTransform * vec4(vertexPosition, 1.0);
+	vec4 wp = instanceTransform * vec4(tree_wind(vertexPosition, vertexColor, instanceTransform), 1.0);
 	v_world = wp.xyz;
 	v_normal = normalize(mat3(instanceTransform) * vertexNormal);
 	v_uv = wp.xz + vec2(wp.y * 0.7);
 	v_lh = instanceTransform[3].xz;
 	v_color = vertexColor;
+	v_tex = vertexTexCoord;
 	gl_Position = bent(mvp * wp, wp.xyz);
 }
 `
 
-STREET_TREE_DEPTH_VS :: `#version 330
+STREET_TREE_FS :: "#version 330\n#define TREE\n" + STREET_FS_BODY
+
+STREET_TREE_DEPTH_VS ::
+	`#version 330
 in vec3 vertexPosition;
+in vec4 vertexColor;
+in vec2 vertexTexCoord;
 in mat4 instanceTransform;
 uniform mat4 mvp;
+out vec2 v_tex;
+out float v_card;
+` +
+	TREE_WIND_GLSL +
+	`
 void main() {
-	gl_Position = mvp * instanceTransform * vec4(vertexPosition, 1.0);
+	v_tex = vertexTexCoord;
+	v_card = float((int(vertexColor.a * 255.0 + 0.5) & 32) != 0);
+	gl_Position = mvp * instanceTransform * vec4(tree_wind(vertexPosition, vertexColor, instanceTransform), 1.0);
+}
+`
+
+// The leaf cards' shadows have the leaves' holes (the same test as STREET_TREE_FS).
+STREET_TREE_DEPTH_FS :: `#version 330
+in vec2 v_tex;
+in float v_card;
+uniform sampler2D texture0;
+void main() {
+	if (v_card > 0.5) {
+		float mip = max(log2(max(length(fwidth(v_tex)) * 512.0, 1.0)), 0.0);
+		if (texture(texture0, v_tex).a * (1.0 + 0.35 * mip) < 0.5) discard;
+	}
 }
 `
 
@@ -95,8 +146,12 @@ void main() {
 Tree_Mesh :: struct {
 	pos, nrm: [dynamic][3]f32,
 	col:      [dynamic][4]u8,
+	uv:       [dynamic][2]f32,
 	idx:      [dynamic]u16,
 }
+
+// Street_Mat.Leaves with this bit: a leaf card, textured from the atlas and alpha tested.
+TREE_CARD :: 32
 
 // A lumpy ellipsoid: rings x segs grid, radii r around centre, bumped by the seed; darker underneath and deeper
 // in the crown (ao).
@@ -112,6 +167,7 @@ tree_blob :: proc(m: ^Tree_Mesh, centre, r: [3]f32, rings, segs: int, seed: u32,
 			append(&m.pos, centre + dir * r * bump)
 			append(&m.nrm, linalg.normalize(dir / r))
 			shade := ao * (0.62 + 0.38 * (dir.y * 0.5 + 0.5))
+			append(&m.uv, [2]f32{})
 			append(
 				&m.col,
 				[4]u8 {
@@ -144,6 +200,7 @@ tree_cone :: proc(m: ^Tree_Mesh, y0, y1, r0, r1: f32, segs: int, c: [3]u8, mat: 
 		n := linalg.normalize([3]f32{d.x, slope, d.y})
 		append(&m.pos, [3]f32{d.x * r0, y0, d.y * r0}, [3]f32{d.x * r1, y1, d.y * r1})
 		append(&m.nrm, n, n)
+		append(&m.uv, [2]f32{f32(si) / f32(segs), y0}, [2]f32{f32(si) / f32(segs), y1})
 		low := [4]u8{u8(f32(c.r) * 0.7), u8(f32(c.g) * 0.7), u8(f32(c.b) * 0.7), u8(mat)}
 		append(&m.col, low, [4]u8{c.r, c.g, c.b, u8(mat)})
 	}
@@ -152,6 +209,256 @@ tree_cone :: proc(m: ^Tree_Mesh, y0, y1, r0, r1: f32, segs: int, c: [3]u8, mat: 
 		b := base + u16(((si + 1) % segs) * 2)
 		append(&m.idx, a, b, b + 1, a, b + 1, a + 1)
 	}
+}
+
+// A tapered branch from a to b, bark coordinates around and along it (STREET_TREE_FS furrows).
+tree_branch :: proc(m: ^Tree_Mesh, a, b: [3]f32, r0, r1: f32, segs: int, c: [3]u8) {
+	base := u16(len(m.pos))
+	axis := linalg.normalize(b - a)
+	side := linalg.normalize(linalg.cross(axis, abs(axis.y) < 0.9 ? [3]f32{0, 1, 0} : [3]f32{1, 0, 0}))
+	up := linalg.cross(side, axis)
+	l := linalg.length(b - a)
+	low := [4]u8{u8(f32(c.r) * 0.75), u8(f32(c.g) * 0.75), u8(f32(c.b) * 0.75), u8(Street_Mat.Bark)}
+	high := [4]u8{c.r, c.g, c.b, u8(Street_Mat.Bark)}
+	for si in 0 ..< segs {
+		ph := math.TAU * f32(si) / f32(segs)
+		d := side * math.cos(ph) + up * math.sin(ph)
+		append(&m.pos, a + d * r0, b + d * r1)
+		append(&m.nrm, d, d)
+		append(&m.uv, [2]f32{f32(si) / f32(segs), 0}, [2]f32{f32(si) / f32(segs), l})
+		append(&m.col, low, high)
+	}
+	for si in 0 ..< segs {
+		i0 := base + u16(si * 2)
+		i1 := base + u16(((si + 1) % segs) * 2)
+		append(&m.idx, i0, i1, i1 + 1, i0, i1 + 1, i0 + 1)
+	}
+}
+
+// One leaf card: a quad of half size sz at p in the plane right x up, the atlas cell's texture on it, lit with ln.
+tree_card :: proc(m: ^Tree_Mesh, p, right, up, ln: [3]f32, sz: f32, cell: int, col: [4]u8) {
+	base := u16(len(m.pos))
+	u0, v0 := f32(cell % 2) * 0.5, f32(cell / 2) * 0.5
+	INSET :: 0.004
+	for c in ([4][2]f32{{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}) {
+		append(&m.pos, p + (right * c.x + up * c.y) * sz)
+		append(&m.nrm, ln)
+		append(&m.col, col)
+		uv := [2]f32{c.x * 0.5 + 0.5, 0.5 - c.y * 0.5}
+		append(&m.uv, [2]f32{u0, v0} + INSET + uv * (0.5 - 2 * INSET))
+	}
+	append(&m.idx, base, base + 1, base + 2, base, base + 2, base + 3)
+}
+
+// count leaf cards of about size (in tree heights) in the ellipsoid centre +- radii, most of them near its
+// surface, each facing outwards give or take and spun at random. Lit with the ellipsoid's normal (a little of the
+// card's own, so neighbours differ), the deeper ones darker.
+tree_cards :: proc(
+	m: ^Tree_Mesh,
+	centre, radii: [3]f32,
+	count: int,
+	size: f32,
+	cell: int,
+	tint: [3]u8,
+	seed: u32,
+) {
+	s := seed
+	for _ in 0 ..< count {
+		z := nature_rand(&s) * 2 - 1
+		a := nature_rand(&s) * math.TAU
+		rxy := math.sqrt(max(1 - z * z, 0))
+		dir := [3]f32{rxy * math.cos(a), z, rxy * math.sin(a)}
+		depth := math.pow(nature_rand(&s), 0.4)
+		p := centre + dir * radii * depth
+		n := linalg.normalize(dir / radii)
+		jitter := [3]f32{nature_rand(&s), nature_rand(&s), nature_rand(&s)} - 0.5
+		face := linalg.normalize(n + jitter * 1.6)
+		t := linalg.normalize(linalg.cross(face, abs(face.y) < 0.95 ? [3]f32{0, 1, 0} : [3]f32{1, 0, 0}))
+		b := linalg.cross(face, t)
+		spin := nature_rand(&s) * math.TAU
+		right := t * math.cos(spin) + b * math.sin(spin)
+		up := linalg.cross(face, right)
+		shade := (0.45 + 0.55 * depth) * (0.85 + 0.15 * (n.y * 0.5 + 0.5))
+		col := [4]u8 {
+			u8(f32(tint.r) * shade),
+			u8(f32(tint.g) * shade),
+			u8(f32(tint.b) * shade),
+			u8(Street_Mat.Leaves) | TREE_CARD,
+		}
+		tree_card(
+			m,
+			p,
+			right,
+			up,
+			linalg.normalize(n * 0.85 + face * 0.15),
+			size * (0.38 + 0.25 * nature_rand(&s)),
+			cell,
+			col,
+		)
+	}
+}
+
+// A conifer's sprays: count needle cards on a cone from y0 (radius r0) to y1 (0), each pointing out and down
+// from the trunk, lying roughly flat, the lower whorls longer.
+tree_sprays :: proc(m: ^Tree_Mesh, y0, y1, r0: f32, count: int, size: f32, tint: [3]u8, seed: u32) {
+	s := seed
+	for _ in 0 ..< count {
+		t := math.pow(nature_rand(&s), 0.8)
+		y := y0 + (y1 - y0) * t
+		a := nature_rand(&s) * math.TAU
+		out := linalg.normalize([3]f32{math.cos(a), -0.3 - 0.25 * nature_rand(&s), math.sin(a)})
+		tang := [3]f32{-math.sin(a), 0, math.cos(a)}
+		r := r0 * (1 - t) * (0.5 + 0.5 * nature_rand(&s))
+		sz := size * (0.45 + 0.55 * (1 - t)) * (0.4 + 0.2 * nature_rand(&s))
+		p := [3]f32{math.cos(a) * r, y, math.sin(a) * r} + out * sz
+		ln := linalg.normalize([3]f32{math.cos(a), 0.7, math.sin(a)})
+		shade := 0.55 + 0.45 * (r / max(r0 * (1 - t), 0.001))
+		col := [4]u8 {
+			u8(f32(tint.r) * shade),
+			u8(f32(tint.g) * shade),
+			u8(f32(tint.b) * shade),
+			u8(Street_Mat.Leaves) | TREE_CARD,
+		}
+		tree_card(m, p, tang, out, ln, sz, 2, col)
+	}
+}
+
+// The leaf cards' texture, TREE_ATLAS_PX square in four cells: 0 a twig of broad, rounded leaves (lime, young
+// trees), 1 a twig of darker, lobed leaves (oak), 2 a spray of needles (spruce), 3 a twig of small leaves (poplar).
+// Pale colours around one grey green: the tree's tint multiplies them (STREET_TREE_FS). The empty pixels carry the
+// cell's mean colour, so the mipmaps do not darken the leaf edges. Deterministic (nature_rand).
+tree_leaf_atlas :: proc() -> []u8 {
+	N :: TREE_ATLAS_PX
+	C :: N / 2
+	px := make([][4]f32, N * N, context.temp_allocator)
+	// Over: coverage a of colour c on top of what is there.
+	put :: proc(px: [][4]f32, x, y: int, c: [3]f32, a: f32) {
+		d := &px[y * N + x]
+		d.rgb = d.a > 0 ? linalg.lerp(d.rgb, c, a) : c
+		d.a = max(d.a, a)
+	}
+	// A leaf from base b along dir (unit), length l, half width hw in px, clipped to the cell lo ..< lo + C.
+	leaf :: proc(px: [][4]f32, b, dir: [2]f32, l, hw: f32, col: [3]f32, lobed: bool, lo: [2]int) {
+		perp := [2]f32{-dir.y, dir.x}
+		tip := b + dir * l
+		mn := linalg.min(b, tip) - hw - 2
+		mx := linalg.max(b, tip) + hw + 2
+		for y in max(int(mn.y), lo.y) ..< min(int(mx.y) + 1, lo.y + C) {
+			for x in max(int(mn.x), lo.x) ..< min(int(mx.x) + 1, lo.x + C) {
+				q := [2]f32{f32(x) + 0.5, f32(y) + 0.5} - b
+				u := linalg.dot(q, dir) / l
+				if u < 0 || u > 1 do continue
+				v := linalg.dot(q, perp)
+				w := hw * math.pow(math.sin(math.PI * u), 0.7) * (1.15 - 0.35 * u)
+				if lobed do w *= 0.78 + 0.22 * math.cos(u * 7 * math.PI)
+				cov := clamp(w - abs(v) + 0.5, 0, 1)
+				if cov <= 0 do continue
+				edge := abs(v) / max(w, 0.01)
+				rib := clamp(1 - abs(v) * 1.4, 0, 1) * (1 - u)
+				shade := (0.9 + 0.14 * (1 - edge * edge) - 0.08 * u) * (v > 0 ? 1.04 : 0.94)
+				put(px, x, y, col * shade + rib * 0.1, cov)
+			}
+		}
+	}
+	// A twig: a line from a to b of half width hw.
+	twig :: proc(px: [][4]f32, a, b: [2]f32, hw: f32, lo: [2]int) {
+		col := [3]f32{0.52, 0.45, 0.36}
+		d := b - a
+		l2 := max(linalg.dot(d, d), 1e-4)
+		mn := linalg.min(a, b) - hw - 2
+		mx := linalg.max(a, b) + hw + 2
+		for y in max(int(mn.y), lo.y) ..< min(int(mx.y) + 1, lo.y + C) {
+			for x in max(int(mn.x), lo.x) ..< min(int(mx.x) + 1, lo.x + C) {
+				p := [2]f32{f32(x) + 0.5, f32(y) + 0.5}
+				t := clamp(linalg.dot(p - a, d) / l2, 0, 1)
+				cov := clamp(hw - linalg.length(a + d * t - p) + 0.5, 0, 1)
+				if cov > 0 do put(px, x, y, col, cov)
+			}
+		}
+	}
+	rot :: proc(v: [2]f32, a: f32) -> [2]f32 {
+		c, s := math.cos(a), math.sin(a)
+		return {v.x * c - v.y * s, v.x * s + v.y * c}
+	}
+	seed: u32 = 4242
+	PALE :: [3]f32{0.7, 0.76, 0.58}
+	for cell in 0 ..< 4 {
+		lo := [2]int{(cell % 2) * C, (cell / 2) * C}
+		o := [2]f32{f32(lo.x), f32(lo.y)}
+		// The main stem from the bottom middle up to near the top, a little bent; side shoots off it.
+		base := o + {C * 0.5, C - 6}
+		top := o + {C * (0.42 + 0.16 * nature_rand(&seed)), 14}
+		twig(px, base, top, cell == 2 ? 1.6 : 1.2, lo)
+		shoots := cell == 2 ? 16 : cell == 3 ? 11 : 9
+		for k in 0 ..< shoots {
+			t := 0.12 + 0.86 * f32(k) / f32(shoots)
+			at := linalg.lerp(base, top, t)
+			stem := linalg.normalize(top - base)
+			side: f32 = k % 2 == 0 ? 1 : -1
+			sdir := rot(stem, side * (0.75 + 0.35 * nature_rand(&seed)))
+			slen := (cell == 2 ? 58 : 44) * (1.15 - 0.6 * t) * (0.8 + 0.4 * nature_rand(&seed))
+			send := at + sdir * slen
+			twig(px, at, send, 0.8, lo)
+			switch cell {
+			case 2:
+				// Needles both sides along the shoot, and along the stem.
+				for u: f32 = 0.05; u < 1; u += 0.07 {
+					p := linalg.lerp(at, send, u)
+					for sd in ([2]f32{-1, 1}) {
+						d := rot(sdir, sd * (1.0 + 0.2 * nature_rand(&seed)))
+						shade := 0.85 + 0.25 * nature_rand(&seed)
+						leaf(
+							px,
+							p,
+							d,
+							11 + 5 * nature_rand(&seed),
+							1.0,
+							PALE * {0.86, 0.95, 1.05} * shade,
+							false,
+							lo,
+						)
+					}
+				}
+			case:
+				// Leaves along the shoot and at its tip, alternating, at 30-60 degrees.
+				n := cell == 3 ? 8 : 5
+				for j in 0 ..< n {
+					u := 0.25 + 0.75 * f32(j) / f32(n - 1)
+					p := linalg.lerp(at, send, u)
+					sd: f32 = j % 2 == 0 ? 1 : -1
+					d := rot(sdir, sd * (0.5 + 0.5 * nature_rand(&seed)))
+					if j == n - 1 do d = sdir
+					l := (cell == 3 ? 12 : cell == 1 ? 24 : 21) * (0.75 + 0.5 * nature_rand(&seed))
+					hw := l * (cell == 3 ? 0.36 : cell == 1 ? 0.3 : 0.42)
+					tone := 0.82 + 0.3 * nature_rand(&seed)
+					hue := nature_rand(&seed)
+					col := PALE * tone
+					if hue < 0.15 do col *= {1.1, 1.04, 0.8} // yellower
+					if hue > 0.85 do col *= {0.88, 0.95, 1.02} // bluer, darker
+					if cell == 1 do col *= {0.94, 0.95, 0.9}
+					leaf(px, p, d, l, hw, col, cell == 1, lo)
+				}
+			}
+		}
+		// Empty pixels take the cell's mean colour.
+		sum: [3]f32
+		cnt: f32
+		for y in lo.y ..< lo.y + C do for x in lo.x ..< lo.x + C {
+			p := px[y * N + x]
+			sum += p.rgb * p.a
+			cnt += p.a
+		}
+		mean := sum / max(cnt, 1)
+		for y in lo.y ..< lo.y + C do for x in lo.x ..< lo.x + C {
+			p := &px[y * N + x]
+			if p.a <= 0 do p.rgb = mean
+		}
+	}
+	out := make([]u8, N * N * 4, context.temp_allocator)
+	for p, i in px {
+		for k in 0 ..< 4 do out[i * 4 + k] = u8(clamp(p[k], 0, 1) * 255 + 0.5)
+	}
+	return out
 }
 
 // raylib draws a mesh by its indices only while mesh.indices is set, so they stay (perm arena, as the car's); the
@@ -165,10 +472,11 @@ tree_mesh_upload :: proc(m: ^Tree_Mesh) -> rl.Mesh {
 		vertices      = ([^]f32)(raw_data(m.pos)),
 		normals       = ([^]f32)(raw_data(m.nrm)),
 		colors        = ([^]u8)(raw_data(m.col)),
+		texcoords     = ([^]f32)(raw_data(m.uv)),
 		indices       = raw_data(indices),
 	}
 	rl.UploadMesh(&mesh, false)
-	mesh.vertices, mesh.normals, mesh.colors = nil, nil, nil
+	mesh.vertices, mesh.normals, mesh.colors, mesh.texcoords = nil, nil, nil, nil
 	return mesh
 }
 
@@ -214,7 +522,18 @@ trees_build :: proc(w: ^World) {
 			pos = make([dynamic][3]f32, 0, 4096, context.temp_allocator),
 			nrm = make([dynamic][3]f32, 0, 4096, context.temp_allocator),
 			col = make([dynamic][4]u8, 0, 4096, context.temp_allocator),
+			uv = make([dynamic][2]f32, 0, 4096, context.temp_allocator),
 			idx = make([dynamic]u16, 0, 16384, context.temp_allocator),
+		}
+	}
+	// Branches from the top of the trunk (y0) fanning out and up to radius r at y1, n of them.
+	branches :: proc(m: ^Tree_Mesh, y0, y1, r, r0: f32, n: int, seed: u32) {
+		s := seed
+		for k in 0 ..< n {
+			a := f32(k) * math.TAU / f32(n) + nature_rand(&s) * 0.8
+			rr := r * (0.7 + 0.3 * nature_rand(&s))
+			end := [3]f32{rr * math.cos(a), y1 + (nature_rand(&s) - 0.5) * 0.08, rr * math.sin(a)}
+			tree_branch(m, {0, y0 - 0.03 * nature_rand(&s), 0}, end, r0, r0 * 0.3, 5, BARK)
 		}
 	}
 	for kind in 0 ..< TREE_KINDS {
@@ -222,69 +541,65 @@ trees_build :: proc(w: ^World) {
 		switch kind {
 		case 0:
 			// Lime: a round crown on a clear trunk.
-			tree_cone(&m, 0, 0.42, 0.026, 0.017, 7, BARK, .Bark)
-			tree_blob(&m, {0, 0.64, 0}, {0.3, 0.31, 0.3}, 7, 10, 11, {64, 94, 36}, 0.85)
-			for k in 0 ..< 4 {
-				a := f32(k) * math.TAU / 4 + 0.4
-				tree_blob(
-					&m,
-					{0.17 * math.cos(a), 0.58 + 0.05 * f32(k % 2), 0.17 * math.sin(a)},
-					{0.19, 0.18, 0.19},
-					6,
-					8,
-					u32(20 + k),
-					{70, 100, 40},
-					1,
-				)
-			}
+			tree_cone(&m, 0, 0.45, 0.026, 0.017, 8, BARK, .Bark)
+			branches(&m, 0.42, 0.7, 0.22, 0.013, 5, 11)
+			tree_blob(&m, {0, 0.65, 0}, {0.2, 0.2, 0.2}, 5, 8, 12, {36, 54, 24}, 0.6)
+			tree_cards(&m, {0, 0.65, 0}, {0.31, 0.3, 0.31}, 300, 0.17, 0, {74, 104, 42}, 101)
 		case 1:
-			// Poplar: tall and slender.
-			tree_cone(&m, 0, 0.3, 0.02, 0.014, 6, {120, 114, 104}, .Bark)
-			tree_blob(&m, {0, 0.46, 0}, {0.11, 0.2, 0.11}, 6, 8, 31, {70, 98, 40}, 0.85)
-			tree_blob(&m, {0, 0.7, 0}, {0.1, 0.22, 0.1}, 6, 8, 32, {74, 102, 42}, 0.95)
-			tree_blob(&m, {0, 0.9, 0}, {0.065, 0.11, 0.065}, 5, 7, 33, {78, 106, 44}, 1)
+			// Poplar: tall and slender, small leaves.
+			tree_cone(&m, 0, 0.5, 0.02, 0.012, 7, {120, 114, 104}, .Bark)
+			branches(&m, 0.3, 0.75, 0.07, 0.008, 4, 21)
+			tree_blob(&m, {0, 0.62, 0}, {0.06, 0.3, 0.06}, 5, 7, 22, {38, 56, 26}, 0.6)
+			tree_cards(&m, {0, 0.63, 0}, {0.11, 0.36, 0.11}, 220, 0.11, 3, {76, 104, 44}, 102)
 		case 2:
-			// Oak: broad, lower crown.
-			tree_cone(&m, 0, 0.36, 0.038, 0.024, 7, BARK, .Bark)
-			tree_blob(&m, {0, 0.62, 0}, {0.36, 0.27, 0.36}, 7, 11, 41, {52, 80, 32}, 0.8)
-			for k in 0 ..< 5 {
-				a := f32(k) * math.TAU / 5
-				tree_blob(
-					&m,
-					{0.26 * math.cos(a), 0.6 + 0.06 * f32(k % 2), 0.26 * math.sin(a)},
-					{0.2, 0.17, 0.2},
-					6,
-					8,
-					u32(50 + k),
-					{58, 86, 34},
-					1,
-				)
-			}
+			// Oak: broad, lower crown, branches wide.
+			tree_cone(&m, 0, 0.4, 0.04, 0.026, 8, BARK, .Bark)
+			branches(&m, 0.36, 0.62, 0.3, 0.018, 6, 31)
+			tree_blob(&m, {0, 0.6, 0}, {0.25, 0.17, 0.25}, 5, 9, 32, {30, 46, 20}, 0.55)
+			tree_cards(&m, {0, 0.62, 0}, {0.38, 0.27, 0.38}, 340, 0.19, 1, {62, 90, 36}, 103)
 		case 3:
-			// Spruce: stacked cones.
-			tree_cone(&m, 0, 0.18, 0.025, 0.02, 6, BARK, .Bark)
-			tree_cone(&m, 0.12, 0.6, 0.24, 0.02, 9, {38, 60, 34}, .Leaves)
-			tree_cone(&m, 0.38, 0.84, 0.18, 0.01, 9, {42, 64, 36}, .Leaves)
-			tree_cone(&m, 0.62, 1.0, 0.11, 0.0, 8, {46, 68, 38}, .Leaves)
+			// Spruce: a dark cone under drooping sprays of needles.
+			tree_cone(&m, 0, 0.95, 0.025, 0.004, 7, BARK, .Bark)
+			tree_cone(&m, 0.1, 0.96, 0.17, 0.0, 9, {24, 38, 24}, .Leaves)
+			tree_sprays(&m, 0.08, 1.0, 0.27, 280, 0.26, {46, 68, 42}, 104)
 		case 4:
 			// Young street tree: thin trunk, small crown.
-			tree_cone(&m, 0, 0.48, 0.018, 0.012, 6, BARK, .Bark)
-			tree_blob(&m, {0, 0.72, 0}, {0.22, 0.27, 0.22}, 6, 9, 61, {78, 106, 44}, 0.9)
-			tree_blob(&m, {0.08, 0.62, 0.06}, {0.15, 0.15, 0.15}, 5, 7, 62, {82, 110, 46}, 1)
+			tree_cone(&m, 0, 0.5, 0.018, 0.012, 7, BARK, .Bark)
+			branches(&m, 0.47, 0.72, 0.15, 0.008, 4, 41)
+			tree_blob(&m, {0, 0.72, 0}, {0.13, 0.15, 0.13}, 5, 7, 42, {40, 58, 26}, 0.6)
+			tree_cards(&m, {0, 0.73, 0}, {0.21, 0.25, 0.21}, 170, 0.15, 0, {80, 108, 46}, 105)
 		}
 		tr.near[kind] = tree_mesh_upload(&m)
 	}
 	{
+		// Beyond TREES_NEAR_M: fewer, larger cards round the same core.
 		m := new_mesh()
-		tree_cone(&m, 0, 0.42, 0.03, 0.02, 4, BARK, .Bark)
-		tree_blob(&m, {0, 0.63, 0}, {0.31, 0.33, 0.31}, 5, 7, 71, {62, 92, 36}, 0.9)
+		tree_cone(&m, 0, 0.45, 0.03, 0.02, 5, BARK, .Bark)
+		tree_blob(&m, {0, 0.64, 0}, {0.22, 0.23, 0.22}, 4, 6, 71, {36, 54, 24}, 0.6)
+		tree_cards(&m, {0, 0.64, 0}, {0.31, 0.32, 0.31}, 48, 0.42, 0, {70, 100, 40}, 111)
 		tr.far[0] = tree_mesh_upload(&m)
 		m = new_mesh()
-		tree_cone(&m, 0, 0.2, 0.03, 0.02, 4, BARK, .Bark)
-		tree_cone(&m, 0.12, 1.0, 0.24, 0.0, 6, {40, 62, 36}, .Leaves)
+		tree_cone(&m, 0, 0.6, 0.03, 0.01, 4, BARK, .Bark)
+		tree_cone(&m, 0.1, 0.96, 0.18, 0.0, 6, {26, 40, 26}, .Leaves)
+		tree_sprays(&m, 0.08, 1.0, 0.27, 56, 0.5, {44, 66, 40}, 112)
 		tr.far[1] = tree_mesh_upload(&m)
 	}
-	lit := rl.LoadShaderFromMemory(STREET_TREE_VS, STREET_FS)
+	{
+		pixels := tree_leaf_atlas()
+		img := rl.Image {
+			data    = raw_data(pixels),
+			width   = TREE_ATLAS_PX,
+			height  = TREE_ATLAS_PX,
+			mipmaps = 1,
+			format  = .UNCOMPRESSED_R8G8B8A8,
+		}
+		tr.leaf_tex = rl.LoadTextureFromImage(img)
+		rl.GenTextureMipmaps(&tr.leaf_tex)
+		rl.SetTextureFilter(tr.leaf_tex, .TRILINEAR)
+		rl.SetTextureFilter(tr.leaf_tex, .ANISOTROPIC_4X)
+		rl.SetTextureWrap(tr.leaf_tex, .CLAMP)
+	}
+	lit := rl.LoadShaderFromMemory(STREET_TREE_VS, STREET_TREE_FS)
 	if !rl.IsShaderValid(lit) do logf(w, "trees", "tree shader did not compile")
 	lit.locs[rl.ShaderLocationIndex.VERTEX_INSTANCETRANSFORM] = rl.GetShaderLocationAttrib(
 		lit,
@@ -292,14 +607,19 @@ trees_build :: proc(w: ^World) {
 	)
 	tr.lit = rl.LoadMaterialDefault()
 	tr.lit.shader = lit
+	tr.lit.maps[rl.MaterialMapIndex.ALBEDO].texture = tr.leaf_tex
 	tr.lit_loc = street_light_locs(lit)
-	depth := rl.LoadShaderFromMemory(STREET_TREE_DEPTH_VS, STREET_DEPTH_FS)
+	tr.time_loc[0] = rl.GetShaderLocation(lit, "time")
+	depth := rl.LoadShaderFromMemory(STREET_TREE_DEPTH_VS, STREET_TREE_DEPTH_FS)
+	if !rl.IsShaderValid(depth) do logf(w, "trees", "tree depth shader did not compile")
 	depth.locs[rl.ShaderLocationIndex.VERTEX_INSTANCETRANSFORM] = rl.GetShaderLocationAttrib(
 		depth,
 		"instanceTransform",
 	)
 	tr.depth = rl.LoadMaterialDefault()
 	tr.depth.shader = depth
+	tr.depth.maps[rl.MaterialMapIndex.ALBEDO].texture = tr.leaf_tex
+	tr.time_loc[1] = rl.GetShaderLocation(depth, "time")
 	tr.ready = true
 }
 
@@ -317,6 +637,7 @@ trees_unload :: proc(tr: ^Trees) {
 	}
 	rl.UnloadShader(tr.lit.shader)
 	rl.UnloadShader(tr.depth.shader)
+	rl.UnloadTexture(tr.leaf_tex)
 	tr.ready = false
 }
 
@@ -531,6 +852,13 @@ trees_draw :: proc(w: ^World, target: [2]f32, reach: f32, cam: [3]f32, shadow: b
 	}
 	mat := shadow ? tr.depth : tr.lit
 	if !shadow do street_light_set(w, tr.lit.shader, &tr.lit_loc, cam)
+	// The simulated clock, so a scripted run sways the same every time.
+	t := f32(w.tick % (SIM_HZ * 3600)) * SIM_DT
+	rl.SetShaderValue(mat.shader, tr.time_loc[shadow ? 1 : 0], &t, .FLOAT)
+	// Leaf cards have two faces.
+	rlgl.DrawRenderBatchActive()
+	rlgl.DisableBackfaceCulling()
+	defer rlgl.EnableBackfaceCulling()
 	for k in 0 ..< TREE_KINDS {
 		if len(near[k]) > 0 do rl.DrawMeshInstanced(tr.near[k], mat, raw_data(near[k]), i32(len(near[k])))
 	}
