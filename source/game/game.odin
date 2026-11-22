@@ -103,6 +103,12 @@ World :: struct {
 	solar_edit:       Solar_Edit, // 3D solar farms, solarpunk.odin
 	rural_edit:       Rural_Edit, // rural fields, trees and barns, solarpunk.odin
 	town_edit:        Town_Edit, // generated town houses, towns.odin
+	post_edit:        Post_Edit, // street view post-processing, post.odin
+	street_edit:      Street_Edit, // street view camera, curve and haze, street.odin
+	car_edit:         Car_Edit, // car size, tilt and animation, airship.odin
+	cam_edit:         Cam_Edit, // map camera FOV, chase and glides, camera.odin
+	map_edit:         Map_Edit, // map road widths, labels and scan, render.odin
+	music_edit:       Music_Edit, // soundtrack volume, tempo and mix, music.odin
 	// Other cars from the presence gossip (presence.odin), copied from the node table every PRESENCE_COPY_S.
 	others:           [PRESENCE_SLOTS]Other_Car,
 	other_count:      int,
@@ -567,13 +573,14 @@ game_update :: proc(memory: rawptr) -> bool {
 		if w.screen == .Plan || w.nav_wind do layers_draw_ground(w)
 
 		// A* scan animation: replays the order the last route search expanded its nodes (grid.expanded), a
-		// faint accent square per 1 km cell, over SCAN_S after a new plan. The router does no extra work.
-		if w.scan_s > 0 && w.scan_s < SCAN_S && w.screen == .Plan {
+		// faint accent square per 1 km cell, over scan_s after a new plan. The router does no extra work.
+		scan_s := max(w.map_edit.scan_s, 0.1)
+		if w.scan_s > 0 && w.scan_s < scan_s && w.screen == .Plan {
 			prof_zone(w, .Scan)
 			w.scan_s += frame_dt
 			g := &w.grid
-			shown := int(f32(g.expanded_len) * min(w.scan_s / (SCAN_S * 0.7), 1))
-			fade := 1 - clamp((w.scan_s - SCAN_S * 0.7) / (SCAN_S * 0.3), 0, 1)
+			shown := int(f32(g.expanded_len) * min(w.scan_s / (scan_s * 0.7), 1))
+			fade := 1 - clamp((w.scan_s - scan_s * 0.7) / (scan_s * 0.3), 0, 1)
 			scan_draw(w, shown, rl.ColorAlpha(pal.accent, 0.18 * fade))
 		}
 
@@ -584,19 +591,20 @@ game_update :: proc(memory: rawptr) -> bool {
 			prof_zone(w, .Map_Lines)
 			screen := w.cam.screen
 			z := w.cam.pose.zoom
+			me := &w.map_edit
 			// Full design widths from zoom ~4.5 (a ~16 km wide view), eased in so a city-to-city view stays light.
 			t := clamp((z - 1.5) / 3, 0, 1)
 			t *= t
 			streets := clamp((z - 3) / 1.5, 0, 1)
 			fill, casing: [LINE_COLORS]f32
-			fill[Map_Kind.River] = 1.5 + 2.5 * t
-			fill[Map_Kind.Motorway] = 2 + 8 * t
-			fill[Map_Kind.Trunk] = 1 + 7 * t
-			fill[Map_Kind.Primary] = 1 + 7 * t
-			fill[Map_Kind.Secondary] = streets * 6
-			fill[Map_Kind.Tertiary] = streets * 6
+			fill[Map_Kind.River] = 1.5 + max(me.river_px - 1.5, 0) * t
+			fill[Map_Kind.Motorway] = 2 + max(me.motorway_px - 2, 0) * t
+			fill[Map_Kind.Trunk] = 1 + max(me.main_road_px - 1, 0) * t
+			fill[Map_Kind.Primary] = 1 + max(me.main_road_px - 1, 0) * t
+			fill[Map_Kind.Secondary] = streets * me.street_px
+			fill[Map_Kind.Tertiary] = streets * me.street_px
 			for k in ([?]Map_Kind{.Motorway, .Trunk, .Primary, .Secondary, .Tertiary}) {
-				if fill[k] > 0 do casing[k] = fill[k] + 4 * t
+				if fill[k] > 0 do casing[k] = fill[k] + 2 * me.casing_px * t
 			}
 			for k in 0 ..< WIND_COLOR_COUNT do fill[WIND_COLOR + k] = w.wind_edit.width_px
 			colors, casing_colors: [LINE_COLORS][4]f32
@@ -673,7 +681,7 @@ game_update :: proc(memory: rawptr) -> bool {
 
 			// Draw order 4: the 3D buildings around the cities and the trees, over the roads. They grow out of the
 			// ground by their size on the screen (buildings.odin).
-			if feature_px, shown := buildings_feature_px(&w.cam); shown {
+			if feature_px, shown := buildings_feature_px(&w.cam, w.cam_edit.fov_deg); shown {
 				target := w.cam.view.target.xy
 				view_km := w.cam.screen.x / max(w.cam.px_per_km, 1e-3)
 				look := buildings_map_look(w)
@@ -707,12 +715,13 @@ game_update :: proc(memory: rawptr) -> bool {
 				if a <= 0.01 do continue
 				name := hub_name(w, i)
 				size := ui_text_size(w, name, .Figtree_600, 13)
-				rect := rl.Rectangle{p.x + HUB_MARKER_PX / 2 + 4, p.y - size.y / 2, size.x, size.y}
+				hub_px := w.map_edit.hub_px
+				rect := rl.Rectangle{p.x + hub_px / 2 + 4, p.y - size.y / 2, size.x, size.y}
 				shown := true
 				for prev in labels do if rl.CheckCollisionRecs(rect, prev) do shown = false
-				rl.DrawCircleV(p, HUB_MARKER_PX / 2, rl.ColorAlpha(rl.WHITE, a))
-				rl.DrawCircleV(p, HUB_MARKER_PX / 2 - 2, rl.ColorAlpha(pal.hub, a))
-				ui_icon(w, .Tower, p, 15, rl.ColorAlpha(rl.WHITE, a))
+				rl.DrawCircleV(p, hub_px / 2, rl.ColorAlpha(rl.WHITE, a))
+				rl.DrawCircleV(p, max(hub_px / 2 - 2, 1), rl.ColorAlpha(pal.hub, a))
+				ui_icon(w, .Tower, p, hub_px * 15.0 / HUB_MARKER_PX, rl.ColorAlpha(rl.WHITE, a))
 				if !shown do continue
 				append(&labels, rect)
 				for o in ([?][2]f32{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}) {

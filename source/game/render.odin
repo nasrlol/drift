@@ -657,3 +657,52 @@ hill_draw :: proc(w: ^World) {
 	rl.DrawMesh(lm.hill, lm.hill_material, rl.Matrix(1))
 	rlgl.EnableDepthTest()
 }
+
+Map_Edit :: struct {
+	motorway_px:     f32,
+	main_road_px:    f32,
+	street_px:       f32,
+	river_px:        f32,
+	casing_px:       f32,
+	route_px:        f32,
+	alt_route_px:    f32,
+	hub_px:          f32,
+	shield_min_zoom: f32,
+	river_min_zoom:  f32,
+	scan_s:          f32,
+}
+
+map_edit_defaults :: proc() -> Map_Edit {
+	return {
+		motorway_px = 10,
+		main_road_px = 8,
+		street_px = 6,
+		river_px = 4,
+		casing_px = 2,
+		route_px = ROUTE_PX,
+		alt_route_px = ALT_ROUTE_PX,
+		hub_px = HUB_MARKER_PX,
+		shield_min_zoom = SHIELD_MIN_ZOOM,
+		river_min_zoom = RIVER_MIN_ZOOM,
+		scan_s = SCAN_S,
+	}
+}
+
+map_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
+	e := &w.map_edit
+	def := w.setting_defaults.map_edit
+	rows := [?]Editor_Slider {
+		{"Motorway width", &e.motorway_px, def.motorway_px, 2, 20, "%.1f px"},
+		{"Main road width", &e.main_road_px, def.main_road_px, 1, 16, "%.1f px"},
+		{"Street width", &e.street_px, def.street_px, 0, 14, "%.1f px"},
+		{"River width", &e.river_px, def.river_px, 0.5, 12, "%.1f px"},
+		{"Road casing", &e.casing_px, def.casing_px, 0, 6, "%.1f px"},
+		{"Route width", &e.route_px, def.route_px, 4, 28, "%.0f px"},
+		{"Alt route width", &e.alt_route_px, def.alt_route_px, 3, 24, "%.0f px"},
+		{"Hub marker size", &e.hub_px, def.hub_px, 12, 42, "%.0f px"},
+		{"Shields from zoom", &e.shield_min_zoom, def.shield_min_zoom, -1, 6, "%.1f"},
+		{"Rivers from zoom", &e.river_min_zoom, def.river_min_zoom, -1, 6, "%.1f"},
+		{"A* scan duration", &e.scan_s, def.scan_s, 0.1, 5, "%.2f s"},
+	}
+	return settings_sliders(w, x, y, width, rows[:], drag, 1, 2)
+}

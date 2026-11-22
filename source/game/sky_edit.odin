@@ -67,6 +67,7 @@ street_look :: proc(w: ^World) -> Street_Look {
 		math.sin(height),
 		math.cos(height) * math.cos(azimuth),
 	}
+	look.haze = {w.street_edit.haze_per_km / 1000, w.street_edit.haze_max}
 	return look
 }
 

@@ -126,20 +126,23 @@ nav_draw_routes :: proc(w: ^World) {
 			head = linalg.lerp(r.path[from].xy, r.path[from + 1].xy, f)
 		}
 		fill, casing := route_colors(pal, w.nav.mode)
-		draw_path_strip(w, r.path, from, ROUTE_PX + 2 * ROUTE_CASING_PX, casing, head, true)
-		draw_path_strip(w, r.path, from, ROUTE_PX, fill, head, true)
+		rpx := w.map_edit.route_px
+		draw_path_strip(w, r.path, from, rpx + 2 * ROUTE_CASING_PX, casing, head, true)
+		draw_path_strip(w, r.path, from, rpx, fill, head, true)
 		return
 	}
+	apx := w.map_edit.alt_route_px
 	for mode in MODE_ORDER {
 		r := &w.routes[mode]
 		if !r.ok || mode == w.plan.mode do continue
-		draw_path_strip(w, r.path, 0, ALT_ROUTE_PX + 2 * ROUTE_CASING_PX, pal.alt_route_casing)
-		draw_path_strip(w, r.path, 0, ALT_ROUTE_PX, pal.alt_route)
+		draw_path_strip(w, r.path, 0, apx + 2 * ROUTE_CASING_PX, pal.alt_route_casing)
+		draw_path_strip(w, r.path, 0, apx, pal.alt_route)
 	}
 	if r := &w.routes[w.plan.mode]; r.ok {
 		fill, casing := route_colors(pal, w.plan.mode)
-		draw_path_strip(w, r.path, 0, ROUTE_PX + 2 * ROUTE_CASING_PX, casing)
-		draw_path_strip(w, r.path, 0, ROUTE_PX, fill)
+		rpx := w.map_edit.route_px
+		draw_path_strip(w, r.path, 0, rpx + 2 * ROUTE_CASING_PX, casing)
+		draw_path_strip(w, r.path, 0, rpx, fill)
 	}
 }
 

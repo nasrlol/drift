@@ -36,6 +36,32 @@ CAR_WHEELS_STAND_M :: 1.2
 CAR_WHEELS_RATE :: 9.0
 CAR_HEADING_RATE :: 8.0
 CAR_BOB_M :: 0.06 // hover bob in the air
+
+Car_Edit :: struct {
+	map_px:       f32,
+	other_px:     f32,
+	tilt_deg:     f32,
+	bank_deg:     f32,
+	pitch_deg:    f32,
+	bob_m:        f32,
+	anim_rate:    f32,
+	heading_rate: f32,
+	wheels_rate:  f32,
+}
+
+car_edit_defaults :: proc() -> Car_Edit {
+	return {
+		map_px = CAR_PX,
+		other_px = CAR_OTHER_PX,
+		tilt_deg = AIRSHIP_TILT * math.DEG_PER_RAD,
+		bank_deg = CAR_BANK * math.DEG_PER_RAD,
+		pitch_deg = CAR_PITCH * math.DEG_PER_RAD,
+		bob_m = CAR_BOB_M,
+		anim_rate = CAR_ANIM_RATE,
+		heading_rate = CAR_HEADING_RATE,
+		wheels_rate = CAR_WHEELS_RATE,
+	}
+}
 CAR_GLOW :: rl.Color{90, 230, 255, 255}
 
 Car_Part :: struct {
@@ -324,17 +350,18 @@ car_anim_update :: proc(w: ^World, dt: f32) {
 			seeded   = true,
 		}
 	}
-	k := 1 - math.exp(-dt * CAR_ANIM_RATE)
-	an.fly += (fly - an.fly) * (s.free ? 1 - math.exp(-dt * CAR_WHEELS_RATE) : k)
+	ce := &w.car_edit
+	k := 1 - math.exp(-dt * max(ce.anim_rate, 0.2))
+	an.fly += (fly - an.fly) * (s.free ? 1 - math.exp(-dt * max(ce.wheels_rate, 0.2)) : k)
 	if dt > 0 {
 		an.climb_ms += ((p.alt - an.last_alt) / dt - an.climb_ms) * k
 	}
 	an.last_alt = p.alt
-	bank := clamp(s.turn_rate / SHIP_MAX_TURN_RATE, -1, 1) * CAR_BANK * an.fly
-	pitch := clamp(an.climb_ms / SHIP_CLIMB_RATE, -1, 1) * CAR_PITCH * an.fly
+	bank := clamp(s.turn_rate / SHIP_MAX_TURN_RATE, -1, 1) * (ce.bank_deg * math.RAD_PER_DEG) * an.fly
+	pitch := clamp(an.climb_ms / SHIP_CLIMB_RATE, -1, 1) * (ce.pitch_deg * math.RAD_PER_DEG) * an.fly
 	an.bank += (bank - an.bank) * k
 	an.pitch += (pitch - an.pitch) * k
-	an.heading = angle_lerp(an.heading, p.heading, 1 - math.exp(-dt * CAR_HEADING_RATE))
+	an.heading = angle_lerp(an.heading, p.heading, 1 - math.exp(-dt * max(ce.heading_rate, 0.2)))
 	an.roll -= dt * s.speed / CAR_WHEEL_R * (1 - an.fly)
 	steer := (1 - an.fly) * w.controls.turn * CAR_STEER
 	an.steer += (steer - an.steer) * (1 - math.exp(-dt * 8))
@@ -373,7 +400,7 @@ car_draw :: proc(
 	d := pa - screen / 2
 	scale := px / CAR_LEN
 	// A tilted map camera shows the car more from behind, never less tilted than on the flat map.
-	tilt := max(f32(AIRSHIP_TILT), w.cam.pose.tilt)
+	tilt := max(w.car_edit.tilt_deg * math.RAD_PER_DEG, w.cam.pose.tilt)
 	sin_t := math.sin(tilt)
 	cos_t := math.cos(tilt)
 	target := [3]f32{-d.x, d.y * sin_t, -d.y * cos_t}
@@ -401,7 +428,7 @@ car_draw :: proc(
 	car_shader_set(w, light, {0, cos_t, sin_t}, sky_c, gnd_c, sun_srgb * sun_k)
 
 	yaw := math.PI / 2 - (heading - w.cam.pose.yaw)
-	bob := math.sin(an.time * 2.2) * CAR_BOB_M * an.fly
+	bob := math.sin(an.time * 2.2) * w.car_edit.bob_m * an.fly
 	m := linalg.matrix4_scale_f32({scale, scale, scale})
 	m = m * linalg.matrix4_rotate_f32(yaw, {0, 1, 0})
 	m = m * linalg.matrix4_translate_f32({0, bob + 0.25 * an.fly, 0})
@@ -575,7 +602,7 @@ airship_draw :: proc(w: ^World) {
 		w.pose.alt,
 		an.heading,
 		an,
-		CAR_PX,
+		w.car_edit.map_px,
 		rl.WHITE,
 		carpool_is_passenger(w) ? w.plan.partner_skin : w.car_skin,
 	)
@@ -589,7 +616,8 @@ CAR_JAM_TINT :: rl.Color{255, 150, 90, 255}
 
 others_draw :: proc(w: ^World) {
 	prof_zone(w, .Others)
-	px: f32 = w.screen == .Navigate ? CAR_OTHER_PX : CAR_OTHER_PX * 0.6
+	base_px := w.car_edit.other_px
+	px: f32 = w.screen == .Navigate ? base_px : base_px * 0.6
 	for o in w.others[:w.other_count] {
 		if carpool_is_passenger(w) && o.author == w.plan.partner_pub do continue
 		an := Car_Anim {
@@ -624,4 +652,21 @@ peer_label_draw :: proc(w: ^World, p: [2]f32, author: [32]u8) {
 		ui_text(w, pos + o, name, .Figtree_600, px, pal.label_halo)
 	}
 	ui_text(w, pos, name, .Figtree_600, px, pal.area_label)
+}
+
+car_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
+	e := &w.car_edit
+	def := w.setting_defaults.car
+	rows := [?]Editor_Slider {
+		{"Map car size", &e.map_px, def.map_px, 30, 220, "%.0f px"},
+		{"Peer car size", &e.other_px, def.other_px, 20, 180, "%.0f px"},
+		{"Map 3D tilt", &e.tilt_deg, def.tilt_deg, 0, 85, "%.0f deg"},
+		{"Turn bank", &e.bank_deg, def.bank_deg, 0, 45, "%.0f deg"},
+		{"Climb pitch", &e.pitch_deg, def.pitch_deg, 0, 30, "%.0f deg"},
+		{"Hover bob", &e.bob_m, def.bob_m, 0, 0.3, "%.2f m"},
+		{"Body smoothing", &e.anim_rate, def.anim_rate, 0.5, 12, "%.1f /s"},
+		{"Heading smoothing", &e.heading_rate, def.heading_rate, 1, 20, "%.1f /s"},
+		{"Wheel fold speed", &e.wheels_rate, def.wheels_rate, 1, 20, "%.1f /s"},
+	}
+	return settings_sliders(w, x, y, width, rows[:], drag, 1, 2)
 }

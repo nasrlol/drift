@@ -26,6 +26,12 @@ Settings_Tab :: enum {
 	Solar,
 	Rural,
 	Towns,
+	Post,
+	Street,
+	Car,
+	Camera,
+	Map,
+	Audio,
 	Colors,
 	Fonts,
 	Style,
@@ -86,14 +92,14 @@ Look :: struct {
 	corner_brackets: bool, // corner flourishes on cards, sheets, and HUD boxes
 }
 
-SETTINGS_W :: 400
+SETTINGS_W :: 700
 SETTINGS_TEXT_SCALE :: [2]f32{0.7, 1.6}
 SETTINGS_LINE_SPACING :: [2]f32{1, 2.2}
 SETTINGS_TEXT_STEP :: 0.05 // the text size snaps to this, so dragging makes few font atlases
 SETTINGS_MAX_RADIUS_SCALE :: 2.5
 SETTINGS_ORNAMENT_DETAIL :: [2]f32{0.3, 1.6}
 SETTINGS_COLOR_COLS :: 10
-SETTINGS_TAB_COLS :: 4 // tabs per row of the tab bar: eight in one row run their labels together
+SETTINGS_TAB_COLS :: 7
 SETTINGS_PICKER_COLS :: 3 // themes and font families per row so labels never crowd
 
 look_defaults :: proc() -> Look {
@@ -268,6 +274,18 @@ settings_reset :: proc(w: ^World, tab: Settings_Tab) {
 		w.rural_edit = w.setting_defaults.rural
 	case .Towns:
 		w.town_edit = w.setting_defaults.towns
+	case .Post:
+		w.post_edit = w.setting_defaults.post
+	case .Street:
+		w.street_edit = w.setting_defaults.street
+	case .Car:
+		w.car_edit = w.setting_defaults.car
+	case .Camera:
+		w.cam_edit = w.setting_defaults.cam
+	case .Map:
+		w.map_edit = w.setting_defaults.map_edit
+	case .Audio:
+		w.music_edit = w.setting_defaults.music
 	case .Colors:
 		w.look.palette = def.palette
 	case .Fonts:
@@ -367,6 +385,18 @@ settings_ui :: proc(w: ^World) {
 		y = rural_tab(w, x, y, inner, &s.drag)
 	case .Towns:
 		y = town_tab(w, x, y, inner, &s.drag)
+	case .Post:
+		y = post_tab(w, x, y, inner, &s.drag)
+	case .Street:
+		y = street_tab(w, x, y, inner, &s.drag)
+	case .Car:
+		y = car_tab(w, x, y, inner, &s.drag)
+	case .Camera:
+		y = cam_tab(w, x, y, inner, &s.drag)
+	case .Map:
+		y = map_tab(w, x, y, inner, &s.drag)
+	case .Audio:
+		y = music_tab(w, x, y, inner, &s.drag)
 	case .Colors:
 		y = colors_tab(w, x, y, inner, &s.drag)
 	case .Fonts:
@@ -427,6 +457,72 @@ settings_channel :: proc(w: ^World, x, y, width: f32, label: string, c: ^u8, def
 	v := f32(c^)
 	ui_slider_row(w, x, y, width, label, fmt.tprintf("%d", c^), &v, 0, 255, f32(def), drag, id)
 	c^ = u8(clamp(math.round(v), 0, 255))
+}
+
+Editor_Slider :: struct {
+	label:  string,
+	value:  ^f32,
+	def:    f32,
+	lo, hi: f32,
+	format: string,
+}
+
+Editor_Toggle :: struct {
+	label: string,
+	val:   ^bool,
+}
+
+settings_toggles :: proc(w: ^World, x, y, width: f32, rows: []Editor_Toggle) -> f32 {
+	pal := palette(w)
+	cols := min(len(rows), 2)
+	if cols <= 0 do return y
+	gap :: 20
+	col_w := (width - gap * f32(cols - 1)) / f32(cols)
+	y := y
+	for row, i in rows {
+		col := i % cols
+		cx := x + f32(col) * (col_w + gap)
+		ui_text(w, {cx, y}, row.label, .Roboto_400, 13, pal.text)
+		ui_toggle(w, {cx + col_w - 36, y - 2, 36, 20}, row.val)
+		if col == cols - 1 || i == len(rows) - 1 do y += 28
+	}
+	return y + 4
+}
+
+settings_sliders :: proc(
+	w: ^World,
+	x, y, width: f32,
+	rows: []Editor_Slider,
+	drag: ^int,
+	id_base: int,
+	cols := 1,
+) -> f32 {
+	n_cols := max(cols, 1)
+	gap :: 20
+	col_w := (width - gap * f32(n_cols - 1)) / f32(n_cols)
+	buf: [32]u8
+	cur_y := y
+	for row, i in rows {
+		col := i % n_cols
+		cx := x + f32(col) * (col_w + gap)
+		text := fmt.bprintf(buf[:], row.format, row.value^)
+		ui_slider_row(
+			w,
+			cx,
+			cur_y,
+			col_w,
+			row.label,
+			text,
+			row.value,
+			row.lo,
+			row.hi,
+			row.def,
+			drag,
+			id_base + i,
+		)
+		if col == n_cols - 1 || i == len(rows) - 1 do cur_y += UI_SLIDER_ROW_H
+	}
+	return cur_y
 }
 
 // Every palette entry as a swatch (Palette field order: the UI, the map, labels and markers, wind), the chosen

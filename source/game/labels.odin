@@ -69,7 +69,7 @@ labels_draw :: proc(w: ^World, taken: ^[dynamic]rl.Rectangle) {
 	}
 	drawn := make([dynamic]Drawn, 0, 64, context.temp_allocator)
 	for &lb in w.labels.list[:w.labels.count] {
-		if z < (lb.shield ? SHIELD_MIN_ZOOM : RIVER_MIN_ZOOM) do continue
+		if z < (lb.shield ? w.map_edit.shield_min_zoom : w.map_edit.river_min_zoom) do continue
 		p, visible := cam_to_screen(w, {lb.pos.x, lb.pos.y, 0})
 		if !visible || p.x < 0 || p.y < 0 || p.x > w.cam.screen.x || p.y > w.cam.screen.y do continue
 		// Far labels fade out (view_edit.odin), so names do not pile up along the horizon.

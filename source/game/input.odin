@@ -53,7 +53,7 @@ pad_poll :: proc(w: ^World) {
 		} else if rl.IsGamepadButtonPressed(w.pad.index, .LEFT_FACE_UP) ||
 		   rl.IsGamepadButtonPressed(w.pad.index, .LEFT_FACE_DOWN) {
 			w.pad.zoom_hold = 0
-			w.pad.zoom = dir * WHEEL_ZOOM_STEP
+			w.pad.zoom = dir * w.cam_edit.wheel_step
 		} else {
 			w.pad.zoom_hold += frame_time(w)
 			w.pad.zoom = w.pad.zoom_hold >= PAD_ZOOM_HOLD_S ? dir * PAD_ZOOM_RATE * frame_time(w) : 0

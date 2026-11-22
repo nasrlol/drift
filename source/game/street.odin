@@ -74,6 +74,40 @@ SHADOW_SIZE :: 2048
 SHADOW_BOX_M :: 420.0
 SHADOW_LIGHT_M :: 1500.0
 SHADOW_SLOT :: 14
+
+Street_Edit :: struct {
+	shadows:       bool,
+	shadow_box_m:  f32,
+	cam_dist_m:    f32,
+	cam_look_up_m: f32,
+	cam_pitch_deg: f32,
+	cam_rate:      f32,
+	fov:           f32,
+	fov_fast:      f32,
+	curve_tall_m:  f32,
+	haze_per_km:   f32,
+	haze_max:      f32,
+	switch_low_m:  f32,
+	switch_high_m: f32,
+}
+
+street_edit_defaults :: proc() -> Street_Edit {
+	return {
+		shadows = true,
+		shadow_box_m = SHADOW_BOX_M,
+		cam_dist_m = STREET_CAM_DIST_M,
+		cam_look_up_m = STREET_CAM_LOOK_UP_M,
+		cam_pitch_deg = STREET_CAM_PITCH * math.DEG_PER_RAD,
+		cam_rate = STREET_CAM_RATE,
+		fov = STREET_FOV,
+		fov_fast = STREET_FOV_FAST,
+		curve_tall_m = STREET_CURVE_TALL_M,
+		haze_per_km = STREET_LOOK.haze.x * 1000,
+		haze_max = STREET_LOOK.haze.y,
+		switch_low_m = STREET_LOW_M,
+		switch_high_m = STREET_HIGH_M,
+	}
+}
 Street :: struct {
 	on:         bool,
 	yaw, pitch: f32, // the player's look-around on top of the chase direction, radians
@@ -206,7 +240,7 @@ street_light_set :: proc(w: ^World, sh: rl.Shader, l: ^Street_Light_Locs, cam: [
 	c := &l.cache
 	force := !c.valid
 	slot := i32(SHADOW_SLOT)
-	on: f32 = w.street.shadow_tex != 0 ? 1 : 0
+	on: f32 = w.street.shadow_tex != 0 && w.street_edit.shadows ? 1 : 0
 	direct: f32 = w.street.post.hdr.id == 0 ? 1 : 0
 	shader_set_mat(sh, l.light_vp, &c.light_vp, w.street.light_vp, force)
 	shader_set(sh, l.shadow_map, &c.slot, slot, .INT, force)
@@ -1093,8 +1127,16 @@ street_ship_pos :: proc(w: ^World) -> [3]f32 {
 // map view (ZOOM_MAX, the camera ~2.3 km away) goes down into the street view at the car, from the plan screen
 // too (that leaves the plan for free flight, like M; Lars: "3D at the car"). While flying on the map, the car
 // sinking below STREET_LOW_M goes down too. Once a frame from game_update.
+street_switch_heights :: proc(w: ^World) -> (low, high: f32) {
+	low = max(w.street_edit.switch_low_m, 10)
+	high = max(w.street_edit.switch_high_m, low + 5)
+	return
+}
+
+// Once a frame from game_update: climbs/descends or zoom past ZOOM_MAX switches view.
 street_switch :: proc(w: ^World) {
 	st := &w.street
+	low, high := street_switch_heights(w)
 	switch {
 	case st.on:
 	case w.cam.zoom_past:
@@ -1102,14 +1144,14 @@ street_switch :: proc(w: ^World) {
 	case w.screen != .Navigate:
 		st.hold = false
 	case st.hold:
-		if street_ship_pos(w).y > STREET_HIGH_M do st.hold = false
-	case street_ship_pos(w).y < STREET_LOW_M:
+		if street_ship_pos(w).y > high do st.hold = false
+	case street_ship_pos(w).y < low:
 		street_enter(w)
 	}
 	w.cam.zoom_past = false
 }
 
-// Back up to the map (Lars: "fly high or scroll out"): the car climbs above STREET_HIGH_M, or the camera is
+// Back up to the map (Lars: "fly high or scroll out"): the car climbs above high, or the camera is
 // zoomed out past STREET_CAM_MAX_M; Esc, Circle and Options go back too.
 street_wants_map :: proc(w: ^World) -> bool {
 	st := &w.street
@@ -1117,18 +1159,20 @@ street_wants_map :: proc(w: ^World) -> bool {
 		return true
 	}
 	if !w.ui.cancelled && w.ui.focus == 0 && pad_pressed(w, .RIGHT_FACE_RIGHT) do return true
+	low, high := street_switch_heights(w)
 	h := street_ship_pos(w).y
 	if st.hold {
-		if h < STREET_LOW_M do st.hold = false
-	} else if h > STREET_HIGH_M {
+		if h < low do st.hold = false
+	} else if h > high {
 		return true
 	}
-	dist := st.dist == 0 ? STREET_CAM_DIST_M : st.dist
+	dist := st.dist == 0 ? w.street_edit.cam_dist_m : st.dist
 	return mouse_wheel(w) + pad_zoom(w) < 0 && dist >= STREET_CAM_MAX_M
 }
 
 street_enter :: proc(w: ^World) {
 	st := &w.street
+	low, _ := street_switch_heights(w)
 	if w.screen == .Plan {
 		nav_stop(w)
 		w.screen = .Navigate
@@ -1136,15 +1180,16 @@ street_enter :: proc(w: ^World) {
 	st.on = true
 	st.yaw, st.pitch, st.idle_s, st.dist = 0, 0, 0, 0
 	st.seeded = false
-	st.hold = street_ship_pos(w).y >= STREET_LOW_M
+	st.hold = street_ship_pos(w).y >= low
 	if !w.script.on do rl.DisableCursor()
 	logf(w, "street", "down into the street view at %.0f m", street_ship_pos(w).y)
 }
 
 // The map takes over at its closest view behind the car, so one zoom in goes back down.
 street_leave :: proc(w: ^World) {
+	_, high := street_switch_heights(w)
 	w.street.on = false
-	w.street.hold = street_ship_pos(w).y <= STREET_HIGH_M
+	w.street.hold = street_ship_pos(w).y <= high
 	logf(w, "street", "up to the map at %.0f m", street_ship_pos(w).y)
 	if !w.script.on do rl.EnableCursor()
 	if w.screen != .Navigate do return
@@ -1454,8 +1499,8 @@ street_road_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 }
 
 // The round world's bend (1 / 2R, STREET_BEND_GLSL) for an eye h m above the ground (see STREET_VIEW_KM).
-street_bend :: proc(h: f32) -> f32 {
-	k := STREET_VIEW_KM * 1000 / (math.sqrt(max(h, 0) + 1) + math.sqrt(f32(STREET_CURVE_TALL_M)))
+street_bend :: proc(w: ^World, h: f32) -> f32 {
+	k := STREET_VIEW_KM * 1000 / (math.sqrt(max(h, 0) + 1) + math.sqrt(max(w.street_edit.curve_tall_m, 1)))
 	return 1 / (k * k)
 }
 
@@ -1571,25 +1616,26 @@ street_camera :: proc(w: ^World) {
 		st.pitch += (0 - st.pitch) * k
 	}
 	if wheel := mouse_wheel(w) + pad_zoom(w) * 3; wheel != 0 {
-		if st.dist == 0 do st.dist = STREET_CAM_DIST_M
+		if st.dist == 0 do st.dist = w.street_edit.cam_dist_m
 		st.dist = clamp(st.dist * (1 - wheel * 0.12), STREET_CAM_MIN_M, STREET_CAM_MAX_M)
 	}
-	dist := st.dist == 0 ? STREET_CAM_DIST_M : st.dist
+	se := &w.street_edit
+	dist := st.dist == 0 ? se.cam_dist_m : st.dist
 
 	car := street_ship_pos(w)
-	target := car + {0, STREET_CAM_LOOK_UP_M, 0}
+	target := car + {0, se.cam_look_up_m, 0}
 	yaw := w.car_anim.heading + st.yaw
 	// High up the round world's horizon sinks (~22 degrees at 250 m, 46 at 700 m): the camera at rest looks
 	// down with it so the land stays in the picture, the horizon STREET_CAM_HORIZON above the middle.
-	dip := math.atan(2 * math.sqrt(max(car.y, 0) * street_bend(car.y)))
-	pitch := max(STREET_CAM_PITCH, dip + STREET_CAM_HORIZON) + st.pitch
+	dip := math.atan(2 * math.sqrt(max(car.y, 0) * street_bend(w, car.y)))
+	pitch := max(se.cam_pitch_deg * math.RAD_PER_DEG, dip + STREET_CAM_HORIZON) + st.pitch
 	back := [3]f32{-math.sin(yaw) * math.cos(pitch), math.sin(pitch), math.cos(yaw) * math.cos(pitch)}
 	goal := target + back * dist
 	if !st.seeded {
 		st.eye = goal
 		st.seeded = true
 	}
-	st.eye += (goal - st.eye) * (1 - math.exp(-dt * STREET_CAM_RATE))
+	st.eye += (goal - st.eye) * (1 - math.exp(-dt * max(se.cam_rate, 0.5)))
 	// Never further than 1.6 x the distance from the car, however fast it goes.
 	if off := st.eye - target; linalg.length(off) > dist * 1.6 do st.eye = target + linalg.normalize(off) * dist * 1.6
 
@@ -1622,7 +1668,7 @@ street_camera :: proc(w: ^World) {
 		position   = st.eye + shake,
 		target     = target + shake,
 		up         = {0, 1, 0},
-		fovy       = STREET_FOV + STREET_FOV_FAST * speed * speed,
+		fovy       = se.fov + se.fov_fast * speed * speed,
 		projection = .PERSPECTIVE,
 	}
 }
@@ -1676,7 +1722,7 @@ street_draw :: proc(w: ^World) {
 	{
 		st.vp_up = (rlgl.GetMatrixProjection() * rlgl.GetMatrixModelview()) * [4]f32{0, 1, 0, 0}
 		st.up_vs = (rlgl.GetMatrixModelview() * [4]f32{0, 1, 0, 0}).xyz
-		st.bend = street_bend(st.view.position.y)
+		st.bend = street_bend(w, st.view.position.y)
 	}
 	// Land use and roads lie flat: past the horizon (behind_horizon) nothing of them shows, so only the tiles
 	// within it are built and drawn (~0.5 km low over a street, ~1.3 km at 250 m).
@@ -1812,18 +1858,19 @@ street_cars :: proc(w: ^World, mat: ^rl.Material) {
 street_shadow_pass :: proc(w: ^World, place: Placement) {
 	prof_zone(w, .Street_Shadow)
 	st := &w.street
-	if st.shadow_fbo == 0 do return
+	if st.shadow_fbo == 0 || !w.street_edit.shadows do return
+	box := max(w.street_edit.shadow_box_m, 40)
 	look := street_look(w)
 	fwd := st.view.target - st.view.position
 	fwd.y = 0
 	fwd = linalg.length(fwd) > 1e-3 ? linalg.normalize(fwd) : [3]f32{0, 0, -1}
-	c := [3]f32{st.view.position.x, 0, st.view.position.z} + fwd * SHADOW_BOX_M * 0.3
+	c := [3]f32{st.view.position.x, 0, st.view.position.z} + fwd * box * 0.3
 	// The light camera's axes as raylib's look-at builds them; the centre moves in whole texels along them.
 	z := look.sun_dir
 	x := linalg.normalize(linalg.cross([3]f32{0, 1, 0}, z))
 	y := linalg.cross(z, x)
 	{
-		texel := f64(SHADOW_BOX_M) / SHADOW_SIZE
+		texel := f64(box) / SHADOW_SIZE
 		o := [3]f64{f64(st.origin.x) * 1000, 0, f64(st.origin.y) * 1000}
 		cw := [3]f64{f64(c.x), f64(c.y), f64(c.z)} + o
 		xd := [3]f64{f64(x.x), f64(x.y), f64(x.z)}
@@ -1837,7 +1884,7 @@ street_shadow_pass :: proc(w: ^World, place: Placement) {
 		position   = c + z * SHADOW_LIGHT_M,
 		target     = c,
 		up         = {0, 1, 0},
-		fovy       = SHADOW_BOX_M,
+		fovy       = box,
 		projection = .ORTHOGRAPHIC,
 	}
 	rt := rl.RenderTexture2D {
@@ -1851,7 +1898,7 @@ street_shadow_pass :: proc(w: ^World, place: Placement) {
 	rl.BeginMode3D(cam)
 	st.light_vp = rlgl.GetMatrixProjection() * rlgl.GetMatrixModelview()
 	centre := st.origin + c.xz / 1000
-	reach := f32(SHADOW_BOX_M) * 0.75 / 1000
+	reach := box * 0.75 / 1000
 	tiles_draw(&st.houses, HOUSE_TILE_KM, reach, st.depth, centre, place)
 	trees_draw(w, centre, reach, st.view.position, true)
 	solarpunk_draw(w, centre, reach, st.view.position, true)
@@ -1914,4 +1961,28 @@ street_hud :: proc(w: ^World) {
 		round_rect(w, r, 10, rl.ColorAlpha(pal.surface, 0.72 * alpha))
 		ui_text(w, {r.x + 14, r.y + 8}, hint_txt, .Roboto_500, 14, rl.ColorAlpha(pal.text, alpha))
 	}
+}
+
+street_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
+	e := &w.street_edit
+	def := w.setting_defaults.street
+	prev_dist := e.cam_dist_m
+	cur_y := settings_toggles(w, x, y, width, {{"Sun shadows", &e.shadows}})
+	rows := [?]Editor_Slider {
+		{"Shadow box", &e.shadow_box_m, def.shadow_box_m, 100, 1000, "%.0f m"},
+		{"Camera distance", &e.cam_dist_m, def.cam_dist_m, STREET_CAM_MIN_M, 25, "%.1f m"},
+		{"Look-up height", &e.cam_look_up_m, def.cam_look_up_m, 0, 4, "%.2f m"},
+		{"Camera pitch", &e.cam_pitch_deg, def.cam_pitch_deg, 0, 40, "%.1f deg"},
+		{"Camera follow", &e.cam_rate, def.cam_rate, 1, 20, "%.1f /s"},
+		{"Field of view", &e.fov, def.fov, 40, 90, "%.0f deg"},
+		{"Speed FOV boost", &e.fov_fast, def.fov_fast, 0, 30, "%.0f deg"},
+		{"Horizon curve", &e.curve_tall_m, def.curve_tall_m, 5, 100, "%.0f m"},
+		{"Haze density", &e.haze_per_km, def.haze_per_km, 0, 2, "%.2f /km"},
+		{"Haze max", &e.haze_max, def.haze_max, 0, 1, "%.2f"},
+		{"Enter street at", &e.switch_low_m, def.switch_low_m, 20, 200, "%.0f m"},
+		{"Leave street at", &e.switch_high_m, def.switch_high_m, 40, 300, "%.0f m"},
+	}
+	out_y := settings_sliders(w, x, cur_y, width, rows[:], drag, 1, 2)
+	if abs(e.cam_dist_m - prev_dist) > 1e-4 do w.street.dist = e.cam_dist_m
+	return out_y
 }

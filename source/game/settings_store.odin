@@ -41,6 +41,12 @@ Setting_Values :: struct {
 	solar:    Solar_Edit,
 	rural:    Rural_Edit,
 	towns:    Town_Edit,
+	post:     Post_Edit,
+	street:   Street_Edit,
+	car:      Car_Edit,
+	cam:      Cam_Edit,
+	map_edit: Map_Edit,
+	music:    Music_Edit,
 	look:     Look,
 }
 
@@ -58,6 +64,12 @@ Setting_Ptrs :: struct {
 	solar:    ^Solar_Edit,
 	rural:    ^Rural_Edit,
 	towns:    ^Town_Edit,
+	post:     ^Post_Edit,
+	street:   ^Street_Edit,
+	car:      ^Car_Edit,
+	cam:      ^Cam_Edit,
+	map_edit: ^Map_Edit,
+	music:    ^Music_Edit,
 	look:     ^Look,
 }
 
@@ -82,6 +94,12 @@ settings_code_defaults :: proc() -> Setting_Values {
 		solar = solar_edit_defaults(),
 		rural = rural_edit_defaults(),
 		towns = town_edit_defaults(),
+		post = post_edit_defaults(),
+		street = street_edit_defaults(),
+		car = car_edit_defaults(),
+		cam = cam_edit_defaults(),
+		map_edit = map_edit_defaults(),
+		music = music_edit_defaults(),
 		look = look_defaults(),
 	}
 }
@@ -100,6 +118,12 @@ values_ptrs :: proc(v: ^Setting_Values) -> Setting_Ptrs {
 		&v.solar,
 		&v.rural,
 		&v.towns,
+		&v.post,
+		&v.street,
+		&v.car,
+		&v.cam,
+		&v.map_edit,
+		&v.music,
 		&v.look,
 	}
 }
@@ -118,6 +142,12 @@ current_ptrs :: proc(w: ^World) -> Setting_Ptrs {
 		&w.solar_edit,
 		&w.rural_edit,
 		&w.town_edit,
+		&w.post_edit,
+		&w.street_edit,
+		&w.car_edit,
+		&w.cam_edit,
+		&w.map_edit,
+		&w.music_edit,
 		&w.look,
 	}
 }
@@ -136,11 +166,17 @@ current_values :: proc(w: ^World) -> Setting_Values {
 		w.solar_edit,
 		w.rural_edit,
 		w.town_edit,
+		w.post_edit,
+		w.street_edit,
+		w.car_edit,
+		w.cam_edit,
+		w.map_edit,
+		w.music_edit,
 		w.look,
 	}
 }
 
-store_groups :: proc(p: Setting_Ptrs) -> [14]Store_Group {
+store_groups :: proc(p: Setting_Ptrs) -> [20]Store_Group {
 	return {
 		{"speed", p.tune, Tune, ""},
 		{"borders", p.borders, Border_Edit, ""},
@@ -154,6 +190,12 @@ store_groups :: proc(p: Setting_Ptrs) -> [14]Store_Group {
 		{"solar", p.solar, Solar_Edit, ""},
 		{"rural", p.rural, Rural_Edit, ""},
 		{"towns", p.towns, Town_Edit, ""},
+		{"post", p.post, Post_Edit, ""},
+		{"street", p.street, Street_Edit, ""},
+		{"car", p.car, Car_Edit, ""},
+		{"camera", p.cam, Cam_Edit, ""},
+		{"map", p.map_edit, Map_Edit, ""},
+		{"audio", p.music, Music_Edit, ""},
 		{"colors", &p.look.palette, Palette, ""},
 		{"look", p.look, Look, "palette"},
 	}
@@ -170,6 +212,8 @@ settings_init :: proc(w: ^World) {
 		d.tune, d.borders, d.clouds, d.wind, d.grass, d.view, d.sky, d.look
 	w.turbine_edit, w.tower_edit, w.solar_edit, w.rural_edit, w.town_edit =
 		d.turbines, d.towers, d.solar, d.rural, d.towns
+	w.post_edit, w.street_edit, w.car_edit, w.cam_edit, w.map_edit, w.music_edit =
+		d.post, d.street, d.car, d.cam, d.map_edit, d.music
 }
 
 // Layer 3 on top of the current values. Returns how many values it set.

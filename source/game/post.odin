@@ -27,6 +27,38 @@ POST_AO_STRENGTH :: 0.85
 POST_EXPOSURE :: 1.0
 POST_SATURATION :: 0.97
 POST_CONTRAST :: 0.3 // share of a smoothstep S-curve after the tone curve
+POST_VIGNETTE :: 0.16
+POST_GRAIN :: 0.01
+
+Post_Edit :: struct {
+	ao_on:       bool,
+	bloom_on:    bool,
+	fxaa_on:     bool,
+	exposure:    f32,
+	saturation:  f32,
+	contrast:    f32,
+	bloom:       f32,
+	ao_strength: f32,
+	ao_radius_m: f32,
+	vignette:    f32,
+	grain:       f32,
+}
+
+post_edit_defaults :: proc() -> Post_Edit {
+	return {
+		ao_on = true,
+		bloom_on = true,
+		fxaa_on = true,
+		exposure = POST_EXPOSURE,
+		saturation = POST_SATURATION,
+		contrast = POST_CONTRAST,
+		bloom = POST_BLOOM,
+		ao_strength = POST_AO_STRENGTH,
+		ao_radius_m = POST_AO_RADIUS_M,
+		vignette = POST_VIGNETTE,
+		grain = POST_GRAIN,
+	}
+}
 
 Post :: struct {
 	size:   [2]i32, // render size the targets were made for
@@ -199,6 +231,8 @@ uniform float ao_k;
 uniform float exposure;
 uniform float saturation;
 uniform float contrast;
+uniform float vignette;
+uniform float grain;
 uniform float frame;
 out vec4 finalColor;
 float hash12(vec2 p) {
@@ -224,8 +258,8 @@ void main() {
 	c = sqrt(c);
 	c = mix(c, c * c * (3.0 - 2.0 * c), contrast);
 	vec2 q = uv - 0.5;
-	c *= mix(1.0, 0.84, smoothstep(0.25, 0.85, dot(q, q) * 2.2));
-	c += (hash12(gl_FragCoord.xy + frame * 17.0) - 0.5) * 0.01;
+	c *= mix(1.0, 1.0 - vignette, smoothstep(0.25, 0.85, dot(q, q) * 2.2));
+	c += (hash12(gl_FragCoord.xy + frame * 17.0) - 0.5) * grain;
 	finalColor = vec4(c, dot(c, vec3(0.299, 0.587, 0.114)));
 }
 `
@@ -241,10 +275,13 @@ POST_FXAA_FS ::
 	`#version 330
 uniform sampler2D tex;
 uniform vec2 size;
+uniform float enable;
 out vec4 finalColor;
 void main() {
 	vec2 px = 1.0 / size;
 	vec2 uv = gl_FragCoord.xy * px;
+	vec3 m = texture(tex, uv).rgb;
+	if (enable < 0.5) { finalColor = vec4(m, 1.0); return; }
 	float lm = texture(tex, uv).a;
 	float lnw = texture(tex, uv + vec2(-px.x, px.y)).a;
 	float lne = texture(tex, uv + px).a;
@@ -252,7 +289,6 @@ void main() {
 	float lse = texture(tex, uv + vec2(px.x, -px.y)).a;
 	float lmin = min(lm, min(min(lnw, lne), min(lsw, lse)));
 	float lmax = max(lm, max(max(lnw, lne), max(lsw, lse)));
-	vec3 m = texture(tex, uv).rgb;
 	// Only real edges: a pixel whose neighbours stay within the contrast threshold keeps its own colour, so
 	// windows, bricks and grass are not smeared (they looked like motion blur, Lars 2026-11-22).
 	if (lmax - lmin < max(` +
@@ -413,10 +449,11 @@ post_float :: proc(sh: rl.Shader, name: cstring, v: f32) {
 post_end :: proc(w: ^World, view: Post_View) {
 	prof_zone(w, .Post)
 	p := &w.street.post
+	pe := &w.post_edit
 	rl.EndTextureMode()
 	p.frame += 1
 
-	{
+	if pe.ao_on {
 		sh := p.sh_ao
 		post_size(sh, "size", p.ao.texture)
 		th, up := view.tan_half, view.up_vs
@@ -427,35 +464,39 @@ post_end :: proc(w: ^World, view: Post_View) {
 		rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "up_vs"), &up, .VEC3)
 		rl.SetShaderValue(sh, rl.GetShaderLocation(sh, "far_fade"), &far, .VEC2)
 		post_float(sh, "eye_h", view.eye_h)
-		post_float(sh, "radius", POST_AO_RADIUS_M)
+		post_float(sh, "radius", pe.ao_radius_m)
 		post_pass(p.ao, sh, {{"depth_tex", p.hdr.depth}})
 		post_size(p.sh_bl, "size", p.ao2.texture)
 		post_pass(p.ao2, p.sh_bl, {{"src", p.ao.texture}})
 	}
 
-	for b, i in p.bloom {
-		sh := p.sh_dn
-		src := i == 0 ? p.hdr.texture : p.bloom[i - 1].texture
-		post_size(sh, "src_size", src)
-		post_size(sh, "size", b.texture)
-		post_float(sh, "karis", i == 0 ? 1 : 0)
-		post_pass(b, sh, {{"src", src}})
-	}
-	for i := POST_BLOOM_LEVELS - 1; i > 0; i -= 1 {
-		sh := p.sh_up
-		post_size(sh, "src_size", p.bloom[i].texture)
-		post_size(sh, "size", p.bloom[i - 1].texture)
-		post_pass(p.bloom[i - 1], sh, {{"src", p.bloom[i].texture}}, true)
+	if pe.bloom_on {
+		for b, i in p.bloom {
+			sh := p.sh_dn
+			src := i == 0 ? p.hdr.texture : p.bloom[i - 1].texture
+			post_size(sh, "src_size", src)
+			post_size(sh, "size", b.texture)
+			post_float(sh, "karis", i == 0 ? 1 : 0)
+			post_pass(b, sh, {{"src", src}})
+		}
+		for i := POST_BLOOM_LEVELS - 1; i > 0; i -= 1 {
+			sh := p.sh_up
+			post_size(sh, "src_size", p.bloom[i].texture)
+			post_size(sh, "size", p.bloom[i - 1].texture)
+			post_pass(p.bloom[i - 1], sh, {{"src", p.bloom[i].texture}}, true)
+		}
 	}
 
 	{
 		sh := p.sh_fin
 		post_size(sh, "size", p.ldr.texture)
-		post_float(sh, "bloom_k", POST_BLOOM)
-		post_float(sh, "ao_k", POST_AO_STRENGTH)
-		post_float(sh, "exposure", POST_EXPOSURE)
-		post_float(sh, "saturation", POST_SATURATION)
-		post_float(sh, "contrast", POST_CONTRAST)
+		post_float(sh, "bloom_k", pe.bloom_on ? pe.bloom : 0)
+		post_float(sh, "ao_k", pe.ao_on ? pe.ao_strength : 0)
+		post_float(sh, "exposure", pe.exposure)
+		post_float(sh, "saturation", pe.saturation)
+		post_float(sh, "contrast", pe.contrast)
+		post_float(sh, "vignette", pe.vignette)
+		post_float(sh, "grain", pe.grain)
 		post_float(sh, "frame", f32(p.frame % 1024))
 		texs := [3]Post_Tex{{"hdr", p.hdr.texture}, {"bloom", p.bloom[0].texture}, {"ao", p.ao2.texture}}
 		post_pass(p.ldr, sh, texs[:])
@@ -464,6 +505,43 @@ post_end :: proc(w: ^World, view: Post_View) {
 	{
 		sh := p.sh_aa
 		post_size(sh, "size", p.ldr.texture)
+		post_float(sh, "enable", pe.fxaa_on ? 1 : 0)
 		post_pass({}, sh, {{"tex", p.ldr.texture}})
 	}
+}
+
+post_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
+	e := &w.post_edit
+	pal := palette(w)
+	def := w.setting_defaults.post
+	y := y
+	if !w.street.on {
+		ui_text(
+			w,
+			{x, y},
+			"Zoom in to the car (street view) to see post effects.",
+			.Roboto_400,
+			13,
+			pal.text_2,
+		)
+		y += 26
+	}
+	y = settings_toggles(
+		w,
+		x,
+		y,
+		width,
+		{{"Ambient occlusion", &e.ao_on}, {"Bloom", &e.bloom_on}, {"Edge FXAA", &e.fxaa_on}},
+	)
+	rows := [?]Editor_Slider {
+		{"Exposure", &e.exposure, def.exposure, 0.3, 2.5, "%.2f"},
+		{"Saturation", &e.saturation, def.saturation, 0, 2, "%.2f"},
+		{"Contrast", &e.contrast, def.contrast, 0, 1, "%.2f"},
+		{"Bloom", &e.bloom, def.bloom, 0, 0.25, "%.3f"},
+		{"AO strength", &e.ao_strength, def.ao_strength, 0, 1.5, "%.2f"},
+		{"AO radius", &e.ao_radius_m, def.ao_radius_m, 0.2, 4, "%.2f m"},
+		{"Vignette", &e.vignette, def.vignette, 0, 0.5, "%.2f"},
+		{"Film grain", &e.grain, def.grain, 0, 0.04, "%.3f"},
+	}
+	return settings_sliders(w, x, y, width, rows[:], drag, 1, 2)
 }

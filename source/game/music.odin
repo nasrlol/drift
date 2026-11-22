@@ -34,6 +34,32 @@ MUSIC_CHORDS :: [4][4]int {
 // Chord tone per eighth note: 0-2 the pad tones, 3 the root an octave up.
 MUSIC_ARP :: [8]int{0, 1, 2, 3, 2, 1, 2, 1}
 
+Music_Edit :: struct {
+	volume:     f32,
+	bpm:        f32,
+	pad_fade_s: f32,
+	pad_gain:   f32,
+	bass_gain:  f32,
+	arp_gain:   f32,
+	kick_gain:  f32,
+	hat_gain:   f32,
+	echo_gain:  f32,
+}
+
+music_edit_defaults :: proc() -> Music_Edit {
+	return {
+		volume = MUSIC_VOLUME,
+		bpm = MUSIC_BPM,
+		pad_fade_s = MUSIC_PAD_FADE_S,
+		pad_gain = 0.07,
+		bass_gain = 0.22,
+		arp_gain = 0.12,
+		kick_gain = 0.25,
+		hat_gain = 0.025,
+		echo_gain = 0.5,
+	}
+}
+
 Soundtrack :: struct {
 	stream:  rl.AudioStream,
 	ready:   bool,
@@ -109,7 +135,7 @@ music_frame :: proc(w: ^World) {
 	m := &w.music
 	if !m.ready || m.off do return
 	for rl.IsAudioStreamProcessed(m.stream) {
-		music_fill(m)
+		music_fill(m, &w.music_edit)
 		rl.UpdateAudioStream(m.stream, &m.buf, MUSIC_CHUNK)
 	}
 }
@@ -132,12 +158,14 @@ music_pad :: proc(pad: ^[2]f64, chord: [4]int, t, gain: f64) {
 	}
 }
 
-music_fill :: proc(m: ^Soundtrack) {
+music_fill :: proc(m: ^Soundtrack, me: ^Music_Edit) {
 	chords := MUSIC_CHORDS
 	arp := MUSIC_ARP
-	beat_s := 60.0 / f64(MUSIC_BPM)
+	bpm := max(f64(me.bpm), 30)
+	beat_s := 60.0 / bpm
 	eighth_s := beat_s / 2
 	chord_s := beat_s * 8
+	pad_fade_s := max(f64(me.pad_fade_s), 0.05)
 	for i in 0 ..< MUSIC_CHUNK {
 		t := f64(m.frame) / MUSIC_RATE
 		m.frame += 1
@@ -145,10 +173,10 @@ music_fill :: proc(m: ^Soundtrack) {
 		chord := chords[chord_i]
 		tc := math.mod(t, chord_s)
 
-		// Pad: two detuned voices per tone, cross-faded from the last chord over MUSIC_PAD_FADE_S, slowly
+		// Pad: two detuned voices per tone, cross-faded from the last chord over pad_fade_s, slowly
 		// breathing.
 		pad: [2]f64
-		fade := min(tc / MUSIC_PAD_FADE_S, 1)
+		fade := min(tc / pad_fade_s, 1)
 		breath := 0.8 + 0.2 * math.sin(math.TAU * t / (chord_s / 2))
 		music_pad(&pad, chord, t, fade)
 		if fade < 1 && t >= chord_s do music_pad(&pad, chords[(chord_i + 3) % 4], t, 1 - fade)
@@ -186,13 +214,34 @@ music_fill :: proc(m: ^Soundtrack) {
 		late := [2]f32{m.echo[0][from], m.echo[1][from]}
 		for c in 0 ..< 2 {
 			side := c == 0 ? 1 - pan : 1 + pan
-			dry := f64(m.pad_lp[c]) * 0.07 + bass * 0.22 + kick * 0.25 + hat * 0.025
-			wet := pluck * 0.12 * side
+			dry :=
+				f64(m.pad_lp[c]) * f64(me.pad_gain) +
+				bass * f64(me.bass_gain) +
+				kick * f64(me.kick_gain) +
+				hat * f64(me.hat_gain)
+			wet := pluck * f64(me.arp_gain) * side
 			// Ping-pong: each side echoes what the other side had.
 			m.echo[c][at] = f32(wet) + late[1 - c] * 0.42
-			out := (dry + wet + f64(late[c]) * 0.5) * MUSIC_VOLUME
+			out := (dry + wet + f64(late[c]) * f64(me.echo_gain)) * f64(me.volume)
 			m.buf[i * 2 + c] = f32(math.tanh(out))
 		}
 		m.echo_at = (at + 1) % MUSIC_ECHO_MAX
 	}
+}
+
+music_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
+	e := &w.music_edit
+	def := w.setting_defaults.music
+	rows := [?]Editor_Slider {
+		{"Volume", &e.volume, def.volume, 0, 1.2, "%.2f"},
+		{"Tempo", &e.bpm, def.bpm, 40, 150, "%.0f bpm"},
+		{"Pad fade", &e.pad_fade_s, def.pad_fade_s, 0.05, 3, "%.2f s"},
+		{"Pad level", &e.pad_gain, def.pad_gain, 0, 0.25, "%.3f"},
+		{"Bass level", &e.bass_gain, def.bass_gain, 0, 0.6, "%.2f"},
+		{"Arp level", &e.arp_gain, def.arp_gain, 0, 0.4, "%.2f"},
+		{"Kick level", &e.kick_gain, def.kick_gain, 0, 0.6, "%.2f"},
+		{"Hi-hat level", &e.hat_gain, def.hat_gain, 0, 0.15, "%.3f"},
+		{"Echo level", &e.echo_gain, def.echo_gain, 0, 1, "%.2f"},
+	}
+	return settings_sliders(w, x, y, width, rows[:], drag, 1, 2)
 }

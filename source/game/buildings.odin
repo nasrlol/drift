@@ -301,10 +301,10 @@ buildings_build :: proc(w: ^World) {
 // The size of BUILDINGS_FEATURE_KM on the screen at a view depth of 1 km (px), and whether the nearest ground in
 // view shows it at BUILDINGS_FADE_PX_0 or more, so anything of the buildings' shader is seen. The nearest ground
 // is the middle of the bottom screen edge, at depth dist cos(tilt) cos(fov / 2) / cos(tilt - fov / 2).
-buildings_feature_px :: proc(c: ^Cam) -> (px: f32, shown: bool) {
+buildings_feature_px :: proc(c: ^Cam, fov_deg: f32 = CAM_FOV_DEG) -> (px: f32, shown: bool) {
 	dist := linalg.length(c.view.position - c.view.target)
 	px = BUILDINGS_FEATURE_KM * c.px_per_km * dist
-	half_fov := f32(CAM_FOV_DEG) * math.RAD_PER_DEG / 2
+	half_fov := clamp(fov_deg, 15, 110) * math.RAD_PER_DEG / 2
 	near := dist * math.cos(c.pose.tilt) * math.cos(half_fov) / max(math.cos(c.pose.tilt - half_fov), 1e-3)
 	return px, px / max(near, 1e-6) >= BUILDINGS_FADE_PX_0
 }

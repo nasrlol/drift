@@ -31,6 +31,32 @@ CAM_ORBIT_RAD_PER_PX :: 0.005
 CAM_ORBIT_RAD_PER_S :: 1.8
 CAM_ORBIT_MAX_TILT :: 80 * math.RAD_PER_DEG
 
+Cam_Edit :: struct {
+	fov_deg:        f32,
+	chase_tilt_deg: f32,
+	chase_zoom:     f32,
+	chase_ahead:    f32,
+	follow_rate:    f32,
+	preview_s:      f32,
+	zoom_glide_s:   f32,
+	wheel_step:     f32,
+	pan_px_s:       f32,
+}
+
+cam_edit_defaults :: proc() -> Cam_Edit {
+	return {
+		fov_deg = CAM_FOV_DEG,
+		chase_tilt_deg = CAM_CHASE_TILT * math.DEG_PER_RAD,
+		chase_zoom = CAM_CHASE_ZOOM,
+		chase_ahead = CAM_CHASE_AHEAD,
+		follow_rate = CAM_FOLLOW_RATE,
+		preview_s = CAM_PREVIEW_S,
+		zoom_glide_s = CAM_ZOOM_GLIDE_S,
+		wheel_step = WHEEL_ZOOM_STEP,
+		pan_px_s = PAN_PX_PER_S,
+	}
+}
+
 // Where the camera looks: pan = km from the map centre to the point under the screen centre (in Belgium),
 // globe_rot = (lon, lat) radians away from Belgium when orbiting the globe, zoom, yaw (radians clockwise)
 // and tilt (0 = straight down). Zero is the whole Belgium map, north up, from above.
@@ -100,9 +126,17 @@ cam_fit_scale :: proc(screen: [2]f32) -> f32 {
 // The raylib camera for a pose. World space is (x km, y km, -altitude km): x east, y south, z down, so the
 // raylib right-handed look-at keeps east on the right. At globe_rot = 0 and zoom >= 0 it sits over Belgium's
 // flat z = 0 plane; negative zooms or non-zero globe_rot orbit the Earth sphere tangent to Belgium's centre.
-cam_build :: proc(p: Cam_Pose, screen: [2]f32) -> (view: rl.Camera3D, px_per_km: f32) {
+cam_build :: proc(
+	p: Cam_Pose,
+	screen: [2]f32,
+	fov_deg: f32 = CAM_FOV_DEG,
+) -> (
+	view: rl.Camera3D,
+	px_per_km: f32,
+) {
+	fov := clamp(fov_deg, 15, 110)
 	px_per_km = cam_fit_scale(screen) * math.pow(f32(2), p.zoom)
-	dist := screen.y / (2 * math.tan(f32(CAM_FOV_DEG) * math.RAD_PER_DEG / 2) * px_per_km)
+	dist := screen.y / (2 * math.tan(fov * math.RAD_PER_DEG / 2) * px_per_km)
 	st, ct := math.sin(p.tilt), math.cos(p.tilt)
 	if p.globe_rot == {} && p.zoom >= 0 {
 		target := [2]f32{MAP_W_KM, MAP_H_KM} / 2 + p.pan
@@ -111,7 +145,7 @@ cam_build :: proc(p: Cam_Pose, screen: [2]f32) -> (view: rl.Camera3D, px_per_km:
 			position   = {target.x - fwd.x * dist * st, target.y - fwd.y * dist * st, -dist * ct},
 			target     = {target.x, target.y, 0},
 			up         = {fwd.x * ct, fwd.y * ct, -st},
-			fovy       = CAM_FOV_DEG,
+			fovy       = fov,
 			projection = .PERSPECTIVE,
 		}
 		return
@@ -134,7 +168,7 @@ cam_build :: proc(p: Cam_Pose, screen: [2]f32) -> (view: rl.Camera3D, px_per_km:
 		position   = target + n * (dist * ct) - fwd * (dist * st),
 		target     = target,
 		up         = fwd * ct + n * st,
-		fovy       = CAM_FOV_DEG,
+		fovy       = fov,
 		projection = .PERSPECTIVE,
 	}
 	return
@@ -192,21 +226,23 @@ cam_chase :: proc(w: ^World) {
 	c.mode = .Chase
 	c.dragged = false
 	c.orbit_yaw, c.orbit_tilt = 0, 0
-	cam_glide(w, cam_chase_pose(w, CAM_CHASE_ZOOM), CAM_CHASE_S)
+	cam_glide(w, cam_chase_pose(w, w.cam_edit.chase_zoom), CAM_CHASE_S)
 }
 
 cam_chase_pose :: proc(w: ^World, zoom: f32) -> Cam_Pose {
 	p := w.pose
 	c := &w.cam
+	ce := &w.cam_edit
 	ppk := cam_fit_scale(c.screen) * math.pow(f32(2), zoom)
-	ahead := CAM_CHASE_AHEAD * c.screen.y / ppk
+	ahead := ce.chase_ahead * c.screen.y / ppk
 	yaw := p.heading + c.orbit_yaw
 	fwd := [2]f32{math.sin(yaw), -math.cos(yaw)}
+	base_tilt := min(ce.chase_tilt_deg * math.RAD_PER_DEG, view_max_tilt(w))
 	return {
 		pan = [2]f32{f32(p.pos.x), f32(p.pos.y)} + fwd * ahead - [2]f32{MAP_W_KM, MAP_H_KM} / 2,
 		zoom = zoom,
 		yaw = yaw,
-		tilt = clamp(CAM_CHASE_TILT + c.orbit_tilt, 0, view_max_tilt(w)),
+		tilt = clamp(base_tilt + c.orbit_tilt, 0, view_max_tilt(w)),
 	}
 }
 
@@ -228,7 +264,7 @@ cam_north :: proc(w: ^World) {
 	to.yaw = 0
 	to.tilt = 0
 	to.globe_rot = {}
-	cam_glide(w, to, CAM_ZOOM_GLIDE_S)
+	cam_glide(w, to, max(w.cam_edit.zoom_glide_s, 0.05))
 }
 
 // Flies the chosen route from A to B in CAM_PREVIEW_S, tilted, easing in and out (uses route_sample).
@@ -260,9 +296,10 @@ cam_zoom_by :: proc(w: ^World, steps: f32, anchor: [2]f32) {
 // or the preview, then the raylib camera for this frame. Drawing only, frame time is fine.
 cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 	c := &w.cam
+	ce := &w.cam_edit
 	dt := frame_time(w)
 	c.screen = {f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
-	c.view, c.px_per_km = cam_build(c.pose, c.screen)
+	c.view, c.px_per_km = cam_build(c.pose, c.screen, ce.fov_deg)
 	pan0 := c.pose.pan // where the screen centre was last frame, over Belgium (see the end)
 
 	// Input. The keyboard / stick pan only on the plan screen (in navigation they steer the ship).
@@ -270,7 +307,7 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 		pan_px: [2]f32
 		if controls_pan {
 			k := w.controls
-			pan_px = {k.turn, -k.throttle} * PAN_PX_PER_S * dt
+			pan_px = {k.turn, -k.throttle} * ce.pan_px_s * dt
 			if k.climb != 0 do cam_zoom_by(w, k.climb * ZOOM_PER_S * dt, c.screen / 2)
 		}
 		if mouse_free && rl.IsMouseButtonDown(.LEFT) && c.mode != .Preview {
@@ -298,7 +335,8 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 				turn, tilt := orbit.x, -orbit.y
 				if c.mode == .Chase {
 					c.orbit_yaw = math.mod(c.orbit_yaw + turn + 3 * math.PI, math.TAU) - math.PI
-					lo, hi := f32(-CAM_CHASE_TILT), view_max_tilt(w) - CAM_CHASE_TILT
+					base_tilt := min(ce.chase_tilt_deg * math.RAD_PER_DEG, view_max_tilt(w))
+					lo, hi := -base_tilt, view_max_tilt(w) - base_tilt
 					c.orbit_tilt = clamp(c.orbit_tilt + tilt, lo, hi)
 					c.dragged = true
 				} else {
@@ -339,14 +377,14 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 		}
 		if wheel := mouse_wheel(w); mouse_free && wheel != 0 {
 			// A scripted run (debug.odin) has no real mouse: it zooms around the middle of the screen.
-			cam_zoom_by(w, wheel * WHEEL_ZOOM_STEP, w.script.on ? c.screen / 2 : rl.GetMousePosition())
+			cam_zoom_by(w, wheel * ce.wheel_step, w.script.on ? c.screen / 2 : rl.GetMousePosition())
 		}
 	}
 
 	if c.zooming {
 		use_anchor := c.mode == .Free && c.pose.globe_rot == {} && c.pose.zoom >= 0 && c.zoom_goal >= 0
 		before, before_ok := cam_ground_at(w, c.zoom_anchor)
-		k := 1 - math.exp(-dt * 5 / CAM_ZOOM_GLIDE_S)
+		k := 1 - math.exp(-dt * 5 / max(ce.zoom_glide_s, 0.05))
 		c.pose.zoom += (c.zoom_goal - c.pose.zoom) * k
 		if abs(c.zoom_goal - c.pose.zoom) < 1e-3 {
 			c.pose.zoom = c.zoom_goal
@@ -358,7 +396,7 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 			c.pose.globe_rot *= 1 - k
 			if linalg.length(c.pose.globe_rot) < 1e-4 do c.pose.globe_rot = {}
 		}
-		c.view, c.px_per_km = cam_build(c.pose, c.screen)
+		c.view, c.px_per_km = cam_build(c.pose, c.screen, ce.fov_deg)
 		after, after_ok := cam_ground_at(w, c.zoom_anchor)
 		if use_anchor && before_ok && after_ok do c.pose.pan += before - after
 	}
@@ -373,20 +411,21 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 			goal.zoom = c.glide_to.zoom
 			c.glide_to = goal
 		} else {
-			k := 1 - math.exp(-dt * CAM_FOLLOW_RATE)
+			k := 1 - math.exp(-dt * max(ce.follow_rate, 0.2))
 			c.pose.pan += (goal.pan - c.pose.pan) * k
 			c.pose.yaw = angle_lerp(c.pose.yaw, goal.yaw, k)
 			c.pose.tilt = goal.tilt
 		}
 	case .Preview:
 		if c.glide_dur == 0 {
+			dur := max(ce.preview_s, 1)
 			c.preview_t += dt
-			t := ease_in_out(c.preview_t / CAM_PREVIEW_S)
+			t := ease_in_out(c.preview_t / dur)
 			pos, heading := route_sample(w, c.preview_mode, t)
-			k := 1 - math.exp(-dt * CAM_FOLLOW_RATE)
+			k := 1 - math.exp(-dt * max(ce.follow_rate, 0.2))
 			c.pose.pan = pos.xy - [2]f32{MAP_W_KM, MAP_H_KM} / 2
 			c.pose.yaw = angle_lerp(c.pose.yaw, heading, k)
-			if c.preview_t >= CAM_PREVIEW_S {
+			if c.preview_t >= dur {
 				c.mode = .Free
 				r := &w.routes[c.preview_mode]
 				lo, hi := path_bounds(r.path)
@@ -411,7 +450,7 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 
 	c.pose.zoom = clamp(c.pose.zoom, cam_min_zoom(w), ZOOM_MAX)
 	c.zoom_goal = max(c.zoom_goal, cam_min_zoom(w))
-	c.view, c.px_per_km = cam_build(c.pose, c.screen)
+	c.view, c.px_per_km = cam_build(c.pose, c.screen, ce.fov_deg)
 	if c.pose.globe_rot == {} && c.pose.zoom >= 0 {
 		c.pose.pan = cam_clamp_pan(w, c.pose)
 		// The user can not look past Belgium (nasr, 2026-11-21): in free mode the point under the screen centre stays
@@ -435,7 +474,7 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 				}
 			}
 		}
-		c.view, c.px_per_km = cam_build(c.pose, c.screen)
+		c.view, c.px_per_km = cam_build(c.pose, c.screen, ce.fov_deg)
 	}
 }
 
@@ -470,4 +509,21 @@ path_bounds :: proc(path: [][3]f32) -> (lo, hi: [2]f32) {
 		hi = linalg.max(hi, p.xy)
 	}
 	return
+}
+
+cam_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
+	e := &w.cam_edit
+	def := w.setting_defaults.cam
+	rows := [?]Editor_Slider {
+		{"Map FOV", &e.fov_deg, def.fov_deg, 25, 80, "%.0f deg"},
+		{"Chase tilt", &e.chase_tilt_deg, def.chase_tilt_deg, 0, 80, "%.0f deg"},
+		{"Chase zoom", &e.chase_zoom, def.chase_zoom, 2, ZOOM_MAX, "%.1f"},
+		{"Chase look-ahead", &e.chase_ahead, def.chase_ahead, 0, 0.4, "%.2f"},
+		{"Follow smoothing", &e.follow_rate, def.follow_rate, 0.5, 15, "%.1f /s"},
+		{"Route preview", &e.preview_s, def.preview_s, 2, 25, "%.1f s"},
+		{"Zoom glide", &e.zoom_glide_s, def.zoom_glide_s, 0.1, 1.5, "%.2f s"},
+		{"Wheel zoom step", &e.wheel_step, def.wheel_step, 0.05, 0.8, "%.2f"},
+		{"Key pan speed", &e.pan_px_s, def.pan_px_s, 200, 1500, "%.0f px/s"},
+	}
+	return settings_sliders(w, x, y, width, rows[:], drag, 1, 2)
 }
