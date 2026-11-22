@@ -45,36 +45,41 @@ Ship_Warning :: enum {
 // pos is km in map space (y down), alt is m, heading is radians clockwise from north (up on the map),
 // speed is m/s along the heading, turn_rate is rad/s. warnings is rebuilt every step, the UI only reads it.
 Ship :: struct {
-	pos:       [2]f32,
-	alt:       f32,
-	heading:   f32,
-	speed:     f32,
-	turn_rate: f32,
-	warnings:  bit_set[Ship_Warning],
+	pos:             [2]f32,
+	alt:             f32,
+	heading:         f32,
+	speed:           f32,
+	turn_rate:       f32,
+	warnings:        bit_set[Ship_Warning],
 	// Set while within reach of a hub tower, dock_hub is only meaningful then.
-	docked:    bool,
-	dock_hub:  int,
+	docked:          bool,
+	dock_hub:        int,
 	// Held at the tower top + DOCK_ABOVE_M after docking, until the throttle opens again.
-	moored:    bool,
+	moored:          bool,
 	// Energy since the app started (spec "Vermogen"): drawn by the motors and the ballonets, and harvested by
 	// the solar film. The battery holds BATTERY_START x BATTERY_KWH - used + solar (ship_battery_kwh).
-	used_kwh:  f32,
-	solar_kwh: f32,
+	used_kwh:        f32,
+	solar_kwh:       f32,
 	// On the ground as a flying car (road.odin): locked to road_edges[road_edge], road_s km along it. landing:
 	// sinking onto that edge, lifting: climbing off the road up to the lowest flying height.
-	on_road:   bool,
-	landing:   bool,
-	lifting:   bool,
-	road_edge: int,
-	road_s:    f32,
+	on_road:         bool,
+	landing:         bool,
+	lifting:         bool,
+	road_edge:       int,
+	road_s:          f32,
 	// Free flight (street view, ship_free_step): velocity in m/s (x east, y south, z up) and the part of the
 	// position below the f32 resolution of pos, in m, so slow flight still moves at 150 km from the corner.
-	free:      bool,
-	vel:       [3]f32,
-	pos_frac:  [2]f32,
-	hit_s:     f32, // seconds since the car last hit a wall, for the street view's shake and the HUD
+	free:            bool,
+	vel:             [3]f32,
+	pos_frac:        [2]f32,
+	hit_s:           f32, // seconds since the car last hit a wall, for the street view's shake and the HUD
 	// On its wheels on the ground or a roof in free flight (landed by flying down onto it), driving like a car.
-	driving:   bool,
+	driving:         bool,
+	// The battery (ship_battery_kwh): charging at a tower, plus what the clamps at empty and full took off, so
+	// charging after empty starts at 0 % and sun on a full battery is not banked. drained: it ran empty and has
+	// not charged back to BATTERY_FLY_AGAIN yet, so it cannot fly (emergency landing, then slow on the wheels).
+	battery_adj_kwh: f32,
+	drained:         bool,
 }
 
 // Where the ship is drawn, filled by game_update every frame: between its state before and after the last fixed
@@ -97,7 +102,66 @@ ship_pose :: proc(s: ^Ship) -> Ship_Pose {
 
 // Battery charge in kWh, BATTERY_START x BATTERY_KWH at the start, clamped to the capacity.
 ship_battery_kwh :: proc(s: ^Ship) -> f32 {
-	return clamp(BATTERY_START * BATTERY_KWH - s.used_kwh + s.solar_kwh, 0, BATTERY_KWH)
+	return clamp(BATTERY_START * BATTERY_KWH - s.used_kwh + s.solar_kwh + s.battery_adj_kwh, 0, BATTERY_KWH)
+}
+
+// An empty battery (Lars, 2026-11-22: "noodlanding"): at 0 % the car cannot fly any more. In the air it glides
+// down (no thrust, EMPTY_GLIDE_MS forward at most, EMPTY_SINK_MS down) and lands on the road below (on the map) or
+// the ground or a roof (street view); on its wheels it creeps at EMPTY_DRIVE_MS. It flies again from
+// BATTERY_FLY_AGAIN. A hub tower charges at TOWER_CHARGE_KW while the car is docked there, the sun through the
+// film. The UI warns at BATTERY_LOW and BATTERY_CRITICAL (game.odin). Our values.
+BATTERY_LOW :: 0.15
+BATTERY_CRITICAL :: 0.05
+BATTERY_FLY_AGAIN :: 0.05
+EMPTY_GLIDE_MS :: 15.0
+EMPTY_SINK_MS :: 5.0
+EMPTY_DRIVE_MS :: 12.0
+TOWER_CHARGE_KW :: 120.0
+// More sun (Lars, 2026-11-22: "iets meer opladen als we in de zon vliegen"): flying by hand the film yields this
+// many times the spec's S(c) (w.tune.solar_gain, the Speed tab). The autopilot and the routes keep the spec, so
+// planned and flown energy still match (test demo_flow).
+SHIP_SOLAR_GAIN :: 3.0
+
+// Solar power into the battery now, kW: the spec's yield at the car's cloud cover and sun, times the solar gain
+// when flying by hand.
+ship_solar_kw :: proc(w: ^World) -> f32 {
+	s := &w.ship
+	hour := sim_hour(w)
+	yield := solar_kw(cloud_at(w, s.pos.x, s.pos.y, hour), sun_factor(w, hour))
+	autopilot := w.nav.active && !w.nav.manual
+	if autopilot do return yield
+	return yield * (w.tune.solar_gain > 0 ? w.tune.solar_gain : SHIP_SOLAR_GAIN)
+}
+
+// One step of energy: power_kw drawn, the sun's yield, and extra_kw into the battery (a tower), then the clamps
+// at empty and full and the drained flag.
+ship_energy :: proc(w: ^World, power_kw, extra_kw, dt: f32) {
+	s := &w.ship
+	s.used_kwh += power_kw * dt / 3600
+	s.solar_kwh += ship_solar_kw(w) * dt / 3600
+	s.battery_adj_kwh += extra_kw * dt / 3600
+	raw := BATTERY_START * BATTERY_KWH - s.used_kwh + s.solar_kwh + s.battery_adj_kwh
+	if raw < 0 do s.battery_adj_kwh -= raw
+	if raw > BATTERY_KWH do s.battery_adj_kwh -= raw - BATTERY_KWH
+	charge := ship_battery_kwh(s)
+	if charge <= 0 do s.drained = true
+	if s.drained && charge >= BATTERY_FLY_AGAIN * BATTERY_KWH do s.drained = false
+}
+
+// Within docking reach of a hub tower's top: s.docked and s.dock_hub.
+ship_dock_check :: proc(w: ^World) {
+	s := &w.ship
+	s.docked = false
+	for i in 0 ..< w.m.hub_count {
+		hub := w.m.hubs[i].pos
+		if linalg.length(s.pos - hub) > DOCK_HORIZONTAL_KM do continue
+		top := height_at(w, hub.x, hub.y) + HUB_TOWER_M
+		if abs(s.alt - top) <= DOCK_VERTICAL_M {
+			s.docked = true
+			s.dock_hub = i
+			break
+		}
+	}
 }
 
 // Flying is fast (Lars, 2026-11-21: "ik moet sneller kunnen vliegen en opstijgen"; nasr, 2026-11-22: holding the
@@ -128,17 +192,26 @@ SHIP_EDGE_KM :: 1.0
 ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	s := &w.ship
 	hour := sim_hour(w)
+	c := c
 
 	if s.moored {
-		if c.throttle <= 0 {
+		if c.throttle <= 0 || s.drained {
 			hub := w.m.hubs[s.dock_hub].pos
 			s.pos = hub
 			s.alt = height_at(w, hub.x, hub.y) + HUB_TOWER_M + DOCK_ABOVE_M
 			s.speed, s.turn_rate = 0, 0
 			s.docked = true
+			ship_energy(w, power_kw(0, 0), TOWER_CHARGE_KW, dt)
 			return
 		}
 		s.moored = false
+	}
+	// Empty in the air: no thrust and no climb, it glides down to the lowest flying height and lands on the road
+	// there (road_try_land below).
+	gliding := s.drained && !s.on_road && !s.landing
+	if gliding {
+		c.throttle = min(c.throttle, EMPTY_GLIDE_MS / w.tune.max_speed)
+		c.climb = -1
 	}
 	if s.free {
 		// Back from free flight: keep the speed along the heading, the climb clamp below lifts the car to the
@@ -186,7 +259,7 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	s.pos = ship_clamp_belgium(w, s.pos, prev)
 
 	alt0 := s.alt
-	s.alt += c.climb * SHIP_CLIMB_RATE * dt
+	s.alt += (gliding ? -EMPTY_SINK_MS : c.climb * SHIP_CLIMB_RATE) * dt
 	ground := height_at(w, s.pos.x, s.pos.y)
 	floor := ground + SHIP_MIN_CLEARANCE
 	if s.lifting {
@@ -201,10 +274,10 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	climb_ms := max(s.alt - alt0, 0) / dt
 	gust := gust_at(w, s.pos.x, s.pos.y, layer, hour)
 	// Above SHIP_POWER_CAP_MS the draw stops growing (Lars, 2026-11-21: flying at 252 km/h emptied the battery in
-	// 3 min with P(v) = 3 + 0.0085 v^3). The routes never fly that fast, so their energy is unchanged.
-	s.used_kwh +=
-		(power_kw(min(s.speed, SHIP_POWER_CAP_MS), gust) + climb_ms * SHIP_CLIMB_KW_PER_MS) * dt / 3600
-	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, hour), sun_factor(w, hour)) * dt / 3600
+	// 3 min with P(v) = 3 + 0.0085 v^3). The routes never fly that fast, so their energy is unchanged. Gliding
+	// down empty draws nothing. A hub tower charges while the car hovers at its top.
+	power := power_kw(min(s.speed, SHIP_POWER_CAP_MS), gust) + climb_ms * SHIP_CLIMB_KW_PER_MS
+	ship_energy(w, gliding ? 0 : power, s.docked ? TOWER_CHARGE_KW : 0, dt)
 
 	s.warnings = {}
 	if s.alt - ground < SHIP_TERRAIN_WARN_M do s.warnings += {.Terrain}
@@ -219,17 +292,7 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	road_try_land(w, c)
 	if s.landing do return
 
-	s.docked = false
-	for i in 0 ..< w.m.hub_count {
-		hub := w.m.hubs[i].pos
-		if linalg.length(s.pos - hub) > DOCK_HORIZONTAL_KM do continue
-		top := height_at(w, hub.x, hub.y) + HUB_TOWER_M
-		if abs(s.alt - top) <= DOCK_VERTICAL_M {
-			s.docked = true
-			s.dock_hub = i
-			break
-		}
-	}
+	ship_dock_check(w)
 }
 
 // At the Belgian border, keeps the axis that stays inside so the car slides along; outside moves freely.
@@ -291,6 +354,12 @@ DRIVE_DROP_M :: 0.5
 ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 	s := &w.ship
 	hour := sim_hour(w)
+	c := c
+	// Empty: no thrust or lift in the air, it sinks to the ground or a roof; on the wheels it creeps.
+	if s.drained && !s.driving {
+		c.throttle = min(c.throttle, 0)
+		c.climb = -EMPTY_SINK_MS * FREE_VZ_DAMP / FREE_CLIMB_ACCEL
+	}
 	fwd := [2]f32{math.sin(s.heading), -math.cos(s.heading)}
 	if !s.free {
 		s.free = true
@@ -302,7 +371,7 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 		s.turn_rate = 0
 		s.hit_s = 10
 	}
-	if s.driving && c.climb > 0.2 {
+	if s.driving && c.climb > 0.2 && !s.drained {
 		s.driving = false
 		s.vel.z = DRIVE_LIFT_MS
 	}
@@ -370,7 +439,7 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 		v := linalg.dot(s.vel.xy, fwd)
 		side := linalg.dot(s.vel.xy, right)
 		drive: f32
-		if c.throttle > 0 {
+		if c.throttle > 0 && !(s.drained && v >= EMPTY_DRIVE_MS) {
 			drive = c.throttle * DRIVE_ACCEL
 		} else if c.throttle < 0 {
 			drive =
@@ -450,13 +519,13 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 	}
 	s.speed = linalg.length(s.vel.xy)
 
-	// Energy as ship_step: power at the air speed and the climbing power, solar from the cloud cover.
+	// Energy as ship_step: power at the air speed and the climbing power, solar from the cloud cover, a tower
+	// charging while the car is at its top. Sinking down empty draws nothing.
 	airspeed := linalg.length(s.vel.xy - wind)
-	s.used_kwh +=
-		(power_kw(min(airspeed, SHIP_POWER_CAP_MS), gust) + max(s.vel.z, 0) * SHIP_CLIMB_KW_PER_MS) *
-		dt /
-		3600
-	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, hour), sun_factor(w, hour)) * dt / 3600
+	power := power_kw(min(airspeed, SHIP_POWER_CAP_MS), gust) + max(s.vel.z, 0) * SHIP_CLIMB_KW_PER_MS
+	if s.drained && !s.driving do power = 0
+	ship_dock_check(w)
+	ship_energy(w, power, s.docked ? TOWER_CHARGE_KW : 0, dt)
 
 	s.warnings = {}
 	for z in w.no_fly {

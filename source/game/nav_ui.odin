@@ -483,14 +483,7 @@ nav_ui :: proc(w: ^World) {
 		meter:        f32,
 	} {
 		{"USED", fmt.tprintf("%.2f kWh", n.active ? n.used_kwh : s.used_kwh - s.solar_kwh), -1},
-		{
-			"SOLAR",
-			fmt.tprintf(
-				"%.1f kW",
-				solar_kw(cloud_at(w, s.pos.x, s.pos.y, sim_hour(w)), sun_factor(w, sim_hour(w))),
-			),
-			-1,
-		},
+		{"SOLAR", fmt.tprintf("%.1f kW", ship_solar_kw(w)), -1},
 		{"HEIGHT", fmt.tprintf("%.0f m", s.alt), -1},
 	}
 	chip_h := ui_stat_chip_h(w)

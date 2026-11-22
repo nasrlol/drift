@@ -144,6 +144,15 @@ Validation (reject the whole response, keep the old snapshot): 63 locations, 9 v
   hour h = start + h x 3600 in every cell. The range test also rejects NaN and +-Inf.
   Checked by feeding edited responses (null, out of range, shifted time, short series, 62 locations, Inf, html).
 Measured (2026-11-21, macOS arm64): one fetch ~400 ms, ~1.2 MB scratch (json values).
+Checked against the API (2026-11-22, Lars: "check of alle data die we krijgen via api wel kloppen"): fetch_weather
+  and a direct request with the same points and variables a minute apart (same model run): all 1701 wind values
+  within 0.0001 m/s and 0.004 deg (back from our vector to the "from" direction), gust index and cloud exact, hours
+  aligned (e.g. 6.26 m/s from 78 deg = blowing toward 258 deg, stored as east -6.12, south 1.30). Open-Meteo moves
+  each point to its model grid cell (cell_selection land): 0.9 km median, 1.4 km at most. The sun (sun_factor) is
+  within 0.2 deg of the NOAA solar position at the map centre (19.0 vs 19.2 deg at noon on 2026-11-22).
+  LAYER_ALT is a fixed guess of the pressure levels' height: that day (1011-1015 hPa) 975 hPa was at 297-331 m (300),
+  950 hPa at 505-542 m (550), 925 hPa at 715-749 m (800); a strong high or low moves them 100-200 m. The API has
+  geopotential_height_<level>hPa if we ever want the real heights per cell (changes routes and test results).
 
 ELEVATION DATA
 
@@ -1034,6 +1043,22 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   follows the height over the ground or a roof, down over the 4.8 m above 1.2 m, eased at 9/s. pos_frac
                   keeps the part of the position below the f32 resolution of pos. Leaving the street view hands the
                   forward speed back to ship_step. Not recorded in the replay yet (the free flag is not a control).
+  battery         (ship.odin; Lars, 2026-11-22: "noodlanding + iets meer opladen als we in de zon vliegen") the charge
+                  is BATTERY_START x BATTERY_KWH - used + solar + battery_adj_kwh, clamped 0 .. 180 kWh. ship_energy is
+                  the one place every step (map flight, street view, road, landing) books power, sun and tower: the
+                  clamps at empty and full go into battery_adj_kwh, so charging after empty starts at 0 % and sun on
+                  a full battery is not banked. At 0 % ship.drained: in the air no thrust and no climb, on the map it
+                  glides down (EMPTY_GLIDE_MS 15 m/s forward, EMPTY_SINK_MS 5 m/s down, drawing nothing) to the lowest
+                  flying height and lands on the road there (road_try_land, roads within 1 km), in the street view it
+                  sinks onto the ground or a roof; on its wheels it creeps at EMPTY_DRIVE_MS 12 m/s and cannot lift
+                  off; moored it stays at the tower. It flies again from BATTERY_FLY_AGAIN 5 %. Docked at a hub tower
+                  (ship_dock_check, also in free flight) it charges at TOWER_CHARGE_KW 120 kW (empty to 5 % in under
+                  5 min). Sun: by hand the film yields SHIP_SOLAR_GAIN 3 x the spec's S(c) (ship_solar_kw,
+                  w.tune.solar_gain, "Solar charging (by hand)" in the Speed tab); the autopilot and the routes keep
+                  the spec, so planned and flown energy match (demo_flow unchanged). game.odin toasts at 15 %, 5 %,
+                  empty and "Charging at <hub>"; the battery gauge says "empty" (red) or "charging". Test: test/
+                  run_battery (landing on the map within 90 s and creeping, sinking in the street view, tower charge
+                  from empty, sun by hand = 3 x autopilot). Our values.
   way to go       (street.odin street_draw step 6; Lars, 2026-11-22: "pijlen naar waar je moet gaan in 3d scene")
                   while navigating a route in the street view: a chevron every GUIDE_STEP_M 30 m on the route from 20
                   to 480 m ahead of the ship's place on it (nav.s_km), gliding forward at 12 m/s, tilted 55 degrees

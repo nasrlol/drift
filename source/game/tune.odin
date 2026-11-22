@@ -13,6 +13,7 @@ Tune :: struct {
 	hand_turn:   f32, // rad/s, flying by hand on the map
 	free_accel:  f32, // m/s^2, thrust in the street view
 	drive_steer: f32, // times the steering on the wheels in the street view (DRIVE_STEER, DRIVE_LAT_ACCEL, DRIVE_GRIP)
+	solar_gain:  f32, // times the spec's solar yield when flying by hand (ship_solar_kw)
 	cruise_rate: f32, // held throttle per second while W / S is down
 	map_time:    f32, // times real time while driving on the map (map_time_scale)
 }
@@ -42,6 +43,7 @@ tune_defaults :: proc() -> Tune {
 		hand_turn = SHIP_MAX_TURN_RATE,
 		free_accel = FREE_ACCEL,
 		drive_steer = 1,
+		solar_gain = SHIP_SOLAR_GAIN,
 		cruise_rate = CRUISE_RATE,
 		map_time = MAP_TIME_SCALE,
 	}
@@ -66,6 +68,7 @@ tune_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 		{"Turn rate (map)", &t.hand_turn, def.hand_turn, 0.1, 2.5, "rad/s", false},
 		{"Thrust (street view)", &t.free_accel, def.free_accel, 1, 40, "m/s2", false},
 		{"Steering (driving)", &t.drive_steer, def.drive_steer, 0.3, 3, "x", false},
+		{"Solar charging (by hand)", &t.solar_gain, def.solar_gain, 1, 8, "x", false},
 		{"Throttle build-up", &t.cruise_rate, def.cruise_rate, 0.05, 2, "/s", false},
 		{"Time on the map", &t.map_time, def.map_time, 1, MAP_TIME_MAX, "x", false},
 	}
