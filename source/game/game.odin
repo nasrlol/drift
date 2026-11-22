@@ -22,9 +22,6 @@ Screen :: enum u8 {
 	Navigate,
 }
 
-LOADING_MIN_S :: 0.9 // the loading screen stays at least this long
-LOADING_FADE_S :: 0.4
-LOADING_TURN_S :: 0.9 // one turn of the ring
 SCAN_S :: 1.6 // the A* scan animation after a new plan
 LINE_DEPTH_BIAS :: 2e-4 // NDC depth step between the line passes on the ground plane (casing, fill, wind)
 HUB_MARKER_PX :: 26
@@ -71,7 +68,6 @@ World :: struct {
 	prof:            Profiler,
 	cam:             Cam,
 	ui:              Ui,
-	loading_s:       f32, // seconds the window has shown frames, for the loading screen
 	scan_s:          f32, // seconds since the last plan, for the A* scan animation
 	// GPU texture and glyph tables owned by raylib, zero until the first frame with a window.
 	fonts:           Fonts,
@@ -90,6 +86,7 @@ World :: struct {
 	car_anim:        Car_Anim,
 	car_skin:        Car_Skin, // the player's car body, car_models.odin
 	music:           Soundtrack, // music.odin
+	tune:            Tune, // the F2 speed editor, tune.odin
 	// Other cars from the presence gossip (presence.odin), copied from the node table every PRESENCE_COPY_S.
 	others:          [PRESENCE_SLOTS]Other_Car,
 	other_count:     int,
@@ -151,6 +148,7 @@ game_init :: proc() -> rawptr {
 	if !weather_load_snapshot(w, SNAPSHOT_PATH) do weather_load_fallback(w)
 	identity_load_or_create(w)
 	car_skin_load(w)
+	w.tune = tune_defaults()
 	if rl.IsWindowReady() {
 		airship_build(w)
 		buildings_build(w)
@@ -559,6 +557,8 @@ game_update :: proc(memory: rawptr) -> bool {
 				rl.SetShaderValueV(sh, lm.loc_widths, &fill, .FLOAT, LINE_COLORS)
 				globe_draw_lines(w)
 			}
+			// After the globe, so its coastlines (same Border slot) stay when the borders are hidden.
+			if w.plan.layers.hide_borders do fill[Map_Kind.Border] = 0
 			if lm.map_lines.vertexCount > 0 {
 				bias := f32(LINE_DEPTH_BIAS)
 				rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
@@ -578,21 +578,12 @@ game_update :: proc(memory: rawptr) -> bool {
 			if show_wind do rl.DrawMesh(lm.wind, lm.material, rl.Matrix(1))
 
 			// Draw order 4: the 3D buildings around the cities and the trees, over the roads. They grow out of the
-			// ground while the camera zooms in.
-			grow := clamp((w.cam.pose.zoom - BUILDINGS_ZOOM_0) / (BUILDINGS_ZOOM_1 - BUILDINGS_ZOOM_0), 0, 1)
-			if grow > 0 {
+			// ground by their size on the screen (buildings.odin).
+			if feature_px, shown := buildings_feature_px(&w.cam); shown {
 				target := w.cam.view.target.xy
 				view_km := w.cam.screen.x / max(w.cam.px_per_km, 1e-3)
 				look := buildings_map_look(w)
-				buildings_draw(
-					w,
-					fog,
-					ease_in_out(grow),
-					target,
-					BUILDINGS_CULL_KM + view_km,
-					MAP_PLACEMENT,
-					look,
-				)
+				buildings_draw(w, fog, feature_px, target, BUILDINGS_CULL_KM + view_km, MAP_PLACEMENT, look)
 				towns_draw(w, target, TOWN_REACH_KM, MAP_PLACEMENT)
 				nature_draw(w, target, TREE_REACH_KM, MAP_PLACEMENT)
 			}
@@ -657,24 +648,9 @@ game_update :: proc(memory: rawptr) -> bool {
 		rl.DrawRectangleV(box, text + 2 * PAD, rl.ColorAlpha(pal.surface, 0.8))
 		ui_text(w, box + PAD, CREDIT, .Roboto_400, 12, pal.text_2)
 	}
+	tune_ui(w)
 	ui_toast_draw(w)
 
-	// Loading screen (design "Laadscherm", in the light palette): sky, a 38 px ring with a cyan top turning once per 0.9 s, then
-	// it fades out in 0.4 s. Covers the first frames while the map mesh and the fonts are built.
-	w.loading_s += frame_dt
-	if w.loading_s < LOADING_MIN_S + LOADING_FADE_S {
-		pal := PALETTE
-		alpha := 1 - clamp((w.loading_s - LOADING_MIN_S) / LOADING_FADE_S, 0, 1)
-		screen := w.cam.screen
-		rl.DrawRectangleV({0, 0}, screen, rl.ColorAlpha(pal.sky, alpha))
-		c := screen / 2 - {0, 16}
-		angle := w.loading_s / LOADING_TURN_S * 360
-		rl.DrawRing(c, 16, 19, 0, 360, 48, rl.ColorAlpha(pal.surface_3, alpha))
-		rl.DrawRing(c, 16, 19, angle - 90, angle, 24, rl.ColorAlpha(pal.route, alpha))
-		text := "Building the map of Belgium..."
-		size := ui_text_size(w, text, .Roboto_400, 14)
-		ui_text(w, {c.x - size.x / 2, c.y + 34}, text, .Roboto_400, 14, rl.ColorAlpha(pal.text_2, alpha))
-	}
 	prof_end(w, .Draw, t)
 
 	// Profiler overlay, F3 or the Profiler toggle in the layers panel shows it. It shows the previous frame and is not counted in draw ms.

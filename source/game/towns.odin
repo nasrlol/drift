@@ -9,9 +9,10 @@ import rl "vendor:raylib"
 // other built-up land (the City areas of the land use map: residential, commercial, industrial, retail) gets
 // generated blocks: a lattice of TOWN_LOT_M lots turned by a hash of the area, a lot keeps a building with
 // TOWN_FILL chance, sized and raised by a hash of the lot. Built per TOWN_TILE_KM tile within TOWN_REACH_KM of
-// the camera (tiles.odin); the circles of real buildings are left out. Same shader and zoom growth as the real
+// the camera (tiles.odin); the circles of real buildings are left out. Same shader and growth as the real
 // buildings. Our values, not from OSM.
 TOWN_LOT_M :: 30.0
+TOWN_HALF_MIN :: 0.25 // half the width of the smallest building, in lots
 TOWN_FILL :: 0.62
 TOWN_TILE_KM :: 1.5
 TOWN_REACH_KM :: 6.0
@@ -65,7 +66,7 @@ town_lot :: proc(
 	co := &w.collide
 	if !co.built do collide_build(w)
 	for o in co.cities[:co.city_count] do if linalg.length(c - o) < BUILDINGS_RADIUS_KM do return
-	half := [2]f32{0.25 + 0.2 * r1, 0.25 + 0.2 * r2} * lot
+	half := [2]f32{TOWN_HALF_MIN + 0.2 * r1, TOWN_HALF_MIN + 0.2 * r2} * lot
 	if !town_lot_clear(w, c, ax, ay, half * 1000) do return
 	height = (5 + 9 * r3 * r3 + (r1 > 0.97 ? 20 * r2 : 0)) / 1000
 	// Counter-clockwise on the map (y south): the lattice axes are a rotation, so -u-v, -u+v, +u+v, +u-v turns

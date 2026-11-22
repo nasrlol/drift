@@ -727,7 +727,7 @@ dump_world :: proc(w: ^World, out: ^strings.Builder) {
 //                                    smooth motion (the largest second difference of its screen position); the
 //                                    chase camera keeps it nearly still unless frames and steps do not line up
 //   quit <frame>
-// Frame 0 is the first frame; the loading screen covers the first ~80. The window keeps its size (1440 x 900):
+// Frame 0 is the first frame. The window keeps its size (1440 x 900):
 // SetWindowSize on a macOS Retina screen leaves raylib drawing into a quarter of the framebuffer.
 Script_Kind :: enum u8 {
 	Down,

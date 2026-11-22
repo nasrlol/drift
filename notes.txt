@@ -227,8 +227,8 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   (docs/drift-design.pdf "Kleuren": surface, surface_2, surface_3, text, text_2, line, accent,
                   accent_strong, green, banner, banner_2, red, warning, reroute, arrived, sheet, chip, bubble,
                   bubble_text, pill), the light values in PALETTE. Light only (Lars, 2026-11-21: "alleen light mode,
-                  doe de dark mode overal weg"): no night palette, no T key, no theme button, the loading screen and
-                  the street view are light too. palette(w) -> ^Palette returns w.palette, a copy of PALETTE made at
+                  doe de dark mode overal weg"): no night palette, no T key, no theme button, the street view is light
+                  too. palette(w) -> ^Palette returns w.palette, a copy of PALETTE made at
                   the start of every frame: no pointer into this library's constants, so hot reload is safe. Map line
                   colors go to the line shader as a uniform. The profiler overlay keeps its own fixed colors.
                   Map colors (same Palette, design "Kaart" table): land, city, park, farmland, marsh, beach, water,
@@ -280,7 +280,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   ui_widget(w, r) -> (id, hot, fired): ids count up per frame, Tab / Shift-Tab move the focus,
                   Enter / Space fire the focused widget, hit areas grow to 44 px. ui_block(w, r) marks UI that keeps
                   the mouse off the map next frame (ui_mouse_captured), w.ui.popup takes the clicks inside it.
-                  Kit: ui_card, ui_round_button, ui_pill_button, ui_chip, ui_toggle, ui_segment, ui_stat_chip,
+                  Kit: ui_card, ui_round_button, ui_pill_button, ui_toggle, ui_segment, ui_stat_chip,
                   ui_input, ui_zoom_pill, ui_tile, ui_toast (1.6 s), ui_focus_ring, round_rect.
   camera.odin     (Dario) Cam in World: pose {pan, zoom, yaw, tilt}, a perspective Camera3D over the ground plane
                   (world = x km, y km, -alt km, FOV 45). Modes Free / Chase / Preview, glides with ease-out.
@@ -294,7 +294,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
   nav_ui.odin     (Lars) route strips, time bubbles, start ring + destination pin, banner + Then, road sign,
                   pill under the ship (layer, or the road name while driving), warning pill, sheet,
                   carpool_draw_partner.
-  pilot_ui.odin   (Dario) button column, speed circle, Re-centre, self-fly + Exit / Done.
+  pilot_ui.odin   (Dario) button column, speed circle with the battery circle (charge ring) under it, Re-centre, self-fly + Exit / Done.
                   No sound button (speech is NOT DOING).
   plan_ui.odin    (Andrei) plan panel (cards A and B, hub search, departure list, route rows, wind note,
                   Preview / Start; without a route they toast what is missing and shake the empty from / to field red,
@@ -308,8 +308,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   Transition (Lars, 2026-11-21): landing slides onto the road and turns to it over ROAD_ALIGN_S 2.5 s
                   while sinking ROAD_DESCENT_MS 4 m/s (ship.landing, road_landing_step); take-off climbs at least
                   ROAD_LIFT_MS 10 m/s to the lowest flying height (ship.lifting). On the road ROAD_MAX_SPEED 35 m/s
-                  (126 km/h), accel 1.2 / brake 1.6 m/s^2; in the air SHIP_MAX_SPEED 70 m/s (252 km/h, Lars: "sneller
-                  vliegen"), accel 3 / brake 4, climb 12 m/s. All our values, not from the spec.
+                  (126 km/h), accel 1.2 / brake 1.6 m/s^2; in the air SHIP_MAX_SPEED 140 m/s (504 km/h, Lars: "sneller
+                  vliegen"), accel 5 / brake 6 on the autopilot, 12 / 16 by hand
+                  (SHIP_HAND_*), climb 12 m/s. All our values, not from the spec.
   carpool.odin    (Andrei) carpool_offer_make (energy = net kWh with the current snapshot, its hash in the offer),
                   carpool_verify (recompute with the same snapshot, VERIFY_TOLERANCE 1 %), carpool_match (weather
                   cell + forecast hour filter, then four router runs for the detour), carpool_split (passenger:
@@ -556,7 +557,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   speed, wall hits and the steps the car's centre was inside a footprint (must be 0).
                   test/ run_free_flight uses it on a real Brussels building found in the collision data: full
                   throttle into a wall stops 2.2 m from it, never inside; down onto the roof it hovers 0.9 m over it
-                  and stays; full throttle in open country reaches 70 m/s (252 km/h); across the wind of
+                  and stays; full throttle in open country reaches SHIP_MAX_SPEED in 60 s; across the wind of
                   windy.snap at 300 m it drifts 0.8-1.05 x wind x 20 s; the same inputs twice give the same flight to
                   the bit. Checked that it fails without walls (125 m through) and without roofs (0.9 m above the
                   ground).
@@ -581,8 +582,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   nearly still unless frames and fixed steps do not line up.
                   test/data/street_flicker.txt (uneven frames): flicker 0.006 % over the roofs and 0.0003 % in a
                   street (max 0.05 %), judder 0.02 px in fast flights (max 1.5); without the render interpolation
-                  the judder is 3.1 and 2.8 px (2026-11-21). The loading screen covers frames
-                  0..~80. The window stays 1440 x 900: SetWindowSize on a macOS Retina screen leaves raylib
+                  the judder is 3.1 and 2.8 px (2026-11-21). The window stays 1440 x 900: SetWindowSize on a macOS Retina screen leaves raylib
                   drawing into a quarter of the framebuffer. Shots go to build/shots/ (not in git), the
                   standard scripts are test/data/street_*.txt.
                   Log: logf(w, system, format, args) prints "[route t=1234] message" to stderr, t = w.tick.
@@ -638,8 +638,8 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   (Sport, Hatch, 4x4) lofted at start-up from a side profile (Body_Key rings, wheel arches, lights,
                   grille, bumpers, mirrors as boxes and blobs) into one u16 mesh each; the Car Concept wheels are moved
                   and scaled to their axles. Smoke (Andrei: "een sigaret op wielen") has no shell, only cylinders
-                  (filter, gold band, paper, ash) and a glowing tip. Picked in plan panel card A (turning preview in
-                  its own render texture + segment), saved by name in cache/car_skin.txt, sent in Presence.skin (a padding byte, the size
+                  (filter, gold band, paper, ash) and a glowing tip. Picked in plan panel card A (the Car row opens a
+                  list of the skins, plan_ui.odin), saved by name in cache/car_skin.txt, sent in Presence.skin (a padding byte, the size
                   stays 136; unknown values draw as Concept). Shapes and colours are ours.
   music.odin      (author andrei) the soundtrack, made in code (no audio file): Am F C G, two bars per chord at
                   84 BPM, pad + bass + plucked arpeggio with a ping-pong echo + hi-hat + soft kick. A raylib audio
@@ -647,6 +647,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   default, N or the speaker button (plan map buttons, navigation
                   button column; music_button) turns it on and off, saved in cache/music.txt. Silent when there is no audio device. Notes and levels are
                   ours.
+  tune.odin       (nasr) speed editor: F2 opens sliders for top speed, map acceleration / brake / turn rate by
+                  hand, street view thrust and the throttle build-up. The ship reads w.tune (Tune in World), whose
+                  defaults are the constants (SHIP_MAX_SPEED, SHIP_HAND_*, SHIP_MAX_TURN_RATE, FREE_ACCEL,
+                  CRUISE_RATE), so untouched it changes nothing. Reset to defaults, nothing is saved (a restart is
+                  the default again). The autopilot keeps SHIP_ACCEL / SHIP_BRAKE / SHIP_MAX_TURN_RATE. A value
+                  changed during a recorded run makes the replay differ.
   presence.odin   (author andrei) other cars on the map, peer-to-peer (Lars: "geen relay service, gossiping"): every
                   PRESENCE_S 2 s the game signs its position (Presence, 136 bytes, ed25519 identity) and the node swaps
                   the fresh positions it knows with up to 8 recently synced peers (op 'Q'), so they spread over several
@@ -659,9 +665,15 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   cars on its own way (road, or the same layer) and shows the Jam warning. Our values.
   buildings.odin  3D buildings (Lars: "ik wil 3d gebouwen"): assets/buildings.bin.gz (tools/bake_buildings, see
                   BUILDINGS DATA), one mesh per city of walls + flat roof lit from the north-west, roof / wall colors
-                  from the palette. Heights 1.6x real and lowered towards the edge of the 1 km circle; they grow out
-                  of the ground between zoom 3.5 and 5 (height_scale uniform). Cities beyond 6 km + the view are skipped.
-                  A city mesh holds its points relative to the city origin.
+                  from the palette. Heights 1.6x real and lowered towards the edge of the 1 km circle. Cities beyond
+                  6 km + the view are skipped. A city mesh holds its points relative to the city origin.
+                  Fade by screen size: buildings smaller than a pixel sparkled while zooming (zoom 4 and 5: 0.09 % of
+                  the pixels flickered A-B-A in --script). The vertex shader measures the narrowest generated
+                  building (2 x TOWN_HALF_MIN x TOWN_LOT_M = 15 m) on the screen from each vertex's depth: under
+                  BUILDINGS_FADE_PX_0 1.5 px it is flat and has the ground's color (city, park for tree clumps),
+                  from BUILDINGS_FADE_PX_1 6 px its own height and colors. The same holds for the towns and the tree
+                  clumps (same shader). Not drawn at all while the nearest ground in view (bottom screen edge) shows
+                  it under 1.5 px (buildings_feature_px). Now at most 0.011 % at every zoom. The fade range is ours.
   tiles.odin      Tile_Cache: square tiles around the camera, each its own mesh (towns, nature, street roads), at most
                   2 built per frame, nearest first. Placement {axes, origin} says where a draw puts map meshes (the
                   map: identity; the street view: metres, y up, around the street origin); meshes keep their points
@@ -836,7 +848,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   street view draws (motorway 6.5 per carriageway, trunk 5.5, primary 4.5, secondary 3.8, tertiary
                   3, river 14). test/data/street_town.txt shows a town road north of Brussels.
   free flight     (ship.odin) ship_free_step, used in the street view when nobody else flies (not the autopilot):
-                  velocity with momentum, thrust 8 m/s^2, quadratic drag to 70 m/s, sideways grip 2.4/s against the
+                  velocity with momentum, thrust 10 m/s^2, quadratic drag to SHIP_MAX_SPEED (140 m/s), sideways grip 2.4/s against the
                   air (crabs in a crosswind), turn 1.4 rad/s hovering .. 0.55 at top speed, altitude hold (climbs
                   settle at ~12 m/s), wind of the car's layer weaker below 80 m, gust index as smooth turbulence,
                   pushed out of walls losing the speed into them. Landing (Lars, 2026-11-21: "auto moet landen op
@@ -1098,7 +1110,6 @@ Base (nasr)
   ui_card(w, r: rl.Rectangle)                                       18 px corners + shadow
   ui_round_button(w, r, icon: Icon, on: bool) -> bool               48 px map, 64 px nav
   ui_pill_button(w, r, text: string, kind: Pill_Kind, icon := .Close, has_icon := false) -> bool
-  ui_chip(w, r, icon: Icon, top, bottom: string, on: bool) -> bool
   ui_toggle(w, r, on: ^bool) -> bool
   ui_segment(w, r, labels: []string, sel: ^int) -> bool
   ui_stat_chip(w, r, label, value: string, meter: f32)              meter < 0 = no meter

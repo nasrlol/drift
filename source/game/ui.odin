@@ -479,29 +479,6 @@ ui_pill_button :: proc(
 	return fired
 }
 
-// Mode chip: icon 20 px, top line Figtree 600 14 px, bottom line Roboto 13 px. on: accent border, accent fill
-// at 16 %, accent text.
-ui_chip :: proc(w: ^World, r: rl.Rectangle, icon: Icon, top, bottom: string, on: bool) -> bool {
-	pal := palette(w)
-	id, hot, fired := ui_widget(w, r)
-	if on {
-		round_rect(r, 12, rl.ColorAlpha(pal.accent, 0.16))
-		round_rect_lines(r, 12, 1.5, pal.accent)
-	} else {
-		if hot do round_rect(r, 12, pal.surface_2)
-		round_rect_lines(r, 12, 1, pal.line)
-	}
-	fg := on ? pal.accent : pal.text
-	cx := r.x + r.width / 2
-	ui_icon(w, icon, {cx, r.y + 18}, 20, on ? pal.accent : pal.text_2)
-	ts := ui_text_size(w, top, .Figtree_600, 14)
-	ui_text(w, {cx - ts.x / 2, r.y + 31}, top, .Figtree_600, 14, fg)
-	bs := ui_text_size(w, bottom, .Roboto_400, 13)
-	ui_text(w, {cx - bs.x / 2, r.y + 49}, bottom, .Roboto_400, 13, on ? pal.accent : pal.text_2)
-	ui_focus_ring(w, id, r, 12)
-	return fired
-}
-
 // Switch 36 x 20 px, knob 16 px: off surface_3, on accent_strong, the knob slides in 0.15 s.
 ui_toggle :: proc(w: ^World, r: rl.Rectangle, on: ^bool) -> bool {
 	pal := palette(w)

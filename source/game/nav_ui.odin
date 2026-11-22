@@ -432,21 +432,16 @@ nav_ui :: proc(w: ^World) {
 		ui_text(w, {x, sheet.y + 28}, "Free flight", .Figtree_600, 38, pal.text)
 		ui_text(w, {x, sheet.y + 72}, "No route, fly with W A S D, R and F", .Roboto_400, 20, pal.text_2)
 	}
-	chips := [5]struct {
+	// Speed and battery are the circles on the left (pilot_ui).
+	chips := [?]struct {
 		label, value: string,
 		meter:        f32,
 	} {
-		{"SPEED", fmt.tprintf("%.0f km/h", s.speed * 3.6), -1},
-		{
-			"BATTERY",
-			fmt.tprintf("%.1f%%", ship_battery_kwh(s) / BATTERY_KWH * 100),
-			ship_battery_kwh(s) / BATTERY_KWH,
-		},
 		{"USED", fmt.tprintf("%.2f kWh", n.active ? n.used_kwh : s.used_kwh - s.solar_kwh), -1},
 		{"SOLAR", fmt.tprintf("%.1f kW", solar_kw(cloud_at(w, s.pos.x, s.pos.y, sim_hour(w)))), -1},
 		{"HEIGHT", fmt.tprintf("%.0f m", s.alt), -1},
 	}
-	cw := (sheet.width - 48 - 4 * 8) / 5
+	cw := (sheet.width - 48 - f32(len(chips) - 1) * 8) / f32(len(chips))
 	for c, i in chips {
 		ui_stat_chip(w, {x + f32(i) * (cw + 8), sheet.y + 108, cw, 58}, c.label, c.value, c.meter)
 	}

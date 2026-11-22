@@ -849,7 +849,7 @@ nav_autopilot :: proc(w: ^World) -> Controls {
 	c: Controls
 	diff := math.mod(heading - s.heading + 3 * math.PI, math.TAU) - math.PI
 	c.turn = clamp(diff * AP_TURN_GAIN, -AP_MAX_TURN, AP_MAX_TURN) / SHIP_MAX_TURN_RATE
-	c.throttle = clamp(speed / SHIP_MAX_SPEED, 0, 1)
+	c.throttle = clamp(speed / w.tune.max_speed, 0, 1)
 	goal_alt := look.z
 	if to_goal < AP_SLOW_KM do goal_alt = hub_top(w, n.to).z + DOCK_ABOVE_M
 	c.climb = clamp((goal_alt - s.alt) * AP_CLIMB_GAIN, -AP_MAX_CLIMB, AP_MAX_CLIMB) / SHIP_CLIMB_RATE

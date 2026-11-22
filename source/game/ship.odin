@@ -100,11 +100,16 @@ ship_battery_kwh :: proc(s: ^Ship) -> f32 {
 	return clamp(BATTERY_START * BATTERY_KWH - s.used_kwh + s.solar_kwh, 0, BATTERY_KWH)
 }
 
-// Flying is fast (Lars, 2026-11-21: "ik moet sneller kunnen vliegen en opstijgen"): 70 m/s is 252 km/h, the
-// same car as before reached 126 km/h. On the road it keeps the old limits (road_speed). Our values.
-SHIP_MAX_SPEED :: 70.0
+// Flying is fast (Lars, 2026-11-21: "ik moet sneller kunnen vliegen en opstijgen"; nasr, 2026-11-22: holding the
+// throttle longer has to keep going faster): 140 m/s is 504 km/h. On the
+// road it keeps the old limits (road_speed). SHIP_ACCEL stays, the autopilot speeds up with it. Our values.
+SHIP_MAX_SPEED :: 140.0
 SHIP_ACCEL :: 5.0
 SHIP_BRAKE :: 6.0
+// Flying by hand on the map (nasr, 2026-11-22: zoomed in it felt slow and sluggish): 0-100 km/h in ~2.3 s,
+// top speed after ~12 s. The autopilot keeps SHIP_ACCEL / SHIP_BRAKE. Our values.
+SHIP_HAND_ACCEL :: 12.0
+SHIP_HAND_BRAKE :: 16.0
 SHIP_MAX_TURN_RATE :: 0.6
 SHIP_TURN_SMOOTH_S :: 0.5
 SHIP_CLIMB_RATE :: 12.0
@@ -147,16 +152,20 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	if s.landing && road_landing_step(w, c, dt) do return
 	if s.on_road && road_step(w, c, dt) do return
 
-	target_turn := c.turn * SHIP_MAX_TURN_RATE
+	// By hand the speed editor's values (tune.odin), the autopilot keeps its own.
+	hand := !(w.nav.active && !w.nav.manual)
+	target_turn := c.turn * (hand ? w.tune.hand_turn : SHIP_MAX_TURN_RATE)
 	s.turn_rate += (target_turn - s.turn_rate) * min(dt / SHIP_TURN_SMOOTH_S, 1)
 	s.heading = math.mod(s.heading + s.turn_rate * dt, math.TAU)
 
 	// In a traffic jam the ship slows down like the router expects (traffic_factor).
-	target_speed := max(c.throttle, 0) * SHIP_MAX_SPEED / ship_jam_factor(w)
+	target_speed := max(c.throttle, 0) * w.tune.max_speed / ship_jam_factor(w)
+	accel: f32 = hand ? w.tune.hand_accel : SHIP_ACCEL
+	brake: f32 = hand ? w.tune.hand_brake : SHIP_BRAKE
 	if target_speed > s.speed {
-		s.speed = min(s.speed + SHIP_ACCEL * dt, target_speed)
+		s.speed = min(s.speed + accel * dt, target_speed)
 	} else {
-		s.speed = max(s.speed - SHIP_BRAKE * dt, target_speed)
+		s.speed = max(s.speed - brake * dt, target_speed)
 	}
 
 	// The wind layer nearest to the ship's altitude, the forecast hour from the simulated time.
@@ -244,10 +253,9 @@ ship_jam_factor :: proc(w: ^World) -> f32 {
 // altitude hold. Wind is the forecast at the car's layer, weaker near the ground, with gusts as smooth
 // turbulence. Flying down onto the ground or a roof lands it on its wheels (DRIVE_*); it is pushed out of walls
 // (collide_car), losing the speed into the wall. Our values. Deterministic: same inputs, same path.
-FREE_ACCEL :: 8.0 // m/s^2 at full throttle, 0-100 km/h in ~3.6 s
+FREE_ACCEL :: 10.0 // m/s^2 at full throttle, 0-100 km/h in ~2.8 s, 90 % of top speed after ~21 s
 FREE_BRAKE :: 11.0
 FREE_REVERSE_MS :: 8.0
-FREE_DRAG :: FREE_ACCEL / (SHIP_MAX_SPEED * SHIP_MAX_SPEED) // per m
 FREE_GRIP :: 2.4 // 1/s, how fast sideways air speed dies out
 FREE_TURN_SLOW :: 1.4 // rad/s turn rate when hovering
 FREE_TURN_FAST :: 0.55 // rad/s at top speed
@@ -307,7 +315,8 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 		target := clamp(v * math.tan(steer) / DRIVE_WHEELBASE_M, -limit, limit)
 		s.turn_rate += (target - s.turn_rate) * min(dt / DRIVE_STEER_SMOOTH_S, 1)
 	} else {
-		max_turn := FREE_TURN_SLOW + (FREE_TURN_FAST - FREE_TURN_SLOW) * clamp(speed / SHIP_MAX_SPEED, 0, 1)
+		max_turn :=
+			FREE_TURN_SLOW + (FREE_TURN_FAST - FREE_TURN_SLOW) * clamp(speed / w.tune.max_speed, 0, 1)
 		s.turn_rate += (c.turn * max_turn - s.turn_rate) * min(dt / FREE_TURN_SMOOTH_S, 1)
 	}
 	s.heading = math.mod(s.heading + s.turn_rate * dt + math.TAU, math.TAU)
@@ -333,14 +342,16 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 	across := linalg.dot(air, right)
 	thrust: f32
 	if c.throttle > 0 {
-		thrust = c.throttle * FREE_ACCEL
+		thrust = c.throttle * w.tune.free_accel
 	} else if c.throttle < 0 {
 		// Brake while moving forward, then reverse slowly.
 		thrust =
-			along > 0.5 ? c.throttle * FREE_BRAKE : (along > -FREE_REVERSE_MS ? c.throttle * FREE_ACCEL * 0.4 : 0)
+			along > 0.5 ? c.throttle * FREE_BRAKE : (along > -FREE_REVERSE_MS ? c.throttle * w.tune.free_accel * 0.4 : 0)
 	}
-	a_along := thrust - FREE_DRAG * along * abs(along)
-	a_across := -FREE_GRIP * across - FREE_DRAG * across * abs(across)
+	// Quadratic air drag (per m), so full thrust ends at the top speed.
+	drag := w.tune.free_accel / (w.tune.max_speed * w.tune.max_speed)
+	a_along := thrust - drag * along * abs(along)
+	a_across := -FREE_GRIP * across - drag * across * abs(across)
 	acc := fwd * a_along + right * a_across + turb.xy
 	acc_z := c.climb * FREE_CLIMB_ACCEL - FREE_VZ_DAMP * s.vel.z + turb.z
 	// In a traffic jam the car is held back like the router expects (traffic_factor).

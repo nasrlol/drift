@@ -64,7 +64,7 @@ Shared signatures for all of this: notes.txt "DESIGN INTERFACES". nasr builds th
 [x] map labels: city + river names, motorway shields (OSM ref, e.g. E40), hub markers, start ring, dest pin
     labels.odin: river names + motorway shields; hub names with the markers; start ring + pin in nav_ui.
 [x] names: only the real names in belgium.bin (cities, hubs, rivers, motorways), never the doc's examples
-[x] loading screen: night sky, 38 px cyan ring (0.9 s per turn), fades out in 0.4 s
+[x] loading screen: removed (nasr, 2026-11-22), it was a fixed timer over an already drawn frame
 later:
 [ ] bake 3 detail levels + 10 km cell grid, draw only visible cells
 [x] 3D terrain view

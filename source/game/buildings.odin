@@ -8,12 +8,18 @@ import rl "vendor:raylib"
 
 // 3D buildings (Lars, 2026-11-21: "ik wil 3d gebouwen"): the OSM buildings within 1 km of each city, baked by
 // tools/bake_buildings into assets/buildings.bin.gz (format there). One mesh per city: the walls and a flat
-// roof, raised from the ground plane to -height (world z points down). They grow out of the ground while the
-// camera zooms in (BUILDINGS_ZOOM_0 to _1), so the country view stays flat and light.
+// roof, raised from the ground plane to -height (world z points down). They grow out of the ground by their size
+// on the screen (BUILDINGS_FADE_PX_0 to _1), so the country view stays flat and light.
 BUILDINGS_DATA :: #load("../../assets/buildings.bin.gz")
 BUILDINGS_MAX_CITIES :: 32
-BUILDINGS_ZOOM_0 :: 3.5
-BUILDINGS_ZOOM_1 :: 5.0
+// A building smaller than a pixel covers a pixel in one frame and misses it in the next: thousands of them
+// sparkled while the camera zoomed (zoom 4 and 5: 0.09 % of the pixels flickered, measured with --script). So
+// the vertex shader measures each one on the screen, by its depth: below FADE_PX_0 it is flat and has the
+// color of the ground under it (what the map shows there anyway), at FADE_PX_1 its own height and colors.
+// The size measured is the smallest thing this shader draws, the narrowest generated building (towns.odin).
+BUILDINGS_FADE_PX_0 :: 1.5
+BUILDINGS_FADE_PX_1 :: 6.0
+BUILDINGS_FEATURE_KM :: 2 * TOWN_HALF_MIN * TOWN_LOT_M / 1000
 // Cities further than this from the camera target (km, plus the view's own size) are not drawn.
 BUILDINGS_CULL_KM :: 6.0
 BUILDINGS_POS_UNIT_M :: 0.5
@@ -27,14 +33,15 @@ Buildings :: struct {
 	count:    int,
 	material: rl.Material,
 	loc:      struct {
-		roof, wall, tree, fog_c, fog_r, scale: i32,
+		roof, wall, tree, city, park, fog_c, fog_r, fade_px, feature_px: i32,
 	},
 	ready:    bool,
 }
 
 // vertexColor.r = light (0..1), .g = 1 on the roof, .b = 1 for a tree clump (nature.odin, same shader). The roof
-// and wall colors come from the palette (or the street view's look) as uniforms. height_scale squashes the
-// buildings while they grow in; fog as LINE_VS.
+// and wall colors come from the palette as uniforms, city and park are the ground under a building and a clump.
+// feature_px: the size of BUILDINGS_FEATURE_KM on the screen at a view depth (clip w) of 1 km, so w gives its
+// size at a vertex; fade_px as BUILDINGS_FADE_PX_0 and _1. Fog as LINE_VS.
 BUILDINGS_VS :: `#version 330
 in vec3 vertexPosition;
 in vec4 vertexColor;
@@ -42,14 +49,21 @@ uniform mat4 mvp;
 uniform vec3 roof;
 uniform vec3 wall;
 uniform vec3 tree;
+uniform vec3 city;
+uniform vec3 park;
 uniform vec3 fog_color;
 uniform vec2 fog_range;
-uniform float height_scale;
+uniform vec2 fade_px;
+uniform float feature_px;
 out vec4 fragColor;
 void main() {
-	vec4 p = mvp * vec4(vertexPosition.xy, vertexPosition.z * height_scale, 1.0);
+	float w = (mvp * vec4(vertexPosition.xy, 0.0, 1.0)).w;
+	float grow = smoothstep(fade_px.x, fade_px.y, feature_px / max(w, 1e-6));
+	vec4 p = mvp * vec4(vertexPosition.xy, vertexPosition.z * grow, 1.0);
 	gl_Position = p;
-	vec3 c = (vertexColor.b > 0.5 ? tree : mix(wall, roof, vertexColor.g)) * vertexColor.r;
+	bool is_tree = vertexColor.b > 0.5;
+	vec3 c = (is_tree ? tree : mix(wall, roof, vertexColor.g)) * vertexColor.r;
+	c = mix(is_tree ? park : city, c, grow);
 	float f = clamp((p.w - fog_range.x) / max(fog_range.y - fog_range.x, 1e-3), 0.0, 1.0);
 	fragColor = vec4(mix(c, fog_color, f * f), 1.0);
 }
@@ -226,45 +240,63 @@ buildings_build :: proc(w: ^World) {
 	sh := rl.LoadShaderFromMemory(BUILDINGS_VS, BUILDINGS_FS)
 	b.material.shader = sh
 	b.loc = {
-		roof  = rl.GetShaderLocation(sh, "roof"),
-		wall  = rl.GetShaderLocation(sh, "wall"),
-		tree  = rl.GetShaderLocation(sh, "tree"),
-		fog_c = rl.GetShaderLocation(sh, "fog_color"),
-		fog_r = rl.GetShaderLocation(sh, "fog_range"),
-		scale = rl.GetShaderLocation(sh, "height_scale"),
+		roof       = rl.GetShaderLocation(sh, "roof"),
+		wall       = rl.GetShaderLocation(sh, "wall"),
+		tree       = rl.GetShaderLocation(sh, "tree"),
+		fog_c      = rl.GetShaderLocation(sh, "fog_color"),
+		city       = rl.GetShaderLocation(sh, "city"),
+		park       = rl.GetShaderLocation(sh, "park"),
+		fog_r      = rl.GetShaderLocation(sh, "fog_range"),
+		fade_px    = rl.GetShaderLocation(sh, "fade_px"),
+		feature_px = rl.GetShaderLocation(sh, "feature_px"),
 	}
 	b.ready = true
 	logf(w, "buildings", "%d buildings in %d cities", total_b, b.count)
 }
 
-// Inside BeginMode3D, after the roads. fog as the lines (game.odin passes the same range), height_scale squashes
-// the heights (1 / BUILDINGS_HEIGHT_X is real height), cities within reach (km) of target are drawn where place
-// puts them (a city mesh is relative to its origin). look gives the roof, wall, tree and fog colors.
+// The size of BUILDINGS_FEATURE_KM on the screen at a view depth of 1 km (px), and whether the nearest ground in
+// view shows it at BUILDINGS_FADE_PX_0 or more, so anything of the buildings' shader is seen. The nearest ground
+// is the middle of the bottom screen edge, at depth dist cos(tilt) cos(fov / 2) / cos(tilt - fov / 2).
+buildings_feature_px :: proc(c: ^Cam) -> (px: f32, shown: bool) {
+	dist := linalg.length(c.view.position - c.view.target)
+	px = BUILDINGS_FEATURE_KM * c.px_per_km * dist
+	half_fov := f32(CAM_FOV_DEG) * math.RAD_PER_DEG / 2
+	near := dist * math.cos(c.pose.tilt) * math.cos(half_fov) / max(math.cos(c.pose.tilt - half_fov), 1e-3)
+	return px, px / max(near, 1e-6) >= BUILDINGS_FADE_PX_0
+}
+
+// Inside BeginMode3D, after the roads. fog as the lines (game.odin passes the same range), feature_px from
+// buildings_feature_px, cities within reach (km) of target are drawn where place puts them (a city mesh is
+// relative to its origin). look gives the roof, wall, tree and fog colors and the ground under them.
 Buildings_Look :: struct {
-	roof, wall, tree, fog: [3]f32,
+	roof, wall, tree, city, park, fog: [3]f32,
 }
 
 buildings_draw :: proc(
 	w: ^World,
 	fog: [2]f32,
-	height_scale: f32,
+	feature_px: f32,
 	target: [2]f32,
 	reach: f32,
 	place: Placement,
 	look: Buildings_Look,
 ) {
 	b := &w.buildings
-	if !b.ready || height_scale <= 0 do return
-	grow := height_scale
-	roof, wall, tree, horizon := look.roof, look.wall, look.tree, look.fog
+	if !b.ready do return
+	roof, wall, tree, city, park, horizon := look.roof, look.wall, look.tree, look.city, look.park, look.fog
 	fog := fog
+	fade := [2]f32{BUILDINGS_FADE_PX_0, BUILDINGS_FADE_PX_1}
+	feature_px := feature_px
 	sh := b.material.shader
 	rl.SetShaderValue(sh, b.loc.roof, &roof, .VEC3)
 	rl.SetShaderValue(sh, b.loc.wall, &wall, .VEC3)
 	rl.SetShaderValue(sh, b.loc.tree, &tree, .VEC3)
+	rl.SetShaderValue(sh, b.loc.city, &city, .VEC3)
+	rl.SetShaderValue(sh, b.loc.park, &park, .VEC3)
 	rl.SetShaderValue(sh, b.loc.fog_c, &horizon, .VEC3)
 	rl.SetShaderValue(sh, b.loc.fog_r, &fog, .VEC2)
-	rl.SetShaderValue(sh, b.loc.scale, &grow, .FLOAT)
+	rl.SetShaderValue(sh, b.loc.fade_px, &fade, .VEC2)
+	rl.SetShaderValue(sh, b.loc.feature_px, &feature_px, .FLOAT)
 	for i in 0 ..< b.count {
 		d := b.origins[i] - target
 		if math.sqrt(d.x * d.x + d.y * d.y) > reach do continue
@@ -279,6 +311,8 @@ buildings_map_look :: proc(w: ^World) -> Buildings_Look {
 		roof = rl.ColorNormalize(pal.roof).rgb,
 		wall = rl.ColorNormalize(pal.wall).rgb,
 		tree = rl.ColorNormalize(pal.tree).rgb,
+		city = rl.ColorNormalize(pal.city).rgb,
+		park = rl.ColorNormalize(pal.park).rgb,
 		fog = rl.ColorNormalize(pal.horizon).rgb,
 	}
 }

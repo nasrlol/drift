@@ -19,15 +19,15 @@ LAYERS_PANEL_W :: 300
 MAP_BUTTON :: 48
 MAP_BUTTON_GAP :: 10
 HUB_PICK_PX :: 16 // a click this close to a hub marker opens its menu
-CAR_PICKER_H :: 56
 
 Layers :: struct {
-	show_wind:   bool, // off by default (nasr, 2026-11-21), the other layers are on
-	hide_gusts:  bool,
-	hide_no_fly: bool,
-	hide_solar:  bool,
-	terrain:     bool, // map type tile "3D terrain": relief shading under the map
-	wind_layer:  int, // index in LAYER_ALT for the wind trails and the gust layer
+	show_wind:    bool, // off by default (nasr, 2026-11-21), the other layers are on
+	hide_gusts:   bool,
+	hide_no_fly:  bool,
+	hide_solar:   bool,
+	hide_borders: bool,
+	terrain:      bool, // map type tile "3D terrain": relief shading under the map
+	wind_layer:   int, // index in LAYER_ALT for the wind trails and the gust layer
 }
 
 Plan_Field :: enum u8 {
@@ -54,6 +54,7 @@ Plan :: struct {
 	query:            [32]u8,
 	query_len:        int,
 	departure_open:   bool,
+	car_open:         bool, // the car skin list under the car row
 	layers_open:      bool,
 	hub_menu:         int, // hub id + 1 of the open menu on the map, 0 = closed
 	scroll:           f32, // route list scroll in px
@@ -121,11 +122,6 @@ format_duration :: proc(buf: []u8, minutes: f32) -> string {
 }
 
 MODE_ORDER :: [3]Route_Mode{.Greenest, .Fastest, .Calmest}
-MODE_ICONS :: [Route_Mode]Icon {
-	.Fastest  = .Bolt,
-	.Greenest = .Leaf,
-	.Calmest  = .Waves,
-}
 MODE_LABELS :: [Route_Mode]string {
 	.Fastest  = "Fastest",
 	.Greenest = "Greenest",
@@ -257,9 +253,9 @@ plan_ui :: proc(w: ^World) {
 	buf: [96]u8
 	p.nudge_t = max(p.nudge_t - frame_time(w), 0)
 
-	// Card A: from / to, mode chips, departure. No brand row (Lars, 2026-11-21: the logo goes), no day / night
-	// button (light only).
-	a := rl.Rectangle{panel.x, panel.y, panel.width, 252 + CAR_PICKER_H + 12}
+	// Card A: from / to, departure, car. No brand row (Lars, 2026-11-21: the logo goes), no day / night button
+	// (light only), no mode chips (nasr, 2026-11-21: the route rows in card B already pick the mode).
+	a := rl.Rectangle{panel.x, panel.y, panel.width, 16 + 108 + 50 + 38 + 12}
 	ui_card(w, a)
 	x := a.x + 16
 	y := a.y + 16
@@ -286,6 +282,7 @@ plan_ui :: proc(w: ^World) {
 			p.editing = field
 			p.query_len = 0
 			p.departure_open = false
+			p.car_open = false
 		}
 	}
 	if ui_round_button(w, {a.x + a.width - 16 - 40, y + 26, 40, 40}, .Swap, false) {
@@ -293,17 +290,6 @@ plan_ui :: proc(w: ^World) {
 		p.has_from, p.has_to = p.has_to, p.has_from
 	}
 	y += 96 + 12
-
-	// Mode chips with the travel time of each route.
-	chip_w := (a.width - 32 - 16) / 3
-	icons := MODE_ICONS
-	labels := MODE_LABELS
-	for mode, i in MODE_ORDER {
-		r := &w.routes[mode]
-		top := r.ok ? format_duration(buf[:], r.sum.minutes) : "--"
-		if ui_chip(w, {x + f32(i) * (chip_w + 8), y, chip_w, 66}, icons[mode], top, labels[mode], p.mode == mode) do p.mode = mode
-	}
-	y += 66 + 12
 
 	// Departure: clock + "Leave now, 14:00" .. "+8 h", opens a list.
 	dep := rl.Rectangle{x, y, a.width - 32, 38}
@@ -317,13 +303,28 @@ plan_ui :: proc(w: ^World) {
 		ui_focus_ring(w, id, dep, 8)
 		if fired {
 			p.departure_open = !p.departure_open
+			p.car_open = false
 			p.editing = .None
 		}
 	}
 	y += 38 + 12
 
-	// The car: turning preview + skin segment (car_models.odin).
-	car_skin_picker(w, {x, y, a.width - 32, CAR_PICKER_H})
+	// Car: the chosen skin, opens the list of skins (car_models.odin).
+	car := rl.Rectangle{x, y, a.width - 32, 38}
+	skin_names := CAR_SKIN_NAMES
+	{
+		id, hot, fired := ui_widget(w, car)
+		round_rect(car, 8, hot ? pal.surface_3 : pal.surface_2)
+		ui_text(w, {car.x + 12, car.y + 10}, "Car", .Roboto_400, 14, pal.text_2)
+		ui_text(w, {car.x + 52, car.y + 10}, skin_names[w.car_skin], .Roboto_400, 14, pal.text)
+		ui_icon(w, .Expand, {car.x + car.width - 18, car.y + 19}, 20, pal.text_2)
+		ui_focus_ring(w, id, car, 8)
+		if fired {
+			p.car_open = !p.car_open
+			p.departure_open = false
+			p.editing = .None
+		}
+	}
 
 	// Card B: route rows, wind note, actions. Fills the rest of the panel, the list scrolls.
 	b := rl.Rectangle {
@@ -352,6 +353,7 @@ plan_ui :: proc(w: ^World) {
 			i32(routes_box.width),
 			i32(routes_box.height),
 		)
+		labels := MODE_LABELS
 		for mode, i in MODE_ORDER {
 			r := &w.routes[mode]
 			row := rl.Rectangle{b.x, routes_box.y + f32(i) * ROW_H - p.scroll, b.width, ROW_H}
@@ -538,6 +540,37 @@ plan_ui :: proc(w: ^World) {
 		w.ui.in_popup = false
 		if rl.IsMouseButtonPressed(.LEFT) && !rl.CheckCollisionPointRec(rl.GetMousePosition(), list) && !rl.CheckCollisionPointRec(rl.GetMousePosition(), dep) do p.departure_open = false
 	}
+	if p.car_open {
+		ROW :: 36
+		list := rl.Rectangle{car.x, car.y + car.height + 4, car.width, len(Car_Skin) * ROW + 8}
+		w.ui.popup = list
+		w.ui.in_popup = true
+		ui_shadow(w, list, 12)
+		round_rect(list, 12, pal.surface)
+		for name, skin in skin_names {
+			row := rl.Rectangle{list.x, list.y + 4 + f32(skin) * ROW, list.width, ROW}
+			id, hot, fired := ui_widget(w, row)
+			if hot || skin == w.car_skin do rl.DrawRectangleRec(row, pal.surface_2)
+			ui_text(
+				w,
+				{row.x + 16, row.y + 9},
+				name,
+				.Roboto_400,
+				14,
+				skin == w.car_skin ? pal.accent : pal.text,
+			)
+			ui_focus_ring(w, id, row, 0)
+			if fired {
+				w.car_skin = skin
+				car_skin_save(w)
+				logf(w, "car", "skin %s", name)
+				p.car_open = false
+			}
+		}
+		w.ui.in_popup = false
+		m := rl.GetMousePosition()
+		if rl.IsMouseButtonPressed(.LEFT) && !rl.CheckCollisionPointRec(m, list) && !rl.CheckCollisionPointRec(m, car) do p.car_open = false
+	}
 	plan_hub_menu(w)
 }
 
@@ -633,9 +666,9 @@ plan_map_controls :: proc(w: ^World) {
 		extra: f32 = PROFILING ? 32 : 0
 		r := rl.Rectangle {
 			layers.x - 12 - LAYERS_PANEL_W,
-			layers.y - 250 - extra,
+			layers.y - 282 - extra,
 			LAYERS_PANEL_W,
-			380 + extra,
+			412 + extra,
 		}
 		ui_card(w, r)
 		y := r.y + 16
@@ -651,7 +684,7 @@ plan_map_controls :: proc(w: ^World) {
 		heading(w, {r.x + 16, y}, "LAYERS")
 		y += 24
 		// show: the flag means shown (zero = off by default) instead of hidden (zero = on).
-		toggles := [4]struct {
+		toggles := [5]struct {
 			label: string,
 			flag:  ^bool,
 			show:  bool,
@@ -660,6 +693,7 @@ plan_map_controls :: proc(w: ^World) {
 			{"Gust risk", &p.layers.hide_gusts, false},
 			{"No-fly zones", &p.layers.hide_no_fly, false},
 			{"Solar", &p.layers.hide_solar, false},
+			{"Borders", &p.layers.hide_borders, false},
 		}
 		for t in toggles {
 			ui_text(w, {r.x + 16, y + 2}, t.label, .Roboto_400, 14, pal.text)
