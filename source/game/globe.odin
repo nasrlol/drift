@@ -8,11 +8,15 @@ import rl "vendor:raylib"
 
 EARTH_RADIUS_KM :: 6371.0
 // Belgium centre (MAP_W_KM / 2, MAP_H_KM / 2) in the bake projection (notes.txt).
-BELGIUM_LAT0 :: 51.56 - (MAP_H_KM * 0.5) / 111.32
-BELGIUM_LON0 :: 2.38 + (MAP_W_KM * 0.5) / (111.32 * 0.63607822) // cos(50.5 deg)
+BELGIUM_LAT0 :: MAP_LAT0 - (MAP_H_KM * 0.5) / KM_PER_DEG
+BELGIUM_LON0 :: MAP_LON0 + (MAP_W_KM * 0.5) / (KM_PER_DEG * MAP_COS_LAT)
+// Round Belgium the globe lies flat in the map's own projection, so its coastlines, borders and land meet the
+// flat map exactly; from GLOBE_FLAT_DEG to GLOBE_ROUND_DEG away from Belgium's centre it bends into the sphere.
+GLOBE_FLAT_DEG :: 4.0
+GLOBE_ROUND_DEG :: 20.0
 
 WORLD_MAGIC :: 0x444C5257 // "WRLD"
-WORLD_VERSION :: 1
+WORLD_VERSION :: 2
 WORLD_MASK_W :: 2048
 WORLD_MASK_H :: 1024
 
@@ -22,6 +26,9 @@ World_Header :: struct {
 	magic, version:                      u32,
 	mask_w, mask_h:                      u32,
 	line_count, point_count, city_count: u32,
+	region_w, region_h:                  u32,
+	region_lon0, region_lat_top:         f32,
+	region_deg_w, region_deg_h:          f32,
 }
 
 World_Line :: struct {
@@ -36,6 +43,9 @@ World_City :: struct {
 
 World_Map :: struct {
 	mask:   []u8,
+	region: []u8, // finer land mask round Belgium (tools/bake_world), header fields below
+	region_w, region_h: int,
+	region_rect: [4]f32, // lon0, lat_top, deg_w, deg_h
 	lines:  []World_Line,
 	points: [][2]f32,
 	cities: []World_City,
@@ -46,6 +56,8 @@ Globe_GPU :: struct {
 	sphere:      rl.Mesh,
 	lines:       rl.Mesh,
 	mask_tex:    rl.Texture2D,
+	region_tex:  rl.Texture2D,
+	loc_region:  i32,
 	material:    rl.Material,
 	loc_ocean:   i32,
 	loc_land:    i32,
@@ -76,6 +88,8 @@ in vec2 v_uv;
 in vec3 v_world;
 in vec3 v_norm;
 uniform sampler2D texture0;
+uniform sampler2D texture1; // the finer land mask round Belgium
+uniform vec4 u_region; // lon0, lat_top, deg_w, deg_h
 uniform vec3 u_ocean;
 uniform vec3 u_land;
 uniform vec3 u_grid;
@@ -85,6 +99,13 @@ uniform float u_fade;
 out vec4 finalColor;
 void main() {
 	float land = texture(texture0, v_uv).r;
+	vec2 ll = vec2(v_uv.x * 360.0 - 180.0, 90.0 - v_uv.y * 180.0);
+	vec2 r = vec2((ll.x - u_region.x) / u_region.z, (u_region.y - ll.y) / u_region.w);
+	if (u_region.z > 0.0 && r.x > 0.0 && r.x < 1.0 && r.y > 0.0 && r.y < 1.0) {
+		// Fade to the world mask over the outer 10 % so the edge of the finer mask does not show.
+		vec2 e = min(r, 1.0 - r) / 0.1;
+		land = mix(land, texture(texture1, r).r, clamp(min(e.x, e.y), 0.0, 1.0));
+	}
 	vec3 col = mix(u_ocean, u_land, smoothstep(0.35, 0.65, land));
 
 	// Subtle 15-degree graticule when zoomed out on the globe.
@@ -119,6 +140,21 @@ globe_normal :: proc(lon_deg, lat_deg: f32) -> [3]f32 {
 	return {cp * sd, sp0 * cp * cd - cp0 * sp, -(cp0 * cp * cd + sp0 * sp)}
 }
 
+// Point at lon / lat, depth km under the map plane: the map's flat projection round Belgium, the sphere
+// further out, blended between GLOBE_FLAT_DEG and GLOBE_ROUND_DEG.
+globe_pos :: proc(lon_deg, lat_deg, depth: f32) -> [3]f32 {
+	n := globe_normal(lon_deg, lat_deg)
+	round := earth_centre() + n * (EARTH_RADIUS_KM - depth)
+	flat := [3]f32 {
+		(lon_deg - MAP_LON0) * KM_PER_DEG * MAP_COS_LAT,
+		(MAP_LAT0 - lat_deg) * KM_PER_DEG,
+		depth,
+	}
+	away := math.acos(clamp(-n.z, -1, 1)) * math.DEG_PER_RAD
+	t := math.smoothstep(f32(GLOBE_FLAT_DEG), f32(GLOBE_ROUND_DEG), away)
+	return linalg.lerp(flat, round, t)
+}
+
 load_world :: proc() -> (wm: World_Map, ok: bool) {
 	data := WORLD_DATA
 	if len(data) < size_of(World_Header) do return {}, false
@@ -141,6 +177,9 @@ load_world :: proc() -> (wm: World_Map, ok: bool) {
 
 	mask_bytes :: (WORLD_MASK_W * WORLD_MASK_H) / 8
 	wm.mask = take(data, &off, mask_bytes, u8, &bad)
+	wm.region_w, wm.region_h = int(h.region_w), int(h.region_h)
+	wm.region_rect = {h.region_lon0, h.region_lat_top, h.region_deg_w, h.region_deg_h}
+	wm.region = take(data, &off, u32(wm.region_w * wm.region_h / 8), u8, &bad)
 	wm.lines = take(data, &off, h.line_count, World_Line, &bad)
 	wm.points = take(data, &off, h.point_count, [2]f32, &bad)
 	wm.cities = take(data, &off, h.city_count, World_City, &bad)
@@ -171,11 +210,28 @@ globe_build :: proc(w: ^World) {
 	rl.SetTextureFilter(g.mask_tex, .BILINEAR)
 	rl.SetTextureWrap(g.mask_tex, .REPEAT)
 
+	wm := &w.world_map
+	if len(wm.region) > 0 {
+		rp := make([]u8, wm.region_w * wm.region_h, context.temp_allocator)
+		for i in 0 ..< len(rp) {
+			if (wm.region[i >> 3] & (1 << u32(i & 7))) != 0 do rp[i] = 255
+		}
+		rimg := rl.Image {
+			data    = raw_data(rp),
+			width   = i32(wm.region_w),
+			height  = i32(wm.region_h),
+			mipmaps = 1,
+			format  = .UNCOMPRESSED_GRAYSCALE,
+		}
+		g.region_tex = rl.LoadTextureFromImage(rimg)
+		rl.SetTextureFilter(g.region_tex, .BILINEAR)
+		rl.SetTextureWrap(g.region_tex, .CLAMP)
+	}
+
 	// UV sphere with radius slightly below z = 0 so Belgium's flat map sits cleanly above it.
 	SLICES :: 128
 	STACKS :: 64
 	SPHERE_R :: EARTH_RADIUS_KM - 0.6
-	ec := earth_centre()
 	vcount :: SLICES * STACKS * 6
 	spos := make([][3]f32, vcount, context.temp_allocator)
 	suv := make([][2]f32, vcount, context.temp_allocator)
@@ -208,7 +264,7 @@ globe_build :: proc(w: ^World) {
 				{n10, {u1, v0}},
 			}
 			for t in tris {
-				spos[vi] = ec + t.n * SPHERE_R
+				spos[vi] = globe_pos(-180 + t.uv.x * 360, 90 - t.uv.y * 180, EARTH_RADIUS_KM - SPHERE_R)
 				suv[vi] = t.uv
 				snorm[vi] = t.n
 				vi += 1
@@ -231,6 +287,8 @@ globe_build :: proc(w: ^World) {
 	g.material = rl.LoadMaterialDefault()
 	g.material.shader = shader
 	g.material.maps[rl.MaterialMapIndex.ALBEDO].texture = g.mask_tex
+	g.material.maps[rl.MaterialMapIndex.METALNESS].texture = g.region_tex
+	g.loc_region = rl.GetShaderLocation(shader, "u_region")
 	g.loc_ocean = rl.GetShaderLocation(shader, "u_ocean")
 	g.loc_land = rl.GetShaderLocation(shader, "u_land")
 	g.loc_grid = rl.GetShaderLocation(shader, "u_grid")
@@ -255,8 +313,8 @@ globe_build :: proc(w: ^World) {
 			alpha: u8 = l.kind == 0 ? 210 : 120
 			c := [4]u8{u8(Map_Kind.Border), 0, 0, alpha}
 			for k in 1 ..< len(pts) {
-				a := ec + globe_normal(pts[k - 1].x, pts[k - 1].y) * LINE_R
-				b := ec + globe_normal(pts[k].x, pts[k].y) * LINE_R
+				a := globe_pos(pts[k - 1].x, pts[k - 1].y, EARTH_RADIUS_KM - LINE_R)
+				b := globe_pos(pts[k].x, pts[k].y, EARTH_RADIUS_KM - LINE_R)
 				for m in li ..< li + 6 {
 					lpos[m] = a
 					lother[m] = b
@@ -275,6 +333,7 @@ globe_unload :: proc(g: ^Globe_GPU) {
 	rl.UnloadMesh(g.sphere)
 	if g.lines.vertexCount > 0 do rl.UnloadMesh(g.lines)
 	rl.UnloadTexture(g.mask_tex)
+	if g.region_tex.id != 0 do rl.UnloadTexture(g.region_tex)
 	rl.UnloadShader(g.material.shader)
 	g^ = {}
 }
@@ -312,6 +371,9 @@ globe_draw :: proc(w: ^World) {
 	rl.SetShaderValue(sh, g.loc_atmo, &atmo, .VEC3)
 	rl.SetShaderValue(sh, g.loc_cam_pos, &cam_pos, .VEC3)
 	rl.SetShaderValue(sh, g.loc_fade, &fade, .FLOAT)
+	region := w.world_map.region_rect
+	if g.region_tex.id == 0 do region = {}
+	rl.SetShaderValue(sh, g.loc_region, &region, .VEC4)
 	rl.DrawMesh(g.sphere, g.material, rl.Matrix(1))
 }
 
@@ -332,7 +394,6 @@ globe_labels_draw :: proc(w: ^World) {
 	if z > -1.6 do max_rank = 4
 
 	pal := palette(w)
-	ec := earth_centre()
 	cam_pos := w.cam.view.position
 	placed := make([dynamic]rl.Rectangle, 0, 64, context.temp_allocator)
 	fade := clamp((-z - 0.8) / 0.8, 0, 1)
@@ -342,7 +403,7 @@ globe_labels_draw :: proc(w: ^World) {
 	for &c in w.world_map.cities {
 		if c.rank > max_rank do break
 		n := globe_normal(c.lon, c.lat)
-		pos := ec + n * EARTH_RADIUS_KM
+		pos := globe_pos(c.lon, c.lat, 0)
 		if linalg.dot(n, cam_pos - pos) <= 0 do continue
 		px, ok := cam_to_screen(w, {pos.x, pos.y, -pos.z * 1000})
 		if !ok do continue

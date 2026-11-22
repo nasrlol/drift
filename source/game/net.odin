@@ -43,6 +43,7 @@ TIME_MAX :: 4102444800
 MAP_LON0 :: 2.38
 MAP_LAT0 :: 51.56
 KM_PER_DEG :: 111.32
+MAP_COS_LAT :: 0.63607822 // cos(50.5 deg), one east-west scale for the whole map
 
 IDENTITY_PATH :: "cache/identity.key"
 SNAPSHOT_PATH :: "cache/weather.snap"
@@ -84,7 +85,7 @@ Fetch :: struct {
 fetch_weather :: proc(out: ^Weather, scratch: mem.Allocator, cancel: ^bool) -> bool {
 	url: cstring
 	{
-		cos_lat := math.cos(50.5 * math.RAD_PER_DEG)
+		cos_lat: f64 = MAP_COS_LAT
 		b := strings.builder_make(scratch)
 		strings.write_string(&b, OPEN_METEO_URL + "?latitude=")
 		for cell in 0 ..< WEATHER_CELLS {

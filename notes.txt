@@ -322,6 +322,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   simulation stay untouched on top. Night/day ocean + land + 15-deg graticule + Fresnel limb
                   atmosphere shader, coastlines/borders via LINE_VS, world city labels when zoom < -0.8.
                   Camera (camera.odin): ZOOM_MIN -6.2 orbits the globe via Cam_Pose.globe_rot (lon/lat rad).
+                  Alignment with the flat map (andrei, branch andrei/globe-align): globe_pos lays the sphere, its lines
+                  and city labels flat in the map's own projection (MAP_LON0 / MAP_LAT0 / KM_PER_DEG / MAP_COS_LAT)
+                  up to GLOBE_FLAT_DEG 4 from Belgium's centre and bends into the sphere by GLOBE_ROUND_DEG 20, so
+                  coastlines and borders meet belgium.bin (left: Natural Earth 1:50m generalisation, ~1 km). world.bin
+                  version 2 adds a coastal land mask lon 1 .. 5.5, lat 50.9 .. 52.5 at 1/80 deg (Zeeland, Scheldt),
+                  sampled by GLOBE_FS inside u_region and faded into the world mask over its outer 10 %.
   map.odin        same structs as the bake tool (keep in sync). #load embeds belgium.bin,
                   load_map() slices it, no parsing. Re-pointed in game_hot_reloaded.
                   Hubs are copied into a fixed array w.m.hubs[:w.m.hub_count], hub id = index.
