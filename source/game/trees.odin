@@ -40,16 +40,18 @@ Tree_Tile :: struct {
 }
 
 Trees :: struct {
-	tiles:      [TREES_SLOTS]Tree_Tile,
+	tiles:              [TREES_SLOTS]Tree_Tile,
 	// Park triangles per TREES_PARK_CELL_KM cell (index of the first point in w.m.area_points), perm arena.
-	park_cells: []u32,
-	park_items: []u32,
-	near:       [TREE_KINDS]rl.Mesh, // height 1
-	far:        [2]rl.Mesh, // a lumpy blob, a cone
-	lit:        rl.Material, // STREET_TREE_VS / STREET_FS, instanced
-	depth:      rl.Material, // instanced depth for the shadow pass
-	lit_loc:    Street_Light_Locs,
-	ready:      bool,
+	park_cells:         []u32,
+	park_items:         []u32,
+	near:               [TREE_KINDS]rl.Mesh, // height 1
+	far:                [2]rl.Mesh, // a lumpy blob, a cone
+	lit:                rl.Material, // STREET_TREE_VS / STREET_FS, instanced
+	depth:              rl.Material, // instanced depth for the shadow pass
+	lit_loc:            Street_Light_Locs,
+	last_rural_trees:   bool,
+	last_rural_density: f32,
+	ready:              bool,
 }
 
 // The tree vertex shader: the instance transform places a height-1 tree; v_lh is the tree's position (a hash for
@@ -425,6 +427,36 @@ trees_build_tile :: proc(w: ^World, t: ^Tree_Tile, lo, hi: [2]f32) {
 			add(w, t, lo, hi, p, 5 + 7 * nature_rand(&seed), nature_rand(&seed) * math.TAU, kind, 1.5)
 		}
 	}
+
+	// Sparse hedgerow copses on unmapped rural countryside (strictly outside cities, towns, parks and water).
+	if w.rural_edit.trees && w.rural_edit.tree_per_km2 > 0 {
+		rseed := hash_u32(u32(t.key.x) * 92821 ~ u32(t.key.y) * 68917 ~ 0x7a31)
+		n := int((hi.x - lo.x) * (hi.y - lo.y) * w.rural_edit.tree_per_km2 + nature_rand(&rseed))
+		for i := 0; i < n; {
+			anchor := lo + {nature_rand(&rseed), nature_rand(&rseed)} * (hi - lo)
+			if !belgium_inside(w, anchor.x, anchor.y) ||
+			   urban_at(w, anchor) ||
+			   height_at(w, anchor.x, anchor.y) <= 0.2 {
+				i += 1
+				continue
+			}
+			if kind, has := solarpunk_area_at(w, anchor); has && kind != .Farmland {
+				i += 1
+				continue
+			}
+			cluster := min(1 + int(nature_rand(&rseed) * 3), n - i)
+			for _ in 0 ..< cluster {
+				p := anchor + {nature_rand(&rseed) - 0.5, nature_rand(&rseed) - 0.5} * 0.028
+				if !belgium_inside(w, p.x, p.y) || urban_at(w, p) do continue
+				if kind, has := solarpunk_area_at(w, p); has && kind != .Farmland do continue
+				r := nature_rand(&rseed)
+				tk: u8 = r < 0.5 ? 2 : r < 0.8 ? 0 : 1
+				size := (tk == 1 ? 14 : 9) + 6 * nature_rand(&rseed)
+				add(w, t, lo, hi, p, size, nature_rand(&rseed) * math.TAU, tk, 2)
+			}
+			i += cluster
+		}
+	}
 }
 
 // Keeps the tiles within reach of target (km) built (one a frame) and draws the trees with the lit material, or
@@ -436,6 +468,11 @@ trees_draw :: proc(w: ^World, target: [2]f32, reach: f32, cam: [3]f32, shadow: b
 	if !tr.ready do return
 	size := f32(TREES_TILE_KM)
 	if !shadow {
+		if tr.last_rural_trees != w.rural_edit.trees || tr.last_rural_density != w.rural_edit.tree_per_km2 {
+			for &t in tr.tiles do t.used = false
+			tr.last_rural_trees = w.rural_edit.trees
+			tr.last_rural_density = w.rural_edit.tree_per_km2
+		}
 		keep := reach + 2 * size
 		for &t in tr.tiles {
 			if t.used && linalg.length(tile_centre(t.key, size) - target) > keep do t.used = false

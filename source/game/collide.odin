@@ -113,6 +113,39 @@ urban_at :: proc(w: ^World, p: [2]f32) -> bool {
 	return false
 }
 
+// Closest road (excluding rivers) within max_m of c (km). Searches the 3 x 3 cells around c so roads
+// slightly further than COLLIDE_ROAD_REACH_M are still found.
+town_nearest_road :: proc(w: ^World, c: [2]f32, max_m: f32) -> (dist_m: f32, dir: [2]f32, ok: bool) {
+	co := &w.collide
+	if !co.built do collide_build(w)
+	if len(co.road_cells) == 0 do return
+	cx := clamp(int(c.x / COLLIDE_ROAD_CELL_KM), 0, COLLIDE_ROAD_W - 1)
+	cy := clamp(int(c.y / COLLIDE_ROAD_CELL_KM), 0, COLLIDE_ROAD_H - 1)
+	best := max_m
+	for y in max(cy - 1, 0) ..= min(cy + 1, COLLIDE_ROAD_H - 1) {
+		for x in max(cx - 1, 0) ..= min(cx + 1, COLLIDE_ROAD_W - 1) {
+			cell := y * COLLIDE_ROAD_W + x
+			for item in co.road_items[co.road_cells[cell]:co.road_cells[cell + 1]] {
+				if Map_Kind(item >> 24) == .River do continue
+				k := int(item & 0xffffff)
+				pa, pb := (w.m.points[k] - c) * 1000, (w.m.points[k + 1] - c) * 1000
+				ab := pb - pa
+				l2 := linalg.dot(ab, ab)
+				if l2 <= 1e-6 do continue
+				t := clamp(-linalg.dot(pa, ab) / l2, 0, 1)
+				d := linalg.length(pa + ab * t)
+				if d < best {
+					best = d
+					dir = ab / math.sqrt(l2)
+					ok = true
+				}
+			}
+		}
+	}
+	dist_m = best
+	return
+}
+
 // True when the box of half sizes half (m) around c (km), turned to the axes ax / ay, keeps clear of every road
 // and river with its sidewalk and TOWN_ROAD_GAP_M.
 town_lot_clear :: proc(w: ^World, c, ax, ay, half: [2]f32) -> bool {
@@ -202,41 +235,43 @@ collide_car :: proc(w: ^World, pos: [2]f32, hag, radius_m: f32) -> (push: [2]f32
 	}
 
 	// Generated town buildings: the lots around pos in every City triangle of the cells it touches.
-	lot := f32(TOWN_LOT_M) / 1000
-	reach := lot + r_km
-	x0 := clamp(int(math.floor((pos.x - reach) / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_W - 1)
-	x1 := clamp(int(math.floor((pos.x + reach) / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_W - 1)
-	y0 := clamp(int(math.floor((pos.y - reach) / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_H - 1)
-	y1 := clamp(int(math.floor((pos.y + reach) / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_H - 1)
-	Lot :: struct {
-		seed: u32,
-		i, j: i32,
-	}
-	lots: [COLLIDE_MAX_SEEN]Lot
-	lots_n := 0
-	for cy in y0 ..= y1 {
-		for cx in x0 ..= x1 {
-			c := cy * COLLIDE_TRI_W + cx
-			for item in co.tri_items[co.tri_cells[c]:co.tri_cells[c + 1]] {
-				p0, p1, p2 :=
-					w.m.area_points[item[1]], w.m.area_points[item[1] + 1], w.m.area_points[item[1] + 2]
-				seed, ax, ay := town_lattice(int(item[0]))
-				u := i32(math.floor(linalg.dot(pos, ax) / lot))
-				v := i32(math.floor(linalg.dot(pos, ay) / lot))
-				for j in v - 1 ..= v + 1 {
-					lots_loop: for i in u - 1 ..= u + 1 {
-						centre := (ax * (f32(i) + 0.5) + ay * (f32(j) + 0.5)) * lot
-						if !in_triangle(centre, p0, p1, p2) do continue
-						for l in lots[:lots_n] do if l == {seed, i, j} do continue lots_loop
-						if lots_n < COLLIDE_MAX_SEEN {
-							lots[lots_n] = {seed, i, j}
-							lots_n += 1
+	if w.town_edit.show {
+		lot := (w.town_edit.lot_m > 0 ? w.town_edit.lot_m : TOWN_LOT_M) / 1000
+		reach := lot + r_km
+		x0 := clamp(int(math.floor((pos.x - reach) / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_W - 1)
+		x1 := clamp(int(math.floor((pos.x + reach) / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_W - 1)
+		y0 := clamp(int(math.floor((pos.y - reach) / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_H - 1)
+		y1 := clamp(int(math.floor((pos.y + reach) / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_H - 1)
+		Lot :: struct {
+			seed: u32,
+			i, j: i32,
+		}
+		lots: [COLLIDE_MAX_SEEN]Lot
+		lots_n := 0
+		for cy in y0 ..= y1 {
+			for cx in x0 ..= x1 {
+				c := cy * COLLIDE_TRI_W + cx
+				for item in co.tri_items[co.tri_cells[c]:co.tri_cells[c + 1]] {
+					p0, p1, p2 :=
+						w.m.area_points[item[1]], w.m.area_points[item[1] + 1], w.m.area_points[item[1] + 2]
+					seed, ax, ay := town_lattice(int(item[0]))
+					u := i32(math.floor(linalg.dot(pos, ax) / lot))
+					v := i32(math.floor(linalg.dot(pos, ay) / lot))
+					for j in v - 1 ..= v + 1 {
+						lots_loop: for i in u - 1 ..= u + 1 {
+							centre := (ax * (f32(i) + 0.5) + ay * (f32(j) + 0.5)) * lot
+							if !in_triangle(centre, p0, p1, p2) do continue
+							for l in lots[:lots_n] do if l == {seed, i, j} do continue lots_loop
+							if lots_n < COLLIDE_MAX_SEEN {
+								lots[lots_n] = {seed, i, j}
+								lots_n += 1
+							}
+							corners, height, ok := town_lot(w, seed, ax, ay, i, j)
+							if !ok do continue
+							clear(&ring)
+							for p in corners do append(&ring, (p - pos) * 1000)
+							test(ring[:], height * 1000, hag, radius_m, &push, &roof)
 						}
-						corners, height, ok := town_lot(w, seed, ax, ay, i, j)
-						if !ok do continue
-						clear(&ring)
-						for p in corners do append(&ring, (p - pos) * 1000)
-						test(ring[:], height * 1000, hag, radius_m, &push, &roof)
 					}
 				}
 			}

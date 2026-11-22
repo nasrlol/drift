@@ -78,15 +78,29 @@ PLAN_SHAKE_S :: 0.4
 PLAN_SHAKE_PX :: 6
 PLAN_NUDGE_S :: TOAST_S + 2 * TOAST_FADE_S
 
-plan_panel_rect :: proc(w: ^World) -> rl.Rectangle {
-	return {PLAN_MARGIN, PLAN_MARGIN, PLAN_PANEL_W, f32(rl.GetScreenHeight()) - 2 * PLAN_MARGIN}
+plan_side_rect :: proc(w: ^World, side: Plan_Side) -> rl.Rectangle {
+	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
+	x := side == .Left ? f32(PLAN_MARGIN) : max(sw - PLAN_MARGIN - PLAN_PANEL_W, PLAN_MARGIN)
+	return {x, PLAN_MARGIN, PLAN_PANEL_W, sh - 2 * PLAN_MARGIN}
 }
 
-// The part of the screen right of the panel, where cam_fit puts the routes.
+plan_panel_rect :: proc(w: ^World) -> rl.Rectangle {
+	if w.ui.drag_win == .Plan {
+		return {w.ui.plan_drag_x, PLAN_MARGIN, PLAN_PANEL_W, f32(rl.GetScreenHeight()) - 2 * PLAN_MARGIN}
+	}
+	return plan_side_rect(w, w.ui.plan_side)
+}
+
+// The open part of the screen opposite the plan panel, where cam_fit puts the routes.
 plan_map_rect :: proc(w: ^World) -> rl.Rectangle {
 	p := plan_panel_rect(w)
+	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
+	if w.ui.plan_side == .Right {
+		x := f32(130)
+		return {x, 60, max(p.x - 40 - x, 100), max(sh - 140, 100)}
+	}
 	x := p.x + p.width + 40
-	return {x, 60, max(f32(rl.GetScreenWidth()) - x - 130, 100), max(f32(rl.GetScreenHeight()) - 140, 100)}
+	return {x, 60, max(sw - x - 130, 100), max(sh - 140, 100)}
 }
 
 // Belgian local time (CET / CEST): the EU rule, summer time from the last Sunday of March 01:00 UTC to the last
@@ -286,16 +300,68 @@ plan_ui :: proc(w: ^World) {
 	prof_zone(w, .Plan_Ui)
 	pal := palette(w)
 	p := &w.plan
+	u := &w.ui
+	sw := f32(rl.GetScreenWidth())
+	m := rl.GetMousePosition()
+	if u.pending_win == .Plan {
+		if !rl.IsMouseButtonDown(.LEFT) {
+			u.pending_win = .None
+		} else if linalg.length(m - u.drag_start) >= WINDOW_DRAG_PX {
+			u.pending_win = .None
+			u.drag_win = .Plan
+			u.plan_drag_x = plan_side_rect(w, u.plan_side).x
+			p.editing = .None
+			p.departure_open = false
+			p.car_open = false
+		}
+	}
+	if u.drag_win == .Plan {
+		if rl.IsMouseButtonDown(.LEFT) {
+			x := clamp(m.x - u.drag_offset.x, PLAN_MARGIN, max(sw - PLAN_MARGIN - PLAN_PANEL_W, PLAN_MARGIN))
+			target := x + PLAN_PANEL_W / 2 < sw / 2 ? Plan_Side.Left : Plan_Side.Right
+			snap_r := plan_side_rect(w, target)
+			if abs(x - snap_r.x) <= WINDOW_SNAP_PX do x = snap_r.x
+			u.plan_drag_x = x
+			ui_snap_guide(w, snap_r, abs(x - snap_r.x) < 1)
+		} else {
+			u.plan_side = u.plan_drag_x + PLAN_PANEL_W / 2 < sw / 2 ? .Left : .Right
+			u.drag_win = .None
+		}
+	}
 	panel := plan_panel_rect(w)
+	handle := rl.Rectangle{panel.x, panel.y, panel.width, 22}
+	if u.drag_win == .None &&
+	   rl.IsMouseButtonPressed(.LEFT) &&
+	   rl.CheckCollisionPointRec(m, handle) &&
+	   u.last_popup.width == 0 &&
+	   !ui_point_occluded(w, m, .Plan) {
+		now := rl.GetTime()
+		if u.last_click_win == .Plan && now - u.last_click_t < 0.35 {
+			u.plan_side = u.plan_side == .Left ? .Right : .Left
+			panel = plan_panel_rect(w)
+			u.last_click_win = .None
+		} else {
+			u.last_click_win = .Plan
+			u.last_click_t = now
+			u.drag_win = .Plan
+			u.drag_offset = m - {panel.x, panel.y}
+			u.plan_drag_x = panel.x
+			p.editing = .None
+			p.departure_open = false
+			p.car_open = false
+		}
+	}
+	ui_window_record(w, .Plan, panel)
 	buf: [96]u8
 	p.nudge_t = max(p.nudge_t - frame_time(w), 0)
 
 	// Card A: from / to, departure, car. No brand row (Lars, 2026-11-21: the logo goes), no day / night button
 	// (light only), no mode chips (nasr, 2026-11-21: the route rows in card B already pick the mode).
-	a := rl.Rectangle{panel.x, panel.y, panel.width, 16 + 108 + 50 + 38 + 12}
+	a := rl.Rectangle{panel.x, panel.y, panel.width, 22 + 108 + 50 + 38 + 12}
 	ui_card(w, a)
+	ui_draw_grip(w, a, u.drag_win == .Plan || rl.CheckCollisionPointRec(m, handle))
 	x := a.x + 16
-	y := a.y + 16
+	y := a.y + 22
 
 	// From / To with the rail (ring, three dots, red pin) and the swap button.
 	field_x := x + 30
@@ -588,7 +654,6 @@ plan_ui :: proc(w: ^World) {
 		rl.EndScissorMode()
 		w.ui.in_popup = false
 		// A click outside the field and the list closes it.
-		m := rl.GetMousePosition()
 		if rl.IsMouseButtonPressed(.LEFT) && !rl.CheckCollisionPointRec(m, list) && !rl.CheckCollisionPointRec(m, r) do p.editing = .None
 	}
 	if p.departure_open {
@@ -668,9 +733,9 @@ plan_ui :: proc(w: ^World) {
 		}
 		w.ui.in_popup = false
 		if rl.IsKeyPressed(.ESCAPE) || pad_pressed(w, .RIGHT_FACE_RIGHT) do p.car_open = false
-		m := rl.GetMousePosition()
 		if rl.IsMouseButtonPressed(.LEFT) && !rl.CheckCollisionPointRec(m, list) && !rl.CheckCollisionPointRec(m, car) do p.car_open = false
 	}
+	ui_window_end(w, rl.CheckCollisionPointRec(m, a) || rl.CheckCollisionPointRec(m, b))
 	plan_hub_menu(w)
 }
 
@@ -742,13 +807,13 @@ plan_hub_menu :: proc(w: ^World) {
 	w.ui.in_popup = false
 }
 
-// Map buttons bottom right (music, layers, compass, zoom pill) and the layers panel, on the plan screen.
+// Map buttons on the side opposite the plan panel (music, layers, compass, zoom pill) and the layers panel.
 plan_map_controls :: proc(w: ^World) {
 	prof_zone(w, .Map_Controls)
 	pal := palette(w)
 	p := &w.plan
 	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
-	x := sw - PLAN_MARGIN - MAP_BUTTON
+	x := w.ui.plan_side == .Left ? sw - PLAN_MARGIN - MAP_BUTTON : PLAN_MARGIN
 	zoom := rl.Rectangle{x, sh - 24 - 92, MAP_BUTTON, 92}
 	switch ui_zoom_pill(w, zoom) {
 	case 1:
@@ -767,14 +832,13 @@ plan_map_controls :: proc(w: ^World) {
 	if p.layers_open {
 		// Profile and debug builds get one more row: the profiler overlay.
 		extra: f32 = PROFILING ? 32 : 0
-		r := rl.Rectangle {
-			layers.x - 12 - LAYERS_PANEL_W,
-			layers.y - 282 - extra,
-			LAYERS_PANEL_W,
-			412 + extra,
-		}
+		def_x := w.ui.plan_side == .Left ? layers.x - 12 - LAYERS_PANEL_W : layers.x + MAP_BUTTON + 12
+		def_r := rl.Rectangle{def_x, layers.y - 282 - extra, LAYERS_PANEL_W, 418 + extra}
+		r := ui_window_begin(w, .Layers, def_r, 40)
 		ui_card(w, r)
-		y := r.y + 16
+		handle_hot := rl.CheckCollisionPointRec(rl.GetMousePosition(), {r.x, r.y, r.width, 40})
+		ui_draw_grip(w, r, w.ui.drag_win == .Layers || handle_hot)
+		y := r.y + 22
 		heading :: proc(w: ^World, pos: [2]f32, text: string) {
 			ui_text(w, pos, text, .Figtree_600, 14, palette(w).text_2)
 		}
@@ -815,6 +879,7 @@ plan_map_controls :: proc(w: ^World) {
 		names: [WIND_LAYERS]string
 		for a, i in layer_alt do names[i] = fmt.tprintf("%.0f m", a)
 		ui_segment(w, {r.x + 16, y, r.width - 32, 36}, names[:], &p.layers.wind_layer)
+		ui_window_end(w)
 	}
 
 }
@@ -1140,7 +1205,8 @@ carpool_nav_ui :: proc(w: ^World) {
 		bh := max(30, sz.y + 14)
 		cw := max(316, 14 + tw + 16 + bw + 12)
 		ch := max(66, 12 + text_line_px(w, 14) + text_px(w, 12) + 12)
-		r := rl.Rectangle{sw - cw - 16, 16, cw, ch}
+		def_r := rl.Rectangle{sw - cw - 16, 16, cw, ch}
+		r := ui_window_begin(w, .Carpool_Nav, def_r, 0, snap_radius = 12)
 		ui_shadow(w, r, 12)
 		round_rect(w, r, 12, pal.surface)
 		ty := ui_line(w, {r.x + 14, r.y + 12}, title, .Figtree_600, 14, pal.green)
@@ -1159,6 +1225,7 @@ carpool_nav_ui :: proc(w: ^World) {
 		)
 		ui_focus_ring(w, id, btn_r, bh / 2)
 		if !w.street.on do ui_block(w, r)
+		ui_window_end(w, !w.street.on)
 		if fired || key_pressed(w, .BACKSPACE) {
 			carpool_abort(w)
 			ui_toast(w, "Left carpool")
@@ -1186,7 +1253,8 @@ carpool_nav_ui :: proc(w: ^World) {
 	bh := max(30, sz.y + 14)
 	cw := max(316, 14 + tw + 16 + bw + 12)
 	ch := max(66, 10 + text_line_px(w, 13) + text_line_px(w, 13) + text_px(w, 11) + 10)
-	r := rl.Rectangle{sw - cw - 16, 16, cw, ch}
+	def_r := rl.Rectangle{sw - cw - 16, 16, cw, ch}
+	r := ui_window_begin(w, .Carpool_Nav, def_r, 0, snap_radius = 12)
 	ui_shadow(w, r, 12)
 	round_rect(w, r, 12, pal.surface)
 	ty := ui_line(w, {r.x + 14, r.y + 10}, "Ride request", .Figtree_600, 13, pal.accent)
@@ -1206,6 +1274,7 @@ carpool_nav_ui :: proc(w: ^World) {
 	)
 	ui_focus_ring(w, id, btn_r, bh / 2)
 	if !w.street.on do ui_block(w, r)
+	ui_window_end(w, !w.street.on)
 	if fired || key_pressed(w, .Y) || pad_pressed(w, .RIGHT_FACE_UP) {
 		if acc, ok := carpool_accept_make(w, &req); ok {
 			if carpool_post(w, &acc) == .Added && trip_start(w, &req, &acc, true) {

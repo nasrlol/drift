@@ -384,6 +384,30 @@ UI_FOCUS_RING :: 2
 TOAST_S :: 1.6
 TOAST_FADE_S :: 0.25
 MAX_UI_ANIMS :: 64
+WINDOW_SNAP_PX :: 24
+WINDOW_MARGIN :: 8
+WINDOW_DRAG_PX :: 4 // movement before an empty-body press turns into a window drag
+
+Window_Id :: enum u8 {
+	None,
+	Plan,
+	Layers,
+	Settings,
+	Profiler,
+	Nav_Banner,
+	Nav_Sheet,
+	Carpool_Nav,
+}
+
+Plan_Side :: enum u8 {
+	Left, // zero = default left side
+	Right,
+}
+
+Ui_Window :: struct {
+	moved: bool, // false (zero) = docked at its default position
+	pos:   [2]f32,
+}
 
 Pill_Kind :: enum u8 {
 	Primary,
@@ -392,28 +416,46 @@ Pill_Kind :: enum u8 {
 }
 
 Ui :: struct {
-	next_id:      int, // widgets this frame, in draw order
-	focus:        int, // 1-based id of the focused widget, 0 = none
-	last_count:   int, // widgets in the previous frame, Tab wraps there
-	activate:     bool, // Enter / Space / Cross pressed this frame
-	cancelled:    bool, // Circle cleared the focus this frame, so it does not also exit the screen
+	next_id:        int, // widgets this frame, in draw order
+	focus:          int, // 1-based id of the focused widget, 0 = none
+	last_count:     int, // widgets in the previous frame, Tab wraps there
+	activate:       bool, // Enter / Space / Cross pressed this frame
+	cancelled:      bool, // Circle cleared the focus this frame, so it does not also exit the screen
 	// Rectangles that hide the map from the mouse, collected while drawing and read by the camera next frame
 	// (the camera runs before the UI is drawn).
-	blocks:       [32]rl.Rectangle,
-	block_count:  int,
-	last_blocks:  [32]rl.Rectangle,
-	last_count_b: int,
+	blocks:         [32]rl.Rectangle,
+	block_count:    int,
+	last_blocks:    [32]rl.Rectangle,
+	last_count_b:   int,
 	// An open popup (hub search list, departure list, hub menu) takes the clicks inside it.
-	popup:        rl.Rectangle,
-	last_popup:   rl.Rectangle,
-	in_popup:     bool,
-	toast:        [64]u8,
-	toast_len:    int,
-	toast_t:      f32, // seconds since the toast appeared
-	tip_rect:     rl.Rectangle,
-	tip_buf:      [256]u8,
-	tip_len:      int,
-	anims:        [MAX_UI_ANIMS]f32, // 0..1 per widget id: toggle knob position
+	popup:          rl.Rectangle,
+	last_popup:     rl.Rectangle,
+	in_popup:       bool,
+	toast:          [64]u8,
+	toast_len:      int,
+	toast_t:        f32, // seconds since the toast appeared
+	tip_rect:       rl.Rectangle,
+	tip_buf:        [256]u8,
+	tip_len:        int,
+	anims:          [MAX_UI_ANIMS]f32, // 0..1 per widget id: toggle knob position
+	// Movable windows (zero = all at default snapped positions).
+	wins:           [Window_Id]Ui_Window,
+	plan_side:      Plan_Side,
+	plan_drag_x:    f32,
+	drag_win:       Window_Id,
+	pending_win:    Window_Id,
+	drag_offset:    [2]f32,
+	drag_start:     [2]f32,
+	win_widget_hit: bool,
+	current_win:    Window_Id,
+	win_rects:      [Window_Id]rl.Rectangle,
+	win_order:      [len(Window_Id)]Window_Id,
+	win_count:      int,
+	last_win_rects: [Window_Id]rl.Rectangle,
+	last_win_order: [len(Window_Id)]Window_Id,
+	last_win_count: int,
+	last_click_win: Window_Id,
+	last_click_t:   f64,
 }
 
 // Start of the frame: Tab moves the focus over last frame's widgets, Enter / Space fires the focused one.
@@ -426,6 +468,18 @@ ui_begin :: proc(w: ^World) {
 	u.block_count = 0
 	u.last_popup = u.popup
 	u.popup = {}
+	u.last_win_rects = u.win_rects
+	u.last_win_order = u.win_order
+	u.last_win_count = u.win_count
+	u.win_rects = {}
+	u.win_order = {}
+	u.win_count = 0
+	u.current_win = .None
+	u.win_widget_hit = false
+	if !rl.IsMouseButtonDown(.LEFT) {
+		u.pending_win = .None
+		if !rl.IsMouseButtonReleased(.LEFT) do u.drag_win = .None
+	}
 	u.tip_len = 0
 	u.cancelled = false
 	tab := rl.IsKeyPressed(.TAB)
@@ -453,10 +507,22 @@ ui_begin :: proc(w: ^World) {
 	u.toast_t += frame_time(w)
 }
 
+// True when a window drawn after win covered m in the previous frame.
+ui_point_occluded :: proc(w: ^World, m: [2]f32, win: Window_Id) -> bool {
+	u := &w.ui
+	for i := u.last_win_count - 1; i >= 0; i -= 1 {
+		id := u.last_win_order[i]
+		if id == win do break
+		if rl.CheckCollisionPointRec(m, u.last_win_rects[id]) do return true
+	}
+	return false
+}
+
 // True when the mouse is over UI drawn last frame: the map then ignores drags, the wheel and clicks.
 ui_mouse_captured :: proc(w: ^World) -> bool {
 	m := rl.GetMousePosition()
 	u := &w.ui
+	if u.drag_win != .None || u.pending_win != .None do return true
 	if u.last_popup.width > 0 && rl.CheckCollisionPointRec(m, u.last_popup) do return true
 	for r in u.last_blocks[:u.last_count_b] {
 		if rl.CheckCollisionPointRec(m, r) do return true
@@ -474,7 +540,7 @@ ui_block :: proc(w: ^World, r: rl.Rectangle) {
 }
 
 // Registers a widget: returns its id, whether the mouse is over it and whether it fired this frame. The hit area
-// grows to UI_MIN_HIT around small widgets. Widgets under an open popup ignore the mouse there.
+// grows to UI_MIN_HIT around small widgets. Widgets under an open popup or an overlapping window ignore the mouse.
 ui_widget :: proc(w: ^World, r: rl.Rectangle) -> (id: int, hot: bool, fired: bool) {
 	u := &w.ui
 	u.next_id += 1
@@ -489,11 +555,148 @@ ui_widget :: proc(w: ^World, r: rl.Rectangle) -> (id: int, hot: bool, fired: boo
 		hit.height = UI_MIN_HIT
 	}
 	m := rl.GetMousePosition()
-	hot = rl.CheckCollisionPointRec(m, hit)
-	if !u.in_popup && u.last_popup.width > 0 && rl.CheckCollisionPointRec(m, u.last_popup) do hot = false
+	hot = u.drag_win == .None && rl.CheckCollisionPointRec(m, hit)
+	if !u.in_popup {
+		if u.last_popup.width > 0 && rl.CheckCollisionPointRec(m, u.last_popup) do hot = false
+		if ui_point_occluded(w, m, u.current_win) do hot = false
+	}
+	if u.current_win != .None && hot && (rl.IsMouseButtonPressed(.LEFT) || rl.IsMouseButtonDown(.LEFT)) {
+		u.win_widget_hit = true
+	}
 	fired = (hot && rl.IsMouseButtonPressed(.LEFT)) || (u.activate && u.focus == id)
 	if fired && u.focus == id do u.activate = false
 	return
+}
+
+// Clamps a window top-left position inside the screen while keeping at least the top header reachable.
+ui_clamp_window :: proc(r: rl.Rectangle, clamp_h: f32) -> [2]f32 {
+	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
+	max_x := max(sw - r.width - WINDOW_MARGIN, WINDOW_MARGIN)
+	max_y := max(min(sh - clamp_h - WINDOW_MARGIN, sh - 60), WINDOW_MARGIN)
+	return {clamp(r.x, WINDOW_MARGIN, max_x), clamp(r.y, WINDOW_MARGIN, max_y)}
+}
+
+// Subtle target outline shown at a window's default snap spot while dragging.
+ui_snap_guide :: proc(w: ^World, r: rl.Rectangle, snapped: bool, radius: f32 = 18) {
+	pal := palette(w)
+	round_rect(w, r, radius, rl.ColorAlpha(pal.accent, snapped ? 0.10 : 0.05))
+	round_rect_lines(w, r, radius, snapped ? 2 : 1.5, rl.ColorAlpha(pal.accent, snapped ? 0.65 : 0.40))
+}
+
+// Subtle centered drag grip pill at the top of a movable window.
+ui_draw_grip :: proc(w: ^World, r: rl.Rectangle, active: bool, light := false) {
+	pal := palette(w)
+	col := active ? pal.accent : (light ? rl.ColorAlpha(rl.WHITE, 0.35) : pal.line)
+	grip := rl.Rectangle{r.x + (r.width - 36) / 2, r.y + 7, 36, 4}
+	round_rect(w, grip, 2, col)
+}
+
+ui_window_record :: proc(w: ^World, id: Window_Id, rect: rl.Rectangle) {
+	u := &w.ui
+	u.current_win = id
+	u.win_widget_hit = false
+	u.win_rects[id] = rect
+	if u.win_count < len(u.win_order) {
+		u.win_order[u.win_count] = id
+		u.win_count += 1
+	}
+}
+
+// Positions a movable window (snapped to default_rect when !moved, clamped inside the screen), handles dragging
+// from its handle strip (or double-clicking the handle to snap back), and records it for z-order occlusion.
+ui_window_begin :: proc(
+	w: ^World,
+	id: Window_Id,
+	default_rect: rl.Rectangle,
+	handle_h: f32,
+	clamp_h: f32 = 0,
+	snap_radius: f32 = 18,
+) -> rl.Rectangle {
+	u := &w.ui
+	win := &u.wins[id]
+	eff_h := clamp_h > 0 ? clamp_h : default_rect.height
+	m := rl.GetMousePosition()
+
+	if u.pending_win == id {
+		if !rl.IsMouseButtonDown(.LEFT) {
+			u.pending_win = .None
+		} else if linalg.length(m - u.drag_start) >= WINDOW_DRAG_PX {
+			u.pending_win = .None
+			u.drag_win = id
+			if !win.moved {
+				win.pos = {default_rect.x, default_rect.y}
+				win.moved = true
+			}
+		}
+	}
+
+	if u.drag_win == id {
+		if rl.IsMouseButtonDown(.LEFT) {
+			raw := m - u.drag_offset
+			clamped := ui_clamp_window({raw.x, raw.y, default_rect.width, default_rect.height}, eff_h)
+			snapped := linalg.length(clamped - {default_rect.x, default_rect.y}) <= WINDOW_SNAP_PX
+			win.pos = snapped ? {default_rect.x, default_rect.y} : clamped
+			ui_snap_guide(w, default_rect, snapped, snap_radius)
+		} else {
+			if linalg.length(win.pos - {default_rect.x, default_rect.y}) <= WINDOW_SNAP_PX {
+				win.moved = false
+			}
+			u.drag_win = .None
+		}
+	}
+
+	rect := default_rect
+	if win.moved {
+		p := ui_clamp_window({win.pos.x, win.pos.y, default_rect.width, default_rect.height}, eff_h)
+		rect = {p.x, p.y, default_rect.width, default_rect.height}
+	}
+
+	if u.drag_win == .None && handle_h > 0 {
+		handle := rl.Rectangle{rect.x, rect.y, rect.width, handle_h}
+		if rl.IsMouseButtonPressed(.LEFT) &&
+		   rl.CheckCollisionPointRec(m, handle) &&
+		   u.last_popup.width == 0 &&
+		   !ui_point_occluded(w, m, id) {
+			now := rl.GetTime()
+			if win.moved && u.last_click_win == id && now - u.last_click_t < 0.35 {
+				win.moved = false
+				rect = default_rect
+				u.last_click_win = .None
+			} else {
+				u.last_click_win = id
+				u.last_click_t = now
+				u.drag_win = id
+				u.drag_offset = m - {rect.x, rect.y}
+				if !win.moved {
+					win.pos = {rect.x, rect.y}
+					win.moved = true
+				}
+			}
+		}
+	}
+
+	ui_window_record(w, id, rect)
+	return rect
+}
+
+// Finishes a window: if no internal widget was clicked, pressing on empty body space starts a pending drag.
+ui_window_end :: proc(w: ^World, body_drag := true) {
+	u := &w.ui
+	id := u.current_win
+	if id == .None do return
+	if body_drag && u.drag_win == .None && u.pending_win == .None && !u.win_widget_hit {
+		m := rl.GetMousePosition()
+		rect := u.win_rects[id]
+		if rl.IsMouseButtonPressed(.LEFT) &&
+		   u.last_popup.width == 0 &&
+		   rl.CheckCollisionPointRec(m, rect) &&
+		   !ui_point_occluded(w, m, id) {
+			u.pending_win = id
+			u.drag_start = m
+			u.drag_offset = m - {rect.x, rect.y}
+		}
+	}
+	u.current_win = .None
 }
 
 // Draws the focus ring when the widget has the keyboard focus.
@@ -818,8 +1021,13 @@ ui_toast_draw :: proc(w: ^World) {
 // Records a hover tooltip for r when the mouse is over it; drawn at the end of the frame by ui_tip_draw.
 ui_tip :: proc(w: ^World, r: rl.Rectangle, text: string) {
 	u := &w.ui
-	if !u.in_popup && u.last_popup.width > 0 && rl.CheckCollisionPointRec(rl.GetMousePosition(), u.last_popup) do return
-	if rl.CheckCollisionPointRec(rl.GetMousePosition(), r) do ui_tip_set(w, r, text)
+	if u.drag_win != .None do return
+	m := rl.GetMousePosition()
+	if !u.in_popup {
+		if u.last_popup.width > 0 && rl.CheckCollisionPointRec(m, u.last_popup) do return
+		if ui_point_occluded(w, m, u.current_win) do return
+	}
+	if rl.CheckCollisionPointRec(m, r) do ui_tip_set(w, r, text)
 }
 
 ui_tip_set :: proc(w: ^World, r: rl.Rectangle, text: string) {

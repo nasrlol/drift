@@ -29,26 +29,36 @@ SETTINGS_PROJECT :: #load("../../assets/settings.txt", string)
 SETTINGS_HEADER :: "# Drift settings: only what differs from the layer below (settings_store.odin). Written by the settings panel (F2).\n"
 
 Setting_Values :: struct {
-	tune:    Tune,
-	borders: Border_Edit,
-	clouds:  Cloud_Edit,
-	wind:    Wind_Edit,
-	grass:   Grass_Edit,
-	view:    View_Edit,
-	sky:     Sky_Edit,
-	look:    Look,
+	tune:     Tune,
+	borders:  Border_Edit,
+	clouds:   Cloud_Edit,
+	wind:     Wind_Edit,
+	grass:    Grass_Edit,
+	view:     View_Edit,
+	sky:      Sky_Edit,
+	turbines: Turbine_Edit,
+	towers:   Tower_Edit,
+	solar:    Solar_Edit,
+	rural:    Rural_Edit,
+	towns:    Town_Edit,
+	look:     Look,
 }
 
 // Where a set of setting values lives: World keeps the current ones in separate fields.
 Setting_Ptrs :: struct {
-	tune:    ^Tune,
-	borders: ^Border_Edit,
-	clouds:  ^Cloud_Edit,
-	wind:    ^Wind_Edit,
-	grass:   ^Grass_Edit,
-	view:    ^View_Edit,
-	sky:     ^Sky_Edit,
-	look:    ^Look,
+	tune:     ^Tune,
+	borders:  ^Border_Edit,
+	clouds:   ^Cloud_Edit,
+	wind:     ^Wind_Edit,
+	grass:    ^Grass_Edit,
+	view:     ^View_Edit,
+	sky:      ^Sky_Edit,
+	turbines: ^Turbine_Edit,
+	towers:   ^Tower_Edit,
+	solar:    ^Solar_Edit,
+	rural:    ^Rural_Edit,
+	towns:    ^Town_Edit,
+	look:     ^Look,
 }
 
 Store_Group :: struct {
@@ -67,12 +77,31 @@ settings_code_defaults :: proc() -> Setting_Values {
 		grass = grass_edit_defaults(),
 		view = view_edit_defaults(),
 		sky = sky_edit_defaults(),
+		turbines = turbine_edit_defaults(),
+		towers = tower_edit_defaults(),
+		solar = solar_edit_defaults(),
+		rural = rural_edit_defaults(),
+		towns = town_edit_defaults(),
 		look = look_defaults(),
 	}
 }
 
 values_ptrs :: proc(v: ^Setting_Values) -> Setting_Ptrs {
-	return {&v.tune, &v.borders, &v.clouds, &v.wind, &v.grass, &v.view, &v.sky, &v.look}
+	return {
+		&v.tune,
+		&v.borders,
+		&v.clouds,
+		&v.wind,
+		&v.grass,
+		&v.view,
+		&v.sky,
+		&v.turbines,
+		&v.towers,
+		&v.solar,
+		&v.rural,
+		&v.towns,
+		&v.look,
+	}
 }
 
 current_ptrs :: proc(w: ^World) -> Setting_Ptrs {
@@ -84,15 +113,34 @@ current_ptrs :: proc(w: ^World) -> Setting_Ptrs {
 		&w.grass_edit,
 		&w.view_edit,
 		&w.sky_edit,
+		&w.turbine_edit,
+		&w.tower_edit,
+		&w.solar_edit,
+		&w.rural_edit,
+		&w.town_edit,
 		&w.look,
 	}
 }
 
 current_values :: proc(w: ^World) -> Setting_Values {
-	return {w.tune, w.border_edit, w.cloud_edit, w.wind_edit, w.grass_edit, w.view_edit, w.sky_edit, w.look}
+	return {
+		w.tune,
+		w.border_edit,
+		w.cloud_edit,
+		w.wind_edit,
+		w.grass_edit,
+		w.view_edit,
+		w.sky_edit,
+		w.turbine_edit,
+		w.tower_edit,
+		w.solar_edit,
+		w.rural_edit,
+		w.town_edit,
+		w.look,
+	}
 }
 
-store_groups :: proc(p: Setting_Ptrs) -> [9]Store_Group {
+store_groups :: proc(p: Setting_Ptrs) -> [14]Store_Group {
 	return {
 		{"speed", p.tune, Tune, ""},
 		{"borders", p.borders, Border_Edit, ""},
@@ -101,6 +149,11 @@ store_groups :: proc(p: Setting_Ptrs) -> [9]Store_Group {
 		{"grass", p.grass, Grass_Edit, ""},
 		{"view", p.view, View_Edit, ""},
 		{"sky", p.sky, Sky_Edit, ""},
+		{"turbines", p.turbines, Turbine_Edit, ""},
+		{"towers", p.towers, Tower_Edit, ""},
+		{"solar", p.solar, Solar_Edit, ""},
+		{"rural", p.rural, Rural_Edit, ""},
+		{"towns", p.towns, Town_Edit, ""},
 		{"colors", &p.look.palette, Palette, ""},
 		{"look", p.look, Look, "palette"},
 	}
@@ -115,6 +168,8 @@ settings_init :: proc(w: ^World) {
 	d := &w.setting_defaults
 	w.tune, w.border_edit, w.cloud_edit, w.wind_edit, w.grass_edit, w.view_edit, w.sky_edit, w.look =
 		d.tune, d.borders, d.clouds, d.wind, d.grass, d.view, d.sky, d.look
+	w.turbine_edit, w.tower_edit, w.solar_edit, w.rural_edit, w.town_edit =
+		d.turbines, d.towers, d.solar, d.rural, d.towns
 }
 
 // Layer 3 on top of the current values. Returns how many values it set.

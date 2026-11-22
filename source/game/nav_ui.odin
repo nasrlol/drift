@@ -241,11 +241,16 @@ nav_draw_trip_markers :: proc(w: ^World) {
 }
 
 // The bottom sheet rect: Dario places Exit and self-fly from it.
-nav_sheet_rect :: proc(w: ^World) -> rl.Rectangle {
+nav_sheet_default_rect :: proc(w: ^World) -> rl.Rectangle {
 	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
 	width := min(SHEET_MAX_W, sw - 32)
 	h := max(f32(SHEET_H), 18 + text_line_px(w, 38) + text_line_px(w, 20) + 12 + ui_stat_chip_h(w) + 12)
 	return {(sw - width) / 2, sh - h, width, h}
+}
+
+nav_sheet_rect :: proc(w: ^World) -> rl.Rectangle {
+	if w.ui.win_rects[.Nav_Sheet].width > 0 do return w.ui.win_rects[.Nav_Sheet]
+	return nav_sheet_default_rect(w)
 }
 
 // Navigation screen: road sign, layer pill, banner + Then, warning and the sheet. Draw order 7 and 8.
@@ -346,6 +351,8 @@ nav_ui :: proc(w: ^World) {
 			16 + text_line_px(w, title_px) + text_line_px(w, 17) + 20,
 		)
 		then := kind == .Flying && n.then_visible && n.next + 1 < len(r.maneuvers)
+		clamp_h := banner.height + (then ? 46 : 0)
+		banner = ui_window_begin(w, .Nav_Banner, banner, banner.height, clamp_h)
 		round_rect(w, banner, 18, color)
 		if then do rl.DrawRectangleRec({banner.x, banner.y + banner.height - 18, 18, 18}, color)
 		ui_block(w, banner)
@@ -403,6 +410,7 @@ nav_ui :: proc(w: ^World) {
 			ui_icon(w, icons[m.kind], {tab.x + 90, tab.y + 23}, 28, rl.WHITE)
 			ui_block(w, tab)
 		}
+		ui_window_end(w, false)
 	}
 
 	// Warning pill, centred 170 px from the top.
@@ -432,10 +440,16 @@ nav_ui :: proc(w: ^World) {
 
 	// Bottom sheet: remaining time (green + leaf), "km, arrive hh:mm", stat chips. Dario adds the buttons
 	// (pilot_ui).
-	sheet := nav_sheet_rect(w)
-	sheet_box := rl.Rectangle{sheet.x, sheet.y, sheet.width, sheet.height + 22}
+	def_sheet := nav_sheet_default_rect(w)
+	sheet := ui_window_begin(w, .Nav_Sheet, def_sheet, 22, snap_radius = 22)
+	sh := f32(rl.GetScreenHeight())
+	at_bottom := sheet.y + sheet.height >= sh - 2
+	sheet_box := rl.Rectangle{sheet.x, sheet.y, sheet.width, at_bottom ? sheet.height + 22 : sheet.height}
+	if !at_bottom do ui_shadow(w, sheet_box, 22)
 	round_rect(w, sheet_box, 22, pal.sheet)
 	ui_decorate_rect(w, sheet_box, 22)
+	handle_hot := rl.CheckCollisionPointRec(rl.GetMousePosition(), {sheet.x, sheet.y, sheet.width, 22})
+	ui_draw_grip(w, sheet, w.ui.drag_win == .Nav_Sheet || handle_hot)
 	ui_block(w, sheet)
 	x := sheet.x + 24
 	y := sheet.y + 18
@@ -482,6 +496,7 @@ nav_ui :: proc(w: ^World) {
 	for c, i in chips {
 		ui_stat_chip(w, {x + f32(i) * (cw + 8), chip_y, cw, chip_h}, c.label, c.value, c.meter)
 	}
+	w.ui.current_win = .None
 }
 
 // The carpool partner during an accepted trip (live position from net.odin): a ring with the airship arrow and

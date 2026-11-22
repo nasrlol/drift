@@ -108,7 +108,7 @@ Street :: struct {
 	material:   rl.Material,
 	loc:        struct {
 		layer, remap, map_colors, real_colors, origin, cities: i32,
-		grass_size, grass_amt, grass_tone:                     i32,
+		grass_size, grass_amt, grass_tone, rural_fields:       i32,
 		light:                                                 Street_Light_Locs,
 	},
 	// The houses (houses.odin) with the lit shader, and the sky.
@@ -119,12 +119,13 @@ Street :: struct {
 	lit_loc:    Street_Light_Locs,
 	sky:        rl.Shader,
 	sky_loc:    struct {
-		fwd, right, up, tan_half, screen: i32,
-		light:                            Street_Light_Locs,
+		fwd, right, up, tan_half, screen, clouds: i32,
+		light:                                    Street_Light_Locs,
 	},
 	// The shadow map: a framebuffer with only a depth texture (rlgl ids), the depth-only material, and the
 	// light's view-projection of this frame.
 	trees:      Trees, // trees.odin
+	solarpunk:  Solarpunk, // solarpunk.odin
 	shadow_fbo: u32,
 	shadow_tex: u32,
 	depth:      rl.Material,
@@ -378,6 +379,7 @@ uniform vec3 cities[16]; // x, z in street metres, radius m (0 = none): the circ
 uniform vec4 grass_size; // metres: patches, tufts, clumps, worn spots (grass_edit.odin)
 uniform vec4 grass_amt; // dry patches, tufts, clumps, worn spots
 uniform vec2 grass_tone; // how olive, where worn spots start
+uniform vec4 rural_fields; // x mix, y size m, z solar cell share
 out vec4 finalColor;
 ` +
 	STREET_GLSL +
@@ -454,6 +456,26 @@ void main() {
 	vec2 qw = mod(q, 4096.0);
 	float gw = max(length(fwidth(world.xz)), 1e-4);
 	if (layer < 0.5 || kind == 1 || kind == 3) c = grass(c, qw, gw);
+	if (layer < 0.5 && rural_fields.x > 0.01) {
+		vec2 fd = fields(q, max(rural_fields.y, 40.0));
+		float h = fd.x;
+		vec3 fc;
+		if (h < rural_fields.z) {
+			vec2 sp = abs(fract(q / vec2(6.0, 3.0)) - 0.5);
+			float grid = smoothstep(0.42, 0.48, max(sp.x, sp.y)) * thin(0.3, gw);
+			fc = mix(vec3(0.025, 0.055, 0.12), vec3(0.08, 0.11, 0.14), grid);
+		} else {
+			vec3 crop = h < 0.28 ? vec3(0.19, 0.17, 0.07) : h < 0.52 ? vec3(0.055, 0.105, 0.03) : h < 0.72 ? vec3(0.085, 0.062, 0.042) : h < 0.92 ? vec3(0.065, 0.115, 0.032) : vec3(0.32, 0.28, 0.035);
+			float ang = hash12(vec2(h * 97.0, 3.1)) * 3.14159;
+			float across = dot(q, vec2(-sin(ang), cos(ang)));
+			float row = smoothstep(0.25, 0.45, abs(fract(across / 0.75) - 0.5)) * thin(0.37, gw);
+			float tm = mod(across, 20.0);
+			float tram = max(box(tm - 9.1, 0.2, gw), box(tm - 10.9, 0.2, gw)) * thin(0.4, gw);
+			fc = crop * (1.0 - 0.24 * row - 0.30 * tram) * (0.9 + 0.2 * fnoise(q, 0.02, gw));
+			fc = mix(fc, vec3(0.028, 0.05, 0.018), (1.0 - smoothstep(1.2, 2.6, fd.y)) * thin(2.0, gw));
+		}
+		c = mix(c, fc, rural_fields.x);
+	}
 	// Inside a circle of real OSM buildings the open land and the City areas are streets and squares (paving);
 	// City areas elsewhere are the gardens of the towns. Parks are their own layer and stay green.
 	if (layer < 0.5 || kind == 0) {
@@ -945,6 +967,7 @@ uniform vec3 cam_right;
 uniform vec3 cam_up;
 uniform vec2 tan_half;
 uniform vec2 screen;
+uniform vec2 sky_clouds;
 out vec4 finalColor;
 ` +
 	STREET_GLSL +
@@ -954,6 +977,13 @@ void main() {
 	vec3 r = normalize(cam_fwd + cam_right * ndc.x * tan_half.x + cam_up * ndc.y * tan_half.y);
 	vec3 c = sky_col(r);
 	c += sun_col * 6.0 * smoothstep(0.99985, 0.99993, dot(r, sun_dir));
+	if (sky_clouds.x > 0.001 && r.y > 0.015) {
+		vec2 cp = r.xz / (r.y + 0.14) * 1.1 + vec2(sky_clouds.y * 0.012, sky_clouds.y * 0.004);
+		float n = vnoise(cp) * 0.6 + vnoise(cp * 2.3 + 7.1) * 0.28 + vnoise(cp * 5.1 + 19.3) * 0.12;
+		float puff = smoothstep(0.50, 0.80, n) * smoothstep(0.015, 0.20, r.y);
+		vec3 cloud_col = mix(sky_hor * 0.85, sky_hor * 0.65 + sun_col * 0.45, smoothstep(0.45, 0.85, n));
+		c = mix(c, cloud_col, puff * clamp(sky_clouds.x, 0.0, 1.0) * 0.72);
+	}
 	// Below the horizon line, down to the curve of the round world, the low sky goes on (sky_col stops at 0).
 	finalColor = vec4(hdr_out(c), 1.0);
 }
@@ -1211,16 +1241,17 @@ street_build :: proc(w: ^World) {
 	st.material = rl.LoadMaterialDefault()
 	st.material.shader = sh
 	st.loc = {
-		layer       = rl.GetShaderLocation(sh, "layer"),
-		remap       = rl.GetShaderLocation(sh, "remap"),
-		map_colors  = rl.GetShaderLocation(sh, "map_colors"),
-		real_colors = rl.GetShaderLocation(sh, "real_colors"),
-		origin      = rl.GetShaderLocation(sh, "origin"),
-		cities      = rl.GetShaderLocation(sh, "cities"),
-		grass_size  = rl.GetShaderLocation(sh, "grass_size"),
-		grass_amt   = rl.GetShaderLocation(sh, "grass_amt"),
-		grass_tone  = rl.GetShaderLocation(sh, "grass_tone"),
-		light       = street_light_locs(sh),
+		layer        = rl.GetShaderLocation(sh, "layer"),
+		remap        = rl.GetShaderLocation(sh, "remap"),
+		map_colors   = rl.GetShaderLocation(sh, "map_colors"),
+		real_colors  = rl.GetShaderLocation(sh, "real_colors"),
+		origin       = rl.GetShaderLocation(sh, "origin"),
+		cities       = rl.GetShaderLocation(sh, "cities"),
+		grass_size   = rl.GetShaderLocation(sh, "grass_size"),
+		grass_amt    = rl.GetShaderLocation(sh, "grass_amt"),
+		grass_tone   = rl.GetShaderLocation(sh, "grass_tone"),
+		rural_fields = rl.GetShaderLocation(sh, "rural_fields"),
+		light        = street_light_locs(sh),
 	}
 	lit := rl.LoadShaderFromMemory(STREET_VS, STREET_FS)
 	if !rl.IsShaderValid(lit) do logf(w, "street", "lit shader did not compile")
@@ -1240,6 +1271,7 @@ street_build :: proc(w: ^World) {
 		up       = rl.GetShaderLocation(st.sky, "cam_up"),
 		tan_half = rl.GetShaderLocation(st.sky, "tan_half"),
 		screen   = rl.GetShaderLocation(st.sky, "screen"),
+		clouds   = rl.GetShaderLocation(st.sky, "sky_clouds"),
 		light    = street_light_locs(st.sky),
 	}
 	st.depth = rl.LoadMaterialDefault()
@@ -1249,6 +1281,7 @@ street_build :: proc(w: ^World) {
 	st.road = rl.LoadMaterialDefault()
 	st.road.shader = road
 	trees_build(w)
+	solarpunk_build(w)
 	st.road_loc = {
 		layer = rl.GetShaderLocation(road, "layer"),
 		light = street_light_locs(road),
@@ -1281,6 +1314,7 @@ street_unload :: proc(st: ^Street) {
 	tiles_unload(&st.areas)
 	tiles_unload(&st.houses)
 	trees_unload(&st.trees)
+	solarpunk_unload(&st.solarpunk)
 	post_unload(&st.post)
 	if !st.ready do return
 	rl.UnloadMesh(st.ground)
@@ -1598,6 +1632,8 @@ street_draw :: proc(w: ^World) {
 		rl.SetShaderValue(sh, st.sky_loc.up, &up, .VEC3)
 		rl.SetShaderValue(sh, st.sky_loc.tan_half, &tan_half, .VEC2)
 		rl.SetShaderValue(sh, st.sky_loc.screen, &render, .VEC2)
+		sky_clouds := [2]f32{w.sky_edit.clouds ? w.sky_edit.cloud_amt : 0, f32(w.tick) * SIM_DT}
+		rl.SetShaderValue(sh, st.sky_loc.clouds, &sky_clouds, .VEC2)
 		street_light_set(w, sh, st.sky_loc.light, st.view.position)
 		rl.BeginShaderMode(sh)
 		rl.DrawRectangle(0, 0, i32(screen.x), i32(screen.y), rl.WHITE)
@@ -1633,6 +1669,13 @@ street_draw :: proc(w: ^World) {
 		}
 		rl.SetShaderValueV(sh, st.loc.cities, &cities, .VEC3, 16)
 		grass_set(w, sh)
+		rf := [4]f32 {
+			w.rural_edit.fields ? w.rural_edit.field_mix : 0,
+			w.rural_edit.field_size,
+			w.solar_edit.show ? w.solar_edit.ground_cells : 0,
+			0,
+		}
+		rl.SetShaderValue(sh, st.loc.rural_fields, &rf, .VEC4)
 
 		// 1: land, a quad kept under the car.
 		layer, remap: f32 = 0, 0
@@ -1695,6 +1738,7 @@ street_draw :: proc(w: ^World) {
 	street_light_set(w, st.lit.shader, st.lit_loc, st.view.position)
 	tiles_update_draw(w, &st.houses, HOUSE_TILE_KM, HOUSE_REACH_KM, houses_build_tile, st.lit, centre, place)
 	trees_draw(w, centre, TREES_REACH_KM, st.view.position, false)
+	solarpunk_draw(w, centre, PROP_REACH_KM, st.view.position, false)
 
 	// 5: the cars.
 	street_light_set(w, st.car.shader, st.car_loc, st.view.position)
@@ -1786,6 +1830,7 @@ street_shadow_pass :: proc(w: ^World, place: Placement) {
 	reach := f32(SHADOW_BOX_M) * 0.75 / 1000
 	tiles_draw(&st.houses, HOUSE_TILE_KM, reach, st.depth, centre, place)
 	trees_draw(w, centre, reach, st.view.position, true)
+	solarpunk_draw(w, centre, reach, st.view.position, true)
 	street_cars(w, &st.depth)
 	rl.EndMode3D()
 	rl.EndTextureMode()

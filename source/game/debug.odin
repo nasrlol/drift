@@ -310,10 +310,23 @@ prof_overlay :: proc(w: ^World) {
 		LINE :: 12
 		GRAPH_H :: 64
 		W :: 380
-		H :: 6 + 6 * LINE + 6 + GRAPH_H + 8 + (PROF_TOP + 1) * LINE + 6
-		x0 := i32(w.cam.screen.x) - W - 16 - 88 // left of the map controls column
-		y0 := i32(w.cam.screen.y) - 38 - H
+		H :: 14 + 6 * LINE + 6 + GRAPH_H + 8 + (PROF_TOP + 1) * LINE + 6
+		sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
+		def_x := max(sw - W - 16 - 88, WINDOW_MARGIN) // left of the map controls column
+		if w.screen == .Plan && w.ui.plan_side == .Right {
+			def_x = min(f32(16 + 68), max(sw - W - WINDOW_MARGIN, WINDOW_MARGIN))
+		}
+		def_rect := rl.Rectangle{def_x, max(sh - 38 - H, WINDOW_MARGIN), W, H}
+		rect := ui_window_begin(w, .Profiler, def_rect, H, snap_radius = 4)
+		ui_block(w, rect)
+		x0 := i32(rect.x)
+		y0 := i32(rect.y)
 		rl.DrawRectangle(x0, y0, W, H, {0, 0, 0, 190})
+		hot := rl.CheckCollisionPointRec(rl.GetMousePosition(), rect)
+		if w.ui.drag_win == .Profiler || hot {
+			rl.DrawRectangleLinesEx(rect, 1, palette(w).accent)
+		}
+		ui_draw_grip(w, rect, w.ui.drag_win == .Profiler || hot, true)
 
 		frames: [PROF_FRAMES]f32
 		mean_incl, mean_excl, worst_incl: [Prof_Zone]f64
@@ -375,7 +388,7 @@ prof_overlay :: proc(w: ^World) {
 			),
 			p.trace_on ? "F4: stop the spall trace (recording)" : "F4: record a spall trace to " + PROF_TRACE_PATH,
 		}
-		y := y0 + 6
+		y := y0 + 14
 		for line, i in lines {
 			rl.DrawText(line, x0 + 6, y, 10, i == 5 && p.trace_on ? rl.RED : rl.RAYWHITE)
 			y += LINE
@@ -433,6 +446,7 @@ prof_overlay :: proc(w: ^World) {
 			y += LINE
 			shown += 1
 		}
+		ui_window_end(w, false)
 	}
 }
 

@@ -293,6 +293,10 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   the mouse off the map next frame (ui_mouse_captured), w.ui.popup takes the clicks inside it.
                   Kit: ui_card, ui_round_button, ui_pill_button, ui_toggle, ui_segment, ui_stat_chip,
                   ui_input, ui_zoom_pill, ui_tile, ui_toast (1.6 s), ui_focus_ring, round_rect.
+                  Movable windows (Window_Id, Ui_Window in w.ui): Settings (F2), Profiler (F3), Layers,
+                  Nav_Banner, Nav_Sheet, Carpool_Nav move freely and snap back to their default positions
+                  within WINDOW_SNAP_PX (24 px) or on handle double-click; ui_point_occluded prevents clicks
+                  passing through overlapping windows.
   camera.odin     (Dario) Cam in World: pose {pan, zoom, yaw, tilt}, a perspective Camera3D over the ground plane
                   (world = x km, y km, -alt km, FOV 45). Modes Free / Chase / Preview, glides with ease-out.
                   cam_to_screen(w, pos) is how everything projects; cam_ground_at(w, px) is the inverse on z = 0.
@@ -310,7 +314,8 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   No sound button (speech is NOT DOING).
   plan_ui.odin    (Andrei) plan panel (cards A and B, hub search, departure list, route rows, wind note,
                   Preview / Start; without a route they toast what is missing and shake the empty from / to field red,
-                  plan_nudge), hub menu on the map, map buttons, layers panel, layers_draw_ground.
+                  plan_nudge; drags horizontally and snaps only Left or Right via w.ui.plan_side, with map
+                  buttons and plan_map_rect on the opposite side), hub menu on the map, map buttons, layers panel, layers_draw_ground.
                   Hub search (match_hub): case- and accent-insensitive, UTF-8 U+00C0..U+00FF fold to their base
                   letter (LATIN1_BASE), so "Liege" finds "Li\xc3\xa8ge" (UTF-8 bytes). Route rows show "+X.X kWh solar" (sum.solar_kwh)
                   in pal.green. The Greenest route is drawn in pal.green_route / green_route_casing (nav_draw_routes).

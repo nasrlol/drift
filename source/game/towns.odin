@@ -1,8 +1,30 @@
 package game
 
+import "core:fmt"
 import "core:math"
 import "core:math/linalg"
 import rl "vendor:raylib"
+
+// Town settings (F2 editor Towns tab): controls generated town buildings in map and street views.
+Town_Edit :: struct {
+	show:         bool,
+	road_only:    bool,
+	align_road:   bool,
+	road_reach_m: f32,
+	fill:         f32,
+	lot_m:        f32,
+}
+
+town_edit_defaults :: proc() -> Town_Edit {
+	return {
+		show = true,
+		road_only = true,
+		align_road = true,
+		road_reach_m = 42,
+		fill = TOWN_FILL,
+		lot_m = TOWN_LOT_M,
+	}
+}
 
 // Buildings everywhere (Lars, 2026-11-21: "ik wil overal 3d gebouwen - niet alleen in hoofdsteden"). The real
 // OSM footprints only fit for the 15 city centres (buildings.odin, 7.6 M buildings in all of Belgium), so the
@@ -55,27 +77,39 @@ town_lot :: proc(
 	height: f32,
 	ok: bool,
 ) {
-	lot := f32(TOWN_LOT_M) / 1000
+	te := &w.town_edit
+	if !te.show do return
+	lot := (te.lot_m > 0 ? te.lot_m : TOWN_LOT_M) / 1000
 	c := (ax * (f32(i) + 0.5) + ay * (f32(j) + 0.5)) * lot
 	h := town_lot_hash(seed, i, j)
 	r0 := f32(h & 0xff) / 255
 	r1 := f32((h >> 8) & 0xff) / 255
 	r2 := f32((h >> 16) & 0xff) / 255
 	r3 := f32(h >> 24) / 255
-	if r0 > TOWN_FILL do return
+	if r0 > te.fill do return
 	co := &w.collide
 	if !co.built do collide_build(w)
 	for o in co.cities[:co.city_count] do if linalg.length(c - o) < BUILDINGS_RADIUS_KM do return
+	hx, hy := ax, ay
+	if te.road_only || te.align_road {
+		reach := max(te.road_reach_m, 15)
+		_, rdir, has_road := town_nearest_road(w, c, te.road_only ? reach : 120)
+		if te.road_only && !has_road do return
+		if te.align_road && has_road {
+			hx = rdir
+			hy = {-rdir.y, rdir.x}
+		}
+	}
 	half := [2]f32{TOWN_HALF_MIN + 0.2 * r1, TOWN_HALF_MIN + 0.2 * r2} * lot
-	if !town_lot_clear(w, c, ax, ay, half * 1000) do return
+	if !town_lot_clear(w, c, hx, hy, half * 1000) do return
 	height = (5 + 9 * r3 * r3 + (r1 > 0.97 ? 20 * r2 : 0)) / 1000
 	// Counter-clockwise on the map (y south): the lattice axes are a rotation, so -u-v, -u+v, +u+v, +u-v turns
 	// the same way as the ground quads.
 	ring = {
-		c - ax * half.x - ay * half.y,
-		c - ax * half.x + ay * half.y,
-		c + ax * half.x + ay * half.y,
-		c + ax * half.x - ay * half.y,
+		c - hx * half.x - hy * half.y,
+		c - hx * half.x + hy * half.y,
+		c + hx * half.x + hy * half.y,
+		c + hx * half.x - hy * half.y,
 	}
 	return ring, height, true
 }
@@ -92,6 +126,7 @@ Town_House :: struct {
 // street view (houses.odin) both draw these. gardens, when given, gets the centres (km) of the lots left empty by
 // TOWN_FILL: the street view puts garden trees there.
 town_houses :: proc(w: ^World, lo, hi: [2]f32, out: ^[dynamic]Town_House, gardens: ^[dynamic][2]f32 = nil) {
+	if !w.town_edit.show do return
 	b := &w.buildings
 	for o in b.origins[:b.count] {
 		// The whole tile inside a circle of real buildings: nothing to make.
@@ -103,7 +138,7 @@ town_houses :: proc(w: ^World, lo, hi: [2]f32, out: ^[dynamic]Town_House, garden
 	// cells is made in the first one.
 	co := &w.collide
 	if !co.built do collide_build(w)
-	lot := f32(TOWN_LOT_M) / 1000
+	lot := (w.town_edit.lot_m > 0 ? w.town_edit.lot_m : TOWN_LOT_M) / 1000
 	cx0 := clamp(int(math.floor(lo.x / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_W - 1)
 	cx1 := clamp(int(math.floor(hi.x / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_W - 1)
 	cy0 := clamp(int(math.floor(lo.y / COLLIDE_TRI_CELL_KM)), 0, COLLIDE_TRI_H - 1)
@@ -134,7 +169,7 @@ town_houses :: proc(w: ^World, lo, hi: [2]f32, out: ^[dynamic]Town_House, garden
 					if !in_triangle(c, p0, p1, p2) do continue
 					ring, height, ok := town_lot(w, seed, ax, ay, i, j)
 					if !ok {
-						empty := f32(town_lot_hash(seed, i, j) & 0xff) / 255 > TOWN_FILL
+						empty := f32(town_lot_hash(seed, i, j) & 0xff) / 255 > w.town_edit.fill
 						if gardens != nil && empty do append(gardens, c)
 						continue
 					}
@@ -182,6 +217,42 @@ towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 towns_draw :: proc(w: ^World, target: [2]f32, reach: f32, place: Placement) {
 	prof_zone(w, .Towns_Draw)
 	b := &w.buildings
-	if !b.ready do return
+	if !b.ready || !w.town_edit.show do return
 	tiles_update_draw(w, &w.towns, TOWN_TILE_KM, reach, towns_build_tile, b.material, target, place)
+}
+
+town_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
+	e := &w.town_edit
+	pal := palette(w)
+	def := w.setting_defaults.towns
+	y := y
+	Toggle :: struct {
+		label: string,
+		val:   ^bool,
+	}
+	for t in ([?]Toggle{{"Generated towns", &e.show}, {"Near roads only", &e.road_only}, {"Face nearest road", &e.align_road}}) {
+		ui_text(w, {x, y}, t.label, .Roboto_400, 13, pal.text)
+		ui_toggle(w, {x + width - 36, y - 2, 36, 20}, t.val)
+		y += 28
+	}
+	y += 4
+	Row :: struct {
+		label:  string,
+		value:  ^f32,
+		def:    f32,
+		lo, hi: f32,
+		format: string,
+	}
+	rows := [?]Row {
+		{"Road reach", &e.road_reach_m, def.road_reach_m, 15, 180, "%.0f m"},
+		{"Fill density", &e.fill, def.fill, 0, 1, "%.2f"},
+		{"Lot spacing", &e.lot_m, def.lot_m, 18, 60, "%.0f m"},
+	}
+	buf: [32]u8
+	for row, i in rows {
+		text := fmt.bprintf(buf[:], row.format, row.value^)
+		ui_slider_row(w, x, y, width, row.label, text, row.value, row.lo, row.hi, row.def, drag, i + 1)
+		y += UI_SLIDER_ROW_H
+	}
+	return y
 }

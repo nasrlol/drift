@@ -19,6 +19,8 @@ Sky_Edit :: struct {
 	sun_strength: f32, // linear, the brightest channel of the sunlight
 	sun_height:   f32, // degrees above the horizon
 	sun_azimuth:  f32, // degrees from street +z (south) towards +x (east)
+	clouds:       bool, // procedural sky dome clouds in street view
+	cloud_amt:    f32,
 }
 
 sky_edit_defaults :: proc() -> Sky_Edit {
@@ -37,6 +39,8 @@ sky_edit_defaults :: proc() -> Sky_Edit {
 		sun_strength = strength,
 		sun_height = math.asin(l.sun_dir.y) * math.DEG_PER_RAD,
 		sun_azimuth = math.atan2(l.sun_dir.x, l.sun_dir.z) * math.DEG_PER_RAD,
+		clouds = true,
+		cloud_amt = 0.55,
 	}
 }
 
@@ -199,7 +203,11 @@ sky_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 		{"Sun strength", &e.sun_strength, def.sun_strength, 0, 6, "%.2f"},
 		{"Sun height", &e.sun_height, def.sun_height, 1, 90, "%.0f deg"},
 		{"Sun direction", &e.sun_azimuth, def.sun_azimuth, -180, 180, "%.0f deg"},
+		{"Sky clouds", &e.cloud_amt, def.cloud_amt, 0, 1.5, "%.2f"},
 	}
+	ui_text(w, {x, y}, "Sky clouds", .Roboto_400, 13, pal.text)
+	ui_toggle(w, {x + width - 36, y - 2, 36, 20}, &e.clouds)
+	y += 28
 	buf: [32]u8
 	for row in rows {
 		text := fmt.bprintf(buf[:], row.format, row.value^)

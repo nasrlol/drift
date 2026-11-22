@@ -21,6 +21,11 @@ Settings_Tab :: enum {
 	Grass,
 	View,
 	Sky,
+	Turbines,
+	Towers,
+	Solar,
+	Rural,
+	Towns,
 	Colors,
 	Fonts,
 	Style,
@@ -45,6 +50,7 @@ Settings :: struct {
 	loaded:     bool, // cache/settings.txt was read (first frame of the panel)
 	saved_sum:  u64, // hash of what cache/settings.txt holds
 	save_err:   bool, // the last save failed
+	last_town:  Town_Edit, // rebuilds town tiles when Town_Edit changes
 }
 
 // The design's font families plus additional bundled families. Font_Family_Of gives the family and weight of each Font.
@@ -227,6 +233,12 @@ settings_apply :: proc(w: ^World) {
 		lm.areas = {}
 		areas_build(w, lm)
 	}
+	if w.settings.last_town != w.town_edit {
+		w.settings.last_town = w.town_edit
+		tiles_unload(&w.towns)
+		tiles_unload(&w.street.houses)
+		for &t in w.street.trees.tiles do t.used = false
+	}
 }
 
 settings_reset :: proc(w: ^World, tab: Settings_Tab) {
@@ -246,6 +258,16 @@ settings_reset :: proc(w: ^World, tab: Settings_Tab) {
 		w.view_edit = w.setting_defaults.view
 	case .Sky:
 		w.sky_edit = w.setting_defaults.sky
+	case .Turbines:
+		w.turbine_edit = w.setting_defaults.turbines
+	case .Towers:
+		w.tower_edit = w.setting_defaults.towers
+	case .Solar:
+		w.solar_edit = w.setting_defaults.solar
+	case .Rural:
+		w.rural_edit = w.setting_defaults.rural
+	case .Towns:
+		w.town_edit = w.setting_defaults.towns
 	case .Colors:
 		w.look.palette = def.palette
 	case .Fonts:
@@ -283,15 +305,27 @@ settings_keep :: proc(w: ^World) {
 settings_ui :: proc(w: ^World) {
 	s := &w.settings
 	settings_keep(w)
-	if key_pressed(w, .F2) do s.open = !s.open
+	if key_pressed(w, .F2) {
+		s.open = !s.open
+		if w.street.on && !w.script.on {
+			if s.open do rl.EnableCursor()
+			else do rl.DisableCursor()
+		}
+	}
 	if !s.open do return
 	pal := palette(w)
 	if !rl.IsMouseButtonDown(.LEFT) do s.drag = 0
 
 	sw := f32(rl.GetScreenWidth())
-	panel := rl.Rectangle{max(sw - 16 - 80 - SETTINGS_W, 16), 80, SETTINGS_W, max(s.height, 200)}
+	def_x := max(sw - 16 - 80 - SETTINGS_W, 16)
+	if w.screen == .Plan && w.ui.plan_side == .Right {
+		def_x = min(f32(16 + 80), max(sw - SETTINGS_W - 16, 16))
+	}
+	def_rect := rl.Rectangle{def_x, 80, SETTINGS_W, max(s.height, 200)}
+	panel := ui_window_begin(w, .Settings, def_rect, 46)
 	ui_card(w, panel)
-	ui_block(w, panel)
+	handle_hot := rl.CheckCollisionPointRec(rl.GetMousePosition(), {panel.x, panel.y, panel.width, 46})
+	ui_draw_grip(w, panel, w.ui.drag_win == .Settings || handle_hot)
 	x := panel.x + 16
 	inner := panel.width - 32
 	ui_text(w, {x, panel.y + 16}, "Settings", .Figtree_600, 16, pal.text)
@@ -323,6 +357,16 @@ settings_ui :: proc(w: ^World) {
 		y = view_tab(w, x, y, inner, &s.drag)
 	case .Sky:
 		y = sky_tab(w, x, y, inner, &s.drag)
+	case .Turbines:
+		y = turbine_tab(w, x, y, inner, &s.drag)
+	case .Towers:
+		y = tower_tab(w, x, y, inner, &s.drag)
+	case .Solar:
+		y = solar_tab(w, x, y, inner, &s.drag)
+	case .Rural:
+		y = rural_tab(w, x, y, inner, &s.drag)
+	case .Towns:
+		y = town_tab(w, x, y, inner, &s.drag)
 	case .Colors:
 		y = colors_tab(w, x, y, inner, &s.drag)
 	case .Fonts:
@@ -352,6 +396,7 @@ settings_ui :: proc(w: ^World) {
 	if s.save_err do status = "Cannot save cache/settings.txt"
 	ui_text(w, {x, y}, status, .Roboto_400, 11, s.save_err ? pal.warning : pal.text_2)
 	s.height = y + 14 + 16 - panel.y
+	ui_window_end(w, s.drag == 0)
 }
 
 // Wraps a segmented bar into rows of at most cols items, updating chosen on selection and advancing y.

@@ -98,6 +98,11 @@ World :: struct {
 	view_edit:        View_Edit, // the tilted map's horizon, view_edit.odin
 	sky_edit:         Sky_Edit, // street view sky and sun, sky_edit.odin
 	grass_edit:       Grass_Edit, // street view grass, grass_edit.odin
+	turbine_edit:     Turbine_Edit, // wind turbines, solarpunk.odin
+	tower_edit:       Tower_Edit, // hub docking towers, solarpunk.odin
+	solar_edit:       Solar_Edit, // 3D solar farms, solarpunk.odin
+	rural_edit:       Rural_Edit, // rural fields, trees and barns, solarpunk.odin
+	town_edit:        Town_Edit, // generated town houses, towns.odin
 	// Other cars from the presence gossip (presence.odin), copied from the node table every PRESENCE_COPY_S.
 	others:           [PRESENCE_SLOTS]Other_Car,
 	other_count:      int,
@@ -747,6 +752,9 @@ game_update :: proc(memory: rawptr) -> bool {
 		text := ui_text_size(w, CREDIT, .Roboto_400, PX)
 		screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 		pos := linalg.floor(screen - text - PAD)
+		if w.screen == .Plan && w.ui.plan_side == .Right {
+			pos.x = min(pos.x, max(screen.x - PLAN_PANEL_W - PLAN_MARGIN - 12 - text.x, PAD))
+		}
 		ui_text(w, pos, CREDIT, .Roboto_400, PX, pal.text_2)
 	}
 	when DRIFT_DEBUG do settings_ui(w)

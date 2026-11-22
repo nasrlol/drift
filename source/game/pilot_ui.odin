@@ -94,7 +94,7 @@ pilot_ui :: proc(w: ^World) {
 		dia := max(bat.dia, spd_h + 18, max(svs.x, sus.x) + 18)
 		r := dia / 2
 
-		sc := [2]f32{16 + r, sheet.y - 84 - dia - 12 - r}
+		sc := [2]f32{16 + r, nav_sheet_default_rect(w).y - 84 - dia - 12 - r}
 		ui_shadow(w, {sc.x - r, sc.y - r, dia, dia}, r)
 		rl.DrawCircleV(sc, r, pal.surface)
 		ui_decorate_circle(w, sc, r)
@@ -102,11 +102,12 @@ pilot_ui :: proc(w: ^World) {
 		ui_text(w, {sc.x - svs.x / 2, stop}, sv, .Figtree_700, 25, pal.text)
 		ui_text(w, {sc.x - sus.x / 2, stop + svs.y + 2}, "km/h", .Figtree_700, 11, pal.text_2)
 
-		ui_battery_circle(w, {16 + r, sheet.y - 84 - r}, dia, bat)
+		ui_battery_circle(w, {16 + r, nav_sheet_default_rect(w).y - 84 - r}, dia, bat)
 	}
 
 	// Re-centre, self-fly and Exit (Done on arrival) in the sheet, right.
 	{
+		w.ui.current_win = .Nav_Sheet
 		passenger := carpool_is_passenger(w)
 		done := !passenger && n.banner == .Arrived && n.active
 		exit_text := passenger ? "Plan" : done ? "Done" : "Exit"
@@ -155,14 +156,9 @@ pilot_ui :: proc(w: ^World) {
 			state := on ? "Manual" : "Autopilot"
 			size := ui_text_size(w, state, .Figtree_600, BUTTON_LABEL_PX)
 			pill_bg, pill_fg := on ? pal.accent : pal.pill, on ? pal.sheet : rl.WHITE
-			button_label(
-				w,
-				state,
-				c.x + (size.x + 20) / 2,
-				sheet.y - 12 - (size.y + 10) / 2,
-				pill_bg,
-				pill_fg,
-			)
+			pill_y :=
+				sheet.y >= 40 ? sheet.y - 12 - (size.y + 10) / 2 : sheet.y + sheet.height + 12 + (size.y + 10) / 2
+			button_label(w, state, c.x + (size.x + 20) / 2, pill_y, pill_bg, pill_fg)
 		}
 		if w.cam.dragged {
 			rec := rl.Rectangle{left_x - 14 - SELF_FLY_BUTTON, exit.y, SELF_FLY_BUTTON, SELF_FLY_BUTTON}
@@ -176,6 +172,7 @@ pilot_ui :: proc(w: ^World) {
 			ui_block(w, rec)
 			if fired do cam_recentre(w)
 		}
+		ui_window_end(w)
 	}
 
 }
