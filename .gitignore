@@ -15,6 +15,7 @@
 *.dSYM/
 *.out
 *.app/
+test.bin
 
 # profiling, debugging, crashes
 *.spall
