@@ -561,21 +561,12 @@ game_update :: proc(memory: rawptr) -> bool {
 			if show_wind do rl.DrawMesh(lm.wind, lm.material, rl.Matrix(1))
 
 			// Draw order 4: the 3D buildings around the cities and the trees, over the roads. They grow out of the
-			// ground while the camera zooms in.
-			grow := clamp((w.cam.pose.zoom - BUILDINGS_ZOOM_0) / (BUILDINGS_ZOOM_1 - BUILDINGS_ZOOM_0), 0, 1)
-			if grow > 0 {
+			// ground by their size on the screen (buildings.odin).
+			if feature_px, shown := buildings_feature_px(&w.cam); shown {
 				target := w.cam.view.target.xy
 				view_km := w.cam.screen.x / max(w.cam.px_per_km, 1e-3)
 				look := buildings_map_look(w)
-				buildings_draw(
-					w,
-					fog,
-					ease_in_out(grow),
-					target,
-					BUILDINGS_CULL_KM + view_km,
-					MAP_PLACEMENT,
-					look,
-				)
+				buildings_draw(w, fog, feature_px, target, BUILDINGS_CULL_KM + view_km, MAP_PLACEMENT, look)
 				towns_draw(w, target, TOWN_REACH_KM, MAP_PLACEMENT)
 				nature_draw(w, target, TREE_REACH_KM, MAP_PLACEMENT)
 			}
