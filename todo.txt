@@ -257,8 +257,9 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 [x] realism step 1 "Light, glass, grading" (Lars: "te veel Roblox, zoals GTA 6"): GGX highlights, mirrored street
     in windows and car paint, weathered facades, fewer green roofs, street car shader, Perlin grass, HDR target
     with AO, bloom, grading and edge-only FXAA (post.odin)
-[ ] realism step 2: trees from leaf cards with wind, impostors far away; window recesses and interiors behind
-    the glass (interior mapping), cornices, balconies, gutters; photo textures (CC0, needs Lars's yes)
+[ ] realism step 2: window recesses and interiors behind the glass (interior mapping), cornices, balconies,
+    gutters; photo textures (CC0, needs Lars's yes); impostors for far trees
+[x] lars: trees from leaf cards with wind: leaf atlas made in code, branches, bark, alpha-tested shadows (trees.odin)
 [ ] realism step 3: street furniture, parked cars, traffic; a physical sky with clouds; the round world against
     LOD + haze (decide with Abdellah)
 [x] trees with trunks near the camera, street trees, instanced (trees.odin)
