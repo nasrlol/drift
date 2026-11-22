@@ -108,7 +108,7 @@ pick :: proc(seed: ^u32, n: int) -> int {
 
 // The colour c with a small random shift, and the material code (Street_Mat | flags) in alpha.
 house_color :: proc(seed: ^u32, c: [3]u8, mat: Street_Mat, flags: u8 = 0) -> [4]u8 {
-	k := 0.92 + 0.16 * nature_rand(seed)
+	k := 0.84 + 0.2 * nature_rand(seed)
 	return {
 		u8(clamp(f32(c.r) * k, 0, 255)),
 		u8(clamp(f32(c.g) * k, 0, 255)),
@@ -117,25 +117,27 @@ house_color :: proc(seed: ^u32, c: [3]u8, mat: Street_Mat, flags: u8 = 0) -> [4]
 	}
 }
 
+// Weathered town colours (Lars, 2026-11-22: "minder Roblox, realistischer"): no clean whites, greyed plaster.
 HOUSE_BRICKS :: [?][3]u8 {
-	{150, 74, 54},
-	{132, 62, 46},
-	{164, 92, 64},
-	{118, 66, 52},
-	{98, 54, 44},
-	{190, 156, 108}, // yellow Kempen brick
-	{226, 222, 212}, // white-washed brick
+	{142, 72, 54},
+	{124, 62, 48},
+	{156, 90, 64},
+	{110, 64, 52},
+	{92, 54, 46},
+	{120, 84, 66}, // brown-grey
+	{176, 146, 104}, // yellow Kempen brick
+	{204, 200, 190}, // white-washed brick
 }
 HOUSE_PLASTERS :: [?][3]u8 {
-	{236, 232, 222},
-	{232, 220, 190},
-	{214, 212, 204},
-	{226, 200, 172},
-	{204, 214, 192},
-	{196, 206, 214},
-	{230, 214, 206},
+	{214, 208, 196},
+	{212, 200, 174},
+	{196, 194, 186},
+	{206, 186, 160},
+	{188, 194, 178},
+	{180, 188, 194},
+	{208, 196, 188},
 }
-HOUSE_STONES :: [?][3]u8{{208, 198, 178}, {184, 180, 170}, {196, 186, 160}}
+HOUSE_STONES :: [?][3]u8{{196, 186, 166}, {170, 166, 156}, {184, 174, 150}}
 HOUSE_CURTAINS :: [?][3]u8{{70, 84, 96}, {88, 100, 104}, {60, 70, 84}}
 HOUSE_TILES :: [?][3]u8{{148, 64, 44}, {170, 92, 58}, {112, 56, 40}, {92, 52, 40}}
 HOUSE_SLATES :: [?][3]u8{{64, 68, 76}, {80, 84, 94}, {56, 58, 64}}
@@ -228,7 +230,7 @@ house_add :: proc(m: ^House_Mesh, ring: [][2]f32, height: f32, seed: u32, real: 
 		roof_mat := Street_Mat.Flat_Roof
 		roof_c := [3]u8{98, 96, 92}
 		rt := nature_rand(&r)
-		if rt < 0.45 {
+		if rt < 0.15 {
 			roof_mat, roof_c = .Green_Roof, {92, 118, 62}
 		}
 		rc := house_color(&r, roof_c, roof_mat)
@@ -261,7 +263,7 @@ house_add :: proc(m: ^House_Mesh, ring: [][2]f32, height: f32, seed: u32, real: 
 				half := [2]f32{0.6 + 0.8 * nature_rand(&r), 0.5 + 0.6 * nature_rand(&r)}
 				hm_box(m, c, {1, 0}, half, height, height + 0.8 + 0.8 * nature_rand(&r), metal, metal)
 			}
-			if rt >= 0.45 && rt < 0.8 {
+			if rt >= 0.15 && rt < 0.5 {
 				// Rows of panels facing south (+y on the map), 1.7 m deep, tilted 20 deg, 1.5 m apart.
 				solar := house_color(&r, {28, 36, 64}, .Solar)
 				tilt :: 0.35

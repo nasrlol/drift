@@ -742,6 +742,37 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   to whole texels in f64 world metres so edges do not crawl. Houses, trees and cars cast (depth-only
                   shader), houses and the ground receive (sun_shadow in STREET_GLSL: normal offset 0.12 m, bias
                   0.09 m, 3 x 3 PCF, faded at the box edge). The texture is bound to slot 14 for the main pass.
+  realism         (street.odin, post.odin; Lars, 2026-11-22: "het lijkt te veel op Roblox, ik wil het realistischer,
+                  zoals GTA 6", step one of the research plan: "Light, glass, grading"). Materials: GGX sun highlights
+                  with a roughness per material (slate 0.38, tiles 0.62, walls 0.8-0.85, metal 0.35 with f0 0.5) and
+                  a roughness-aware Fresnel (Lagarde), so grazing rough walls and leaves do not mirror; env_col is
+                  what smooth surfaces mirror: the sky above a skyline band of town that depends only on the
+                  direction (neighbouring windows see the same street across) and the sunlit ground below. Window
+                  panes each tilt a hair (per pane hash), so their reflections differ. Facades weather: splash dirt
+                  at the foot, grime patches, rain streaks under the sills, darker under the cornice; plaster is
+                  greyed by 20 %; the house palettes have no clean whites any more; green roofs on 15 % of the flat
+                  roofs (was 45 %), sedum darker and browner. The cars draw with their own STREET_CAR_VS / FS (the
+                  CAR_FS classes in linear light with the street's sun, shadows, haze, env_col reflections: paint
+                  under a clear coat, dark glass, metal), bent with the round world, so other cars no longer float
+                  above the bent ground. Open grass (land, parks, marsh) is Perlin noise (fbm, 2 octaves each):
+                  lush / straw patches of 64 m, tufts of 8 m, clumps of 1 m, worn earth, olive instead of paint
+                  green (Lars: "maak van de lege groene vlaktes ook perlin noise"). The sky's zenith is deeper blue.
+  post.odin       (Lars) the street view's picture after the scene: the scene draws linear light (hdr_out) into an
+                  RGBA16F target with a depth texture (made with rlgl like the shadow map); ambient occlusion at
+                  half size from the depth (12 points in the half sphere, 1.2 m, normals from the neighbour on the
+                  same surface, the ground's points from the plane under the eye because its depth is layered far,
+                  gone between 70 and 180 m) with a 4 x 4 blur; bloom over 5 halvings (the first weighted 1 / (1 +
+                  luma) against sparkling glints), 3 % of it; exposure, saturation 0.97, warm highlights / cool
+                  shade, ACES, an S-curve (0.3), a soft vignette, +-0.5 % grain; then FXAA on strong edges only (the
+                  float target has no MSAA; the first, unthresholded FXAA smeared windows and grass up to 8 px and
+                  looked like motion blur, Lars: "er is nu echt te veel motion blur"). raylib forgets bound samplers
+                  when it flushes its batch (changing target does), so post_pass binds them inside the pass.
+                  Without a float target the shaders tonemap themselves (direct) and the scene goes to the screen.
+                  The ground writes one more depth hair, so the sky (clear value 1) stays apart from it for the AO.
+                  Frame (profile build, mean of 120 frames before each standard shot, now logged with every
+                  scripted shot): with post 2.6-3.2 ms, without 1.5-2.5 ms (tower 3.06 / 2.44, street 2.91 / 2.03,
+                  main road 3.19 / 2.52, park 3.10 / 2.46, country 2.61 / 1.45); part of the difference is the CPU
+                  now waiting for the scene's GPU work that used to finish unseen in EndDrawing.
   street.odin     (Lars) the street view (Lars, 2026-11-21: "een 3d game waar je tussen huizen kan vliegen, zoals
                   gta in third person, zo realistisch mogelijk"). One world, no key for it (Lars, 2026-11-22: "geen 2
                   modes, als je via de map zo laag naar beneden gaat switch je naar de 3d game, en omgekeerd als je
@@ -1028,7 +1059,7 @@ Files and owners
   weather.odin, net.odin, plan_ui.odin            Andrei  weather, network, plan screen, layers panel, legend
   presence.odin                                   Andrei  other cars by gossip (network)
   buildings.odin, nature.odin, clouds.odin        nasr    3D buildings, trees, clouds (map rendering)
-  street.odin, collide.odin                       Lars    street view, building collision
+  street.odin, collide.odin, post.odin            Lars    street view, building collision, post effects
   (owners of the 2026-11-21 files are our guess from the split above, to confirm in the PR)
 
 World fields (zero = the design default: plan screen, nothing chosen)
