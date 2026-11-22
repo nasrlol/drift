@@ -109,6 +109,11 @@ Street_Edit :: struct {
 	haze_max:      f32,
 	switch_low_m:  f32,
 	switch_high_m: f32,
+	// What the street view shows while navigating (street_draw step 6, street_hud). The arrow over the car is off
+	// by default (Lars, 2026-11-22: "kan je de pijl even wegdoen").
+	guide_arrow:   bool,
+	guide_marks:   bool, // the chevrons on the route
+	minimap:       bool,
 }
 
 street_edit_defaults :: proc() -> Street_Edit {
@@ -126,6 +131,8 @@ street_edit_defaults :: proc() -> Street_Edit {
 		haze_max = STREET_LOOK.haze.y,
 		switch_low_m = STREET_LOW_M,
 		switch_high_m = STREET_HIGH_M,
+		guide_marks = true,
+		minimap = true,
 	}
 }
 Street :: struct {
@@ -1839,7 +1846,8 @@ street_draw :: proc(w: ^World) {
 	// chevrons on the route ahead, gliding forward and tilted up so the chase camera sees them, and an arrow over
 	// the car that points at the route GUIDE_AHEAD_M ahead (up or down to it too). Plain vertex colours, bent by
 	// the round world on the CPU like STREET_BEND_GLSL does it on the GPU.
-	if r := nav_route(w); r != nil && w.nav.banner != .Arrived && len(r.path) >= 2 {
+	guide := w.street_edit.guide_arrow || w.street_edit.guide_marks
+	if r := nav_route(w); guide && r != nil && w.nav.banner != .Arrived && len(r.path) >= 2 {
 		// Street space at s km along the path, and the direction there (over GUIDE_TANGENT_M).
 		path_at :: proc(w: ^World, r: ^Planned_Route, s: f32) -> (pos, dir: [3]f32) {
 			street :: proc(w: ^World, p: [3]f32) -> [3]f32 {
@@ -1877,7 +1885,7 @@ street_draw :: proc(w: ^World) {
 		rlgl.DisableBackfaceCulling()
 		rlgl.SetTexture(rlgl.GetTextureIdDefault())
 		rlgl.Begin(rlgl.TRIANGLES)
-		{
+		if w.street_edit.guide_marks {
 			glide := math.mod(st.on_s * GUIDE_GLIDE_MS, GUIDE_STEP_M)
 			for k := GUIDE_FIRST_M + glide; k <= GUIDE_LAST_M; k += GUIDE_STEP_M {
 				s := w.nav.s_km + k / 1000
@@ -1902,7 +1910,7 @@ street_draw :: proc(w: ^World) {
 				}
 			}
 		}
-		{
+		if w.street_edit.guide_arrow {
 			car := street_ship_pos(w)
 			goal, _ := path_at(w, r, min(w.nav.s_km + GUIDE_AHEAD_M / 1000, end_km))
 			centre := car + {0, GUIDE_ABOVE_M + 0.15 * math.sin(st.on_s * 3), 0}
@@ -2098,7 +2106,7 @@ street_hud :: proc(w: ^World) {
 	// The minimap (Lars, 2026-11-22: "minimap"): roads and rivers around the car, the route, the other cars and
 	// the destination, turned with the camera so up is where it looks. Cars and the destination beyond its edge
 	// sit on the rim, so the way to them shows. Grows with the speed (MINIMAP_KM_PER_MS).
-	{
+	if w.street_edit.minimap {
 		R :: MINIMAP_PX
 		mid := [2]f32{screen.x - PAD - R, screen.y - PAD - 14 - R}
 		speed_ms := s.free ? linalg.length(s.vel.xy) : s.speed
@@ -2237,7 +2245,19 @@ street_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 	e := &w.street_edit
 	def := w.setting_defaults.street
 	prev_dist := e.cam_dist_m
-	cur_y := settings_toggles(w, x, y, width, {{"Sun shadows", &e.shadows}})
+	cur_y := settings_toggles(
+		w,
+		x,
+		y,
+		width,
+		{
+			{"Sun shadows", &e.shadows},
+			{"Minimap", &e.minimap},
+			{"Route chevrons", &e.guide_marks},
+			{"Arrow over the car", &e.guide_arrow},
+			{"Peer names", &w.view_edit.peer_names},
+		},
+	)
 	rows := [?]Editor_Slider {
 		{"Shadow box", &e.shadow_box_m, def.shadow_box_m, 100, 1000, "%.0f m"},
 		{"Camera distance", &e.cam_dist_m, def.cam_dist_m, STREET_CAM_MIN_M, 25, "%.1f m"},

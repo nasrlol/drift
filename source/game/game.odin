@@ -357,9 +357,9 @@ game_update :: proc(memory: rawptr) -> bool {
 			ui_toast(w, "Carpool accepted, click Board ride")
 		}
 		carpool_frame(w, frame_time(w))
-		presence_frame(w, frame_time(w))
 		music_frame(w)
 	}
+	if !w.script.on || w.script.net do presence_frame(w, frame_time(w))
 
 	if key_pressed(w, .F5) {
 		b := strings.builder_make(context.temp_allocator)

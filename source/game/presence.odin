@@ -7,6 +7,7 @@ import "core:math"
 import "core:math/linalg"
 import "core:mem"
 import "core:net"
+import "core:strings"
 import "core:sync"
 import "core:time"
 
@@ -20,10 +21,10 @@ import "core:time"
 PRESENCE_MAGIC :: 0x50525244 // "DRRP"
 // Other cars showed seconds late (Lars, 2026-11-22: "met delay, die moet je fixen"): a position was signed every
 // 2 s and swapped every 2 s, and every exchange waited on Nagle + delayed ACK (now TCP_NODELAY, net_options).
-// While any car is live the game signs and swaps 5 times a second; with nothing live every PRESENCE_IDLE_S, enough
-// to notice a car that shows up.
+// While any car is live the game signs and swaps 5 times a second; with nothing live every PRESENCE_IDLE_S, so a
+// car that shows up is seen within a second or two.
 PRESENCE_S :: 0.2
-PRESENCE_IDLE_S :: 2.0
+PRESENCE_IDLE_S :: 1.0
 PRESENCE_TTL_S :: 20
 PRESENCE_FUTURE_S :: 30 // allowed clock difference
 PRESENCE_SLOTS :: 256
@@ -237,7 +238,7 @@ node_presence :: proc(w: ^World) -> bool {
 }
 
 // Every frame: leaves the ship's newest position for the sync thread to sign while flying or driving, and
-// rebuilds w.others from the node table. Each car is its last report moved on to now (other_predict); a newer
+// rebuilds w.others from the node table, with a toast for every car that joins. Each car is its last report moved on to now (other_predict); a newer
 // report does not jump the car there, the difference fades out over a few frames.
 presence_frame :: proc(w: ^World, dt: f32) {
 	t := &w.node.presence
@@ -270,6 +271,17 @@ presence_frame :: proc(w: ^World, dt: f32) {
 	prev := make([]Other_Car, w.other_count, context.temp_allocator)
 	copy(prev, w.others[:w.other_count])
 	decay := math.exp(-dt * PRESENCE_SMOOTH)
+	joined := 0
+	joined_names: [2]string
+	defer switch joined {
+	case 0:
+	case 1:
+		ui_toast(w, fmt.tprintf("%s joined the game", joined_names[0]))
+	case 2:
+		ui_toast(w, fmt.tprintf("%s and %s joined the game", joined_names[0], joined_names[1]))
+	case:
+		ui_toast(w, fmt.tprintf("%d players joined the game", joined))
+	}
 	sync.mutex_lock(&t.lock)
 	defer sync.mutex_unlock(&t.lock)
 	w.other_count = 0
@@ -290,6 +302,13 @@ presence_frame :: proc(w: ^World, dt: f32) {
 		on_road := .On_Road in q.flags
 		seen := f32(t.recv_ms[i] - i64(q.time_ms))
 		if !known {
+			// Someone joined (Lars, 2026-11-22: "notification someone joining the game"): new, or back after
+			// PRESENCE_GONE_S without a word. One toast for all who joined this frame.
+			buf: [16]u8
+			name := peer_name_text(q.author, buf[:])
+			logf(w, "presence", "car %s joined", name)
+			if joined < len(joined_names) do joined_names[joined] = strings.clone(name, context.temp_allocator)
+			joined += 1
 			fwd := [2]f32{math.sin(heading), -math.cos(heading)}
 			o = {
 				author      = q.author,
@@ -341,6 +360,19 @@ presence_frame :: proc(w: ^World, dt: f32) {
 		w.others[w.other_count] = o
 		w.other_count += 1
 	}
+}
+
+// A test car for the end-to-end check (drift --headless --node --bot, script peers): it circles
+// PRESENCE_BOT_KM around centre at PRESENCE_BOT_MS, placed by the wall clock, so every process on one machine
+// knows where it really is at any moment and can measure how far its drawn copy is off.
+PRESENCE_BOT_KM :: 0.15
+PRESENCE_BOT_MS :: 20.0
+
+bot_pose :: proc(centre: [2]f32, now_ms: i64) -> (pos: [2]f32, heading: f32) {
+	period: f64 = math.TAU * PRESENCE_BOT_KM * 1000 / PRESENCE_BOT_MS * 1000
+	period_ms := i64(period)
+	a := f32(f64(now_ms % period_ms) / f64(period_ms) * math.TAU)
+	return centre + [2]f32{math.sin(a), -math.cos(a)} * PRESENCE_BOT_KM, a + math.PI / 2
 }
 
 // x as an angle in -pi ..< pi, for any x.

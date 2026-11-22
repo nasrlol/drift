@@ -625,7 +625,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   <heading deg>, down / up / press <frame> <raylib key name>, mouse <frame> <dx> <dy>,
                   wheel <frame> <notches>, nav <frame> <from hub> <to hub> <mode 0..2> (plan at hour 0 and Start,
                   logs where the ship starts), car <frame> <x km> <y km> <height m> <heading deg> [road] (another
-                  car as if from the gossip, standing there; w.others is not rebuilt in a scripted run),
+                  car as if from the gossip, standing there; w.others is not rebuilt in a scripted run), net <frame>
+                  <port> (the node from then on, cache/seeds.txt of the working directory, and w.others rebuilt from
+                  it: not deterministic, for end-to-end runs only), peers <from> <to> [<bot x> <bot y> <max m>] (the
+                  other cars; with a bot's centre its drawn and last-report distance from bot_pose and the ms in
+                  transit, FAILED when the mean is over max m or the bot is never seen),
                   shot <frame> <png> (LoadImageFromScreen + ExportImage after the frame
                   is drawn: TakeScreenshot drops the directory), quit <frame>, profile <from> <to> <prefix> (from >= 1, debug and profile builds: a spall trace
                   in <prefix>.spall and the mean per frame of every zone in <prefix>.csv, columns zone,
@@ -800,7 +804,7 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   runs map_time x faster than the clock, so cars lagged and jumped at every report. Now:
                     the frame loop leaves its newest position unsigned in the table (next); the sync thread signs it
                       right before each swap (signing off the frame thread, see #108) and swaps every PRESENCE_S
-                      0.2 s while anything is live, every PRESENCE_IDLE_S 2 s otherwise; the sync loop sleeps up to
+                      0.2 s while anything is live, every PRESENCE_IDLE_S 1 s otherwise; the sync loop sleeps up to
                       the next swap (<= 100 ms).
                     presence_frame rebuilds w.others every frame: velocity, turn and climb from the last two reports
                       (their own times, no clock in between), the clock difference to the author = the lowest
@@ -811,8 +815,18 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                       in for PRESENCE_GONE_S 5 s. pos / alt / heading of Other_Car are the drawn values, so the map,
                       the street view, traffic and the carpool all use them.
                     other_anim: bank, pitch, steered and rolling wheels and an eased fly for the other cars too.
-                  Not measured with two machines yet (2026-11-22): expected delay is a few tenths of a second plus
-                  3 round trips per exchange (connect, hello, 'Q').
+                    A car that joins (new, or back after PRESENCE_GONE_S) gets a toast "#abc123 joined the game"
+                      (Lars: "notification someone joining the game"), one per frame for all who joined ("A and B",
+                      "3 players"), and a "[presence] car #abc123 joined" log line.
+                  End to end (test/data/p2p_e2e.txt, setup in its header): two bots (drift --headless --node --bot
+                  <x> <y> <height>, a test car circling 150 m round the point at 20 m/s by the wall clock, bot_pose,
+                  logging "[bot] car #..: reports/s, ms in transit" every 2 s), a relay node and the game in a
+                  scripted run with the node on (script net) and peers ranges that measure how far each bot's drawn
+                  copy is from bot_pose (one clock on one machine, so exact). 2026-11-22, M-series Mac, localhost:
+                  joined within 0.3-1.7 s, drawn 0.6 / 0.8 m off the truth (max 1.0), the last report alone 2.7 m
+                  (what the prediction saves), 19-30 ms in transit; the game's car reached both bots 5 times a
+                  second, 11-43 ms in transit (rare 160 ms: the serve thread was busy with a sync). Between real
+                  machines add the network's 3 round trips per exchange (connect, hello, 'Q').
   traffic         (route.odin, ship.odin) traffic jams (Lars: "file ook"): every other flying car counts for the
                   grid nodes within TRAFFIC_RADIUS_KM 1 km in its own layer (traffic_build, per route). From
                   TRAFFIC_MIN_CARS 4 a node costs 1 + 0.5 per car over the minimum, at most 4x, in A*, line_cost and
@@ -1028,6 +1042,9 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   GUIDE_TILT up about the camera's right (flat, the nearly level camera saw it edge on), its tip up
                   or down with the route (at most 0.5 rad). rlgl triangles in vertex colours (route or green route),
                   bent by the round world on the CPU like STREET_BEND_GLSL. Checked with --script (nav + shots).
+  street toggles  F2 -> Street: Minimap, Route chevrons, Arrow over the car (off by default, Lars 2026-11-22: "kan je
+                  de pijl even wegdoen"), Peer names (view_edit.peer_names). Street_Edit.guide_arrow / guide_marks /
+                  minimap, stored like every setting (settings_store.odin).
   minimap         (street.odin street_hud; Lars: "minimap") bottom right above the credit, MINIMAP_PX 105 px radius,
                   turned with the camera (up = where it looks), MINIMAP_MIN_KM 0.35 km around the car at rest plus
                   0.012 km per m/s (max 1.5), eased. Roads and rivers from st.road_segs (the 2 km cells around the

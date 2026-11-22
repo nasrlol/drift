@@ -10,6 +10,7 @@ import "core:reflect"
 import "core:slice"
 import "core:strconv"
 import "core:strings"
+import "core:sync"
 import "core:time"
 import rl "vendor:raylib"
 
@@ -938,9 +939,10 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 game_headless :: proc(args: []string) -> bool {
 	USAGE ::
 		"usage: drift --headless --snapshot <file> --inputs <file> [--dump]\n" +
-		"       drift --headless --node [--port <n>]"
+		"       drift --headless --node [--port <n>] [--bot <x km> <y km> <height m>]"
 	snapshot_path, inputs_path: string
-	dump, node: bool
+	dump, node, bot: bool
+	bot_at: [3]f32
 	port := 0
 	for i := 0; i < len(args); i += 1 {
 		switch args[i] {
@@ -957,6 +959,18 @@ game_headless :: proc(args: []string) -> bool {
 				return false
 			}
 			i += 1
+		case "--bot":
+			ok := i + 3 < len(args)
+			for k in 0 ..< 3 {
+				if !ok do break
+				bot_at[k], ok = strconv.parse_f32(args[i + 1 + k])
+			}
+			if !ok || !(bot_at.x >= 0 && bot_at.x <= MAP_W_KM && bot_at.y >= 0 && bot_at.y <= MAP_H_KM) {
+				fmt.eprintfln("[headless] --bot needs <x km> <y km> <height m> on the map\n%s", USAGE)
+				return false
+			}
+			bot = true
+			i += 3
 		case "--snapshot", "--inputs":
 			if i + 1 == len(args) {
 				fmt.eprintfln("[headless] %s needs a file name\n%s", args[i], USAGE)
@@ -970,7 +984,7 @@ game_headless :: proc(args: []string) -> bool {
 			return false
 		}
 	}
-	if node do return node_run(port)
+	if node do return node_run(port, bot, bot_at)
 	if snapshot_path == "" || inputs_path == "" {
 		fmt.eprintln("[headless] missing --snapshot or --inputs\n" + USAGE)
 		return false
@@ -1119,6 +1133,11 @@ dump_world :: proc(w: ^World, out: ^strings.Builder) {
 //                                    start navigating that route (the Start button), the ship on its first point
 //   car <frame> <x km> <y km> <height above ground m> <heading deg> [road]   another car, as if from the
 //                                    presence gossip, standing there (on its wheels with road)
+//   net <frame> <port>               the peer to peer node from here on, listening on port (cache/seeds.txt of
+//                                    the working directory), and the other cars from it: an end-to-end run
+//   peers <from> <to> [<x km> <y km> <max m>]   the other cars over these frames; with a bot's centre
+//                                    (drift --headless --node --bot) how far its drawn copy is from where it
+//                                    really is (bot_pose, same clock), and FAILED when the mean is over max m
 //   down <frame> <KEY>   up <frame> <KEY>   press <frame> <KEY>    raylib key names: W, SPACE, LEFT_SHIFT, V
 //   mouse <frame> <dx px> <dy px>    wheel <frame> <notches>
 //   shot <frame> <png file>          after everything of that frame is drawn
@@ -1144,6 +1163,8 @@ Script_Kind :: enum u8 {
 	Ship,
 	Nav,
 	Car,
+	Net,
+	Peers,
 	Shot,
 	Flicker,
 	Judder,
@@ -1182,6 +1203,15 @@ Script :: struct {
 	jd:       [2][2]f32,
 	jd_seen:  int,
 	jd_max:   f32,
+	net:      bool, // the node and the other cars run (net command)
+	// peers: frames counted, frames with the bot car, its drawn and its last report's distance from the truth (m),
+	// the reports' ms in transit
+	pr_seen:  int,
+	pr_hits:  int,
+	pr_cars:  int,
+	pr_drawn: [2]f32, // sum, max
+	pr_raw:   [2]f32,
+	pr_lat:   [2]f32,
 }
 
 // Reads and checks the whole script before the first frame: a bad line stops the run with its line number.
@@ -1287,6 +1317,22 @@ game_script :: proc(memory: rawptr, path: string) -> bool {
 				h_ok &&
 				deg_ok &&
 				on_map
+		case "net":
+			port, port_ok := strconv.parse_int(f[2], 10)
+			e.kind, e.v.x = .Net, f32(port)
+			ok = n == 3 && frame_ok && port_ok && port >= 1 && port <= 65535
+		case "peers":
+			to, to_ok := strconv.parse_int(f[2], 10)
+			e.kind, e.v.x = .Peers, f32(to)
+			ok = (n == 3 || n == 6) && frame_ok && to_ok && to >= frame
+			if n == 6 {
+				x, x_ok := num(f[3])
+				y, y_ok := num(f[4])
+				budget, budget_ok := num(f[5])
+				e.v.yzw = {x, y, budget}
+				e.key = .B // with a bot
+				ok &&= x_ok && y_ok && budget_ok && budget > 0
+			}
 		case "shot":
 			e.kind, e.path = .Shot, f[2]
 			ok = n == 3 && frame_ok && strings.has_suffix(f[2], ".png")
@@ -1412,6 +1458,10 @@ script_frame :: proc(w: ^World) {
 				s.pos.y,
 				s.heading * 180 / math.PI,
 			)
+		case .Net:
+			w.node.port = int(e.v.x)
+			sc.net = true
+			node_poll(w)
 		case .Car:
 			if w.other_count == len(w.others) do break
 			road := e.key == .R
@@ -1424,7 +1474,7 @@ script_frame :: proc(w: ^World) {
 			}
 			w.others[w.other_count].author[0] = u8(w.other_count + 1)
 			w.other_count += 1
-		case .Shot, .Flicker, .Judder, .Profile, .Quit:
+		case .Shot, .Flicker, .Judder, .Peers, .Profile, .Quit:
 		}
 	}
 }
@@ -1437,6 +1487,7 @@ script_end :: proc(w: ^World) -> (quit: bool) {
 	for e in sc.events[:sc.first] {
 		if e.kind == .Flicker && sc.frame <= int(e.v.x) do script_flicker(w, e)
 		if e.kind == .Judder && sc.frame <= int(e.v.x) do script_judder(w, e)
+		if e.kind == .Peers && sc.frame <= int(e.v.x) do script_peers(w, e)
 	}
 	for e in sc.events[sc.first:sc.next] {
 		switch e.kind {
@@ -1473,14 +1524,94 @@ script_end :: proc(w: ^World) -> (quit: bool) {
 		case .Judder:
 			sc.jd_seen, sc.jd_max = 0, 0
 			script_judder(w, e)
+		case .Peers:
+			sc.pr_seen, sc.pr_hits, sc.pr_cars = 0, 0, 0
+			sc.pr_drawn, sc.pr_raw, sc.pr_lat = {}, {}, {}
+			script_peers(w, e)
 		case .Quit:
 			quit = true
 			logf(w, "script", "frame %d: quit, %d shots or checks failed", sc.frame, sc.failures)
-		case .Down, .Up, .Mouse, .Wheel, .Ship, .Nav, .Car, .Profile:
+		case .Down, .Up, .Mouse, .Wheel, .Ship, .Nav, .Car, .Net, .Profile:
 		}
 	}
 	sc.frame += 1
 	return quit
+}
+
+// One frame of a peers range (script_end): the other cars, and with a bot the distance of its drawn copy and of
+// its last report from where bot_pose says it is now. Logs the result on the last frame.
+script_peers :: proc(w: ^World, e: Script_Event) {
+	sc := &w.script
+	sc.pr_seen += 1
+	sc.pr_cars = max(sc.pr_cars, w.other_count)
+	if e.key == .B && w.other_count > 0 {
+		now_ms := unix_ms()
+		truth, _ := bot_pose(e.v.yz, now_ms)
+		best := 0
+		for o, i in w.others[:w.other_count] {
+			if linalg.length(o.pos - truth) < linalg.length(w.others[best].pos - truth) do best = i
+		}
+		o := w.others[best]
+		drawn := linalg.length(o.pos - truth) * 1000
+		raw := linalg.length(o.rep_pos - truth) * 1000
+		if drawn < 1000 {
+			sc.pr_hits += 1
+			sc.pr_drawn += {drawn, 0}
+			sc.pr_drawn.y = max(sc.pr_drawn.y, drawn)
+			sc.pr_raw += {raw, 0}
+			sc.pr_raw.y = max(sc.pr_raw.y, raw)
+			t := &w.node.presence
+			sync.mutex_lock(&t.lock)
+			for q, i in t.slots {
+				if q.author != o.author do continue
+				lat := f32(t.recv_ms[i] - i64(q.time_ms))
+				sc.pr_lat += {lat, 0}
+				sc.pr_lat.y = max(sc.pr_lat.y, lat)
+				break
+			}
+			sync.mutex_unlock(&t.lock)
+		}
+	}
+	if sc.frame < int(e.v.x) do return
+	if e.key != .B {
+		logf(w, "script", "frames %d..%d: up to %d other cars", e.frame, sc.frame, sc.pr_cars)
+		return
+	}
+	if sc.pr_hits == 0 {
+		sc.failures += 1
+		logf(
+			w,
+			"script",
+			"frames %d..%d: FAILED, no car within 1 km of the bot at %.3f %.3f",
+			e.frame,
+			sc.frame,
+			e.v.y,
+			e.v.z,
+		)
+		return
+	}
+	hits := f32(sc.pr_hits)
+	mean := sc.pr_drawn.x / hits
+	failed := mean > e.v.w
+	if failed do sc.failures += 1
+	logf(
+		w,
+		"script",
+		"frames %d..%d: %sup to %d other cars, bot seen in %d of %d frames: drawn %.1f m off (max %.1f, budget %.1f), last report %.1f m off (max %.1f), reports %.0f ms in transit (max %.0f)",
+		e.frame,
+		sc.frame,
+		failed ? "FAILED, " : "",
+		sc.pr_cars,
+		sc.pr_hits,
+		sc.pr_seen,
+		mean,
+		sc.pr_drawn.y,
+		e.v.w,
+		sc.pr_raw.x / hits,
+		sc.pr_raw.y,
+		sc.pr_lat.x / hits,
+		sc.pr_lat.y,
+	)
 }
 
 // One frame of a flicker range e (from e.frame to e.v.x): keeps the last three frames and counts the pixels of the

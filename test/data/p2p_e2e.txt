@@ -1,0 +1,29 @@
+# Peer to peer end to end (Lars, 2026-11-22: "p2p volledig e2e uittesten"): four real processes on one machine,
+# each in its own directory (its own identity and cache/), real TCP, signing, gossip, prediction and drawing.
+# bot1 (7431) circles 139.700 79.400 at 60 m and is our seed; bot2 (7432) circles 139.760 79.470 at 90 m and only
+# knows the relay (7434), our other seed. We fly into the street view south of bot1's circle and measure how far
+# each bot's drawn copy is from where bot_pose says it really is (one clock, so exact). The bots log how our car
+# reaches them ("[bot] car #...: 5.0 reports/s, 14 ms in transit").
+# Setup, from the repo root after ./compile.sh debug (build/ is not in git):
+#   for d in bot1 bot2 relay game; do mkdir -p build/e2e/$d/build build/e2e/$d/cache
+#     cp build/drift build/game.dylib build/libraylib.620.dylib build/e2e/$d/build/; done   (Linux: .so files)
+#   echo 127.0.0.1:7434 > build/e2e/bot2/cache/seeds.txt
+#   printf '127.0.0.1:7431\n127.0.0.1:7434\n' > build/e2e/game/cache/seeds.txt
+#   (cd build/e2e/relay && ./build/drift --headless --node --port 7434 &)
+#   (cd build/e2e/bot1 && ./build/drift --headless --node --port 7431 --bot 139.700 79.400 60 &)
+#   (cd build/e2e/bot2 && ./build/drift --headless --node --port 7432 --bot 139.760 79.470 90 &)
+#   cd build/e2e/game && ./build/drift --script ../../../test/data/p2p_e2e.txt
+# Stop the nodes afterwards: pkill -f -- '--port 743'.
+# 2026-11-22 (M-series Mac): both joined within 0.3-1.7 s, drawn 0.6 / 0.7 m off (max 0.8 / 1.0), the last report
+# alone 2.7 / 2.8 m off, 20 / 26 ms in transit; the bots got our car 5 times a second, 12-43 ms in transit.
+snapshot ../../../test/data/calm.snap
+net 1 7433
+wheel 2 40
+wheel 45 1
+ship 60 139.700 79.640 60 0
+shot 300 build/shots/p2p_start.png
+peers 600 1100 139.700 79.400 5
+peers 1150 1650 139.760 79.470 8
+shot 900 build/shots/p2p_bot1.png
+shot 1400 build/shots/p2p_bot2.png
+quit 1700

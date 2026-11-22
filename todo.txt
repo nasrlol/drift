@@ -265,8 +265,10 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 [ ] hedges, street furniture (lampposts, benches, bike racks)
 [ ] frame over 4 ms in parks: mean 3.1 ms now (profile, with post effects), worst 4.8 while tiles build after a jump
 [x] round world instead of fog: the end of the view lies behind a curved horizon (Abdellah via Lars)
-[~] lars: other cars (presence) tested in the street view with two nodes (drawn with animation and labels,
-    checked with --script car; the two-node test is still to do)
+[x] lars: other cars (presence) tested in the street view end to end: two bots + a relay + the game, drawn 0.6-0.8 m
+    off the truth, 20-30 ms in transit (test/data/p2p_e2e.txt)
+[x] lars: notification when someone joins the game (toast + log line)
+[x] lars: F2 Street tab toggles: minimap, route chevrons, arrow over the car (off), peer names
 [x] lars: other cars without delay: sign + swap 5x a second, TCP_NODELAY, prediction from the last two reports
     with the clock difference measured, no jumps (presence.odin)
 [x] lars: arrows to the way to go in the street view: chevrons on the route and an arrow over the car
