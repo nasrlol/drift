@@ -10,6 +10,10 @@ NAV_BUTTON :: 64
 NAV_BUTTON_GAP :: 14
 SPEED_CIRCLE :: 74
 SELF_FLY_BUTTON :: 66
+// Labels beside the round buttons and the Manual / Autopilot pill over self-fly, so an icon is never the only
+// hint. Our values.
+BUTTON_LABEL_PX :: 13
+BUTTON_LABEL_GAP :: 8
 
 
 // Leaves navigation: back to the plan screen with the routes fitted beside the panel.
@@ -40,6 +44,7 @@ pilot_exit :: proc(w: ^World) {
 }
 
 pilot_ui :: proc(w: ^World) {
+	prof_zone(w, .Pilot_Ui)
 	pal := palette(w)
 	n := &w.nav
 	s := &w.ship
@@ -53,9 +58,12 @@ pilot_ui :: proc(w: ^World) {
 		y := (sh - count * NAV_BUTTON - (count - 1) * NAV_BUTTON_GAP) / 2 - 40
 		r := rl.Rectangle{x, y, NAV_BUTTON, NAV_BUTTON}
 		music_button(w, r)
+		button_label(w, "Music", r.x - BUTTON_LABEL_GAP, r.y + r.height / 2, pal.pill, rl.WHITE)
 		r.y += NAV_BUTTON + NAV_BUTTON_GAP
 		if ui_round_button(w, r, .Wind, w.nav_wind) do w.nav_wind = !w.nav_wind
+		button_label(w, "Wind", r.x - BUTTON_LABEL_GAP, r.y + r.height / 2, pal.pill, rl.WHITE)
 		r.y += NAV_BUTTON + NAV_BUTTON_GAP
+		button_label(w, "Report gust", r.x - BUTTON_LABEL_GAP, r.y + r.height / 2, pal.pill, rl.WHITE)
 		// Report gust: reroutes around a gust here, same icon as the reroute banner.
 		id, hot, fired := ui_widget(w, r)
 		c := [2]f32{r.x + r.width / 2, r.y + r.height / 2}
@@ -81,27 +89,27 @@ pilot_ui :: proc(w: ^World) {
 			{c.x - SPEED_CIRCLE / 2, c.y - SPEED_CIRCLE / 2, SPEED_CIRCLE, SPEED_CIRCLE},
 			SPEED_CIRCLE / 2,
 		)
-		rl.DrawCircleV(c, SPEED_CIRCLE / 2, rl.WHITE)
+		rl.DrawCircleV(c, SPEED_CIRCLE / 2, pal.surface)
 		v := fmt.tprintf("%.0f", s.speed * 3.6)
 		vs := ui_text_size(w, v, .Figtree_700, 25)
-		ui_text(w, {c.x - vs.x / 2, c.y - 19}, v, .Figtree_700, 25, {32, 33, 36, 255})
+		ui_text(w, {c.x - vs.x / 2, c.y - 19}, v, .Figtree_700, 25, pal.text)
 		us := ui_text_size(w, "km/h", .Figtree_700, 11)
-		ui_text(w, {c.x - us.x / 2, c.y + 8}, "km/h", .Figtree_700, 11, {95, 99, 104, 255})
+		ui_text(w, {c.x - us.x / 2, c.y + 8}, "km/h", .Figtree_700, 11, pal.text_2)
 	}
 	{
 		c := [2]f32{16 + SPEED_CIRCLE / 2, sheet.y - 84 - SPEED_CIRCLE / 2}
 		r := f32(SPEED_CIRCLE / 2)
 		ui_shadow(w, {c.x - r, c.y - r, SPEED_CIRCLE, SPEED_CIRCLE}, r)
-		rl.DrawCircleV(c, r, rl.WHITE)
+		rl.DrawCircleV(c, r, pal.surface)
 		// The charge as a ring from the top, clockwise.
 		charge := clamp(ship_battery_kwh(s) / BATTERY_KWH, 0, 1)
 		rl.DrawRing(c, r - 6, r - 2, 0, 360, 48, pal.surface_3)
 		rl.DrawRing(c, r - 6, r - 2, -90, -90 + 360 * charge, 48, pal.green)
 		v := fmt.tprintf("%.0f%%", charge * 100)
 		vs := ui_text_size(w, v, .Figtree_700, 20)
-		ui_text(w, {c.x - vs.x / 2, c.y - 16}, v, .Figtree_700, 20, {32, 33, 36, 255})
+		ui_text(w, {c.x - vs.x / 2, c.y - 16}, v, .Figtree_700, 20, pal.text)
 		bs := ui_text_size(w, "battery", .Figtree_700, 10)
-		ui_text(w, {c.x - bs.x / 2, c.y + 7}, "battery", .Figtree_700, 10, {95, 99, 104, 255})
+		ui_text(w, {c.x - bs.x / 2, c.y + 7}, "battery", .Figtree_700, 10, pal.text_2)
 	}
 
 	// Re-centre after the user moved the map.
@@ -109,7 +117,7 @@ pilot_ui :: proc(w: ^World) {
 		r := rl.Rectangle{16, sheet.y - 16 - 56, 170, 56}
 		id, hot, fired := ui_widget(w, r)
 		dark := rl.Color{32, 33, 36, 255}
-		round_rect(r, 28, hot ? rl.ColorBrightness(dark, 0.15) : dark)
+		round_rect(w, r, 28, hot ? rl.ColorBrightness(dark, 0.15) : dark)
 		ui_icon(w, .Navigate, {r.x + 30, r.y + 28}, 24, {138, 180, 248, 255})
 		ui_text(w, {r.x + 52, r.y + 17}, "Re-centre", .Figtree_500, 18, rl.WHITE)
 		ui_focus_ring(w, id, r, 28)
@@ -132,6 +140,20 @@ pilot_ui :: proc(w: ^World) {
 		ui_icon(w, .Steer, c, 32, on ? pal.sheet : pal.accent)
 		ui_focus_ring(w, id, fly, SELF_FLY_BUTTON / 2)
 		if fired && n.active do nav_set_manual(w, !n.manual)
+		// The flying state over the button, above the sheet: Manual in accent, Autopilot in the dark pill.
+		state := on ? "Manual" : "Autopilot"
+		size := ui_text_size(w, state, .Figtree_600, BUTTON_LABEL_PX)
+		pill_bg, pill_fg := on ? pal.accent : pal.pill, on ? pal.sheet : rl.WHITE
+		button_label(w, state, c.x + (size.x + 20) / 2, sheet.y - 12 - (size.y + 10) / 2, pill_bg, pill_fg)
 	}
 
+}
+
+// A pill of BUTTON_LABEL_PX text whose right edge is at right_x, centred on centre_y. Only drawn, the
+// button beside it takes the input.
+button_label :: proc(w: ^World, text: string, right_x, centre_y: f32, bg, fg: rl.Color) {
+	size := ui_text_size(w, text, .Figtree_600, BUTTON_LABEL_PX)
+	box := rl.Rectangle{right_x - size.x - 20, centre_y - (size.y + 10) / 2, size.x + 20, size.y + 10}
+	round_rect(w, box, box.height / 2, bg)
+	ui_text(w, {box.x + 10, box.y + 5}, text, .Figtree_600, BUTTON_LABEL_PX, fg)
 }

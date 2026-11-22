@@ -304,8 +304,15 @@ trees_build :: proc(w: ^World) {
 trees_unload :: proc(tr: ^Trees) {
 	for &t in tr.tiles do t.used = false
 	if !tr.ready do return
-	for m in tr.near do rl.UnloadMesh(m)
-	for m in tr.far do rl.UnloadMesh(m)
+	// The indices live in the perm arena: UnloadMesh must not free them.
+	for &m in tr.near {
+		m.indices = nil
+		rl.UnloadMesh(m)
+	}
+	for &m in tr.far {
+		m.indices = nil
+		rl.UnloadMesh(m)
+	}
 	rl.UnloadShader(tr.lit.shader)
 	rl.UnloadShader(tr.depth.shader)
 	tr.ready = false
@@ -313,6 +320,7 @@ trees_unload :: proc(tr: ^Trees) {
 
 // The trees of one tile: lo ..< hi (km).
 trees_build_tile :: proc(w: ^World, t: ^Tree_Tile, lo, hi: [2]f32) {
+	prof_zone(w, .Trees_Build_Tile)
 	t.count = 0
 	tr := &w.street.trees
 	st := &w.street
@@ -422,6 +430,7 @@ trees_build_tile :: proc(w: ^World, t: ^Tree_Tile, lo, hi: [2]f32) {
 // Keeps the tiles within reach of target (km) built (one a frame) and draws the trees with the lit material, or
 // with depth (the shadow pass) those within reach of target only. cam: the camera in street space.
 trees_draw :: proc(w: ^World, target: [2]f32, reach: f32, cam: [3]f32, shadow: bool) {
+	prof_zone(w, .Trees_Draw)
 	tr := &w.street.trees
 	st := &w.street
 	if !tr.ready do return

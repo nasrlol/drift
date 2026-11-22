@@ -5,6 +5,7 @@ import "core:math"
 import "core:math/linalg"
 import "core:mem/virtual"
 import "core:os"
+import "core:prof/spall"
 import "core:reflect"
 import "core:slice"
 import "core:strconv"
@@ -13,38 +14,425 @@ import "core:time"
 import rl "vendor:raylib"
 
 // Timing is compiled in for debug and profile builds only. Wall-clock time is fine here,
-// it is only displayed and never fed back into the simulation.
+// it is only displayed and never fed back into the simulation. Zones go in game and render code only:
+// simulation code (route, ship, road, terrain, weather) is timed at its call sites, and the per-step procs the
+// bench measures (ship_step, road_nearest_edge, wind_at) get no zone, two clock reads would double their cost.
+// Times are CPU time on the frame thread: GPU work shows up later, in Swap (EndDrawing waits for it).
 PROFILING :: DRIFT_DEBUG || DRIFT_PROFILE
 PROF_FRAMES :: 120
+PROF_DEPTH :: 32
+PROF_TOP :: 14 // zones listed in the overlay
+// Spall flushes the buffer to the file when it is full: 64 KB is a few frames, small enough for the perm arena.
+PROF_TRACE_BYTES :: 64 << 10
+PROF_TRACE_PATH :: "drift.spall"
 FRAME_BUDGET_MS :: 4
 
-Prof_Block :: enum u8 {
-	Update,
-	Draw,
-	Route,
+// One per system worth watching. Nested zones are fine: excl is a zone's own time, its children taken out.
+Prof_Zone :: enum u8 {
+	Update, // game_update up to BeginDrawing
+	Draw, // BeginDrawing to the profiler overlay
+	Swap, // EndDrawing: buffer swap, waiting for the GPU, vsync and the SetTargetFPS wait
+	Init,
+	Load_Map,
 	Weather_Load,
+	Font_Load,
+	Buildings_Build,
+	Airship_Build,
+	Clouds_Build,
+	Poll,
+	Sim_Steps,
+	Cam_Update,
+	Route,
+	Street_Draw,
+	Street_Build,
+	Street_Camera,
+	Street_Shadow,
+	Street_Hud,
+	Tile_Build,
+	Trees_Draw,
+	Trees_Build_Tile,
+	Collide_Car,
+	Post,
+	Map_Mesh_Build,
+	Wind,
+	Globe,
+	Areas,
+	Hill,
+	Ground_Layers,
+	Scan,
+	Map_Lines,
+	Buildings_Draw,
+	Towns_Draw,
+	Nature_Draw,
+	Routes,
+	Others,
+	Airship_Draw,
+	Clouds_Draw,
+	Hub_Markers,
+	Labels,
+	Plan_Ui,
+	Map_Controls,
+	Nav_Ui,
+	Pilot_Ui,
+	Ui_Text,
+	Ui_Shadow,
 }
 
-// Zero is valid: nothing measured yet, overlay hidden (F3 or the layers panel shows it).
+// Zero is valid: nothing measured yet, overlay hidden (F3 or the layers panel shows it), no trace.
 Profiler :: struct {
-	ms:         [Prof_Block]f32, // last measurement of each block
-	frame_ms:   [PROF_FRAMES]f32, // update + draw, ring buffer, head is the oldest
-	head:       int,
-	frame_used: uint, // frame arena bytes used by the previous frame
-	shown:      bool,
+	last_ms:     [Prof_Zone]f32, // the last call of each zone, for the ones that do not run every frame
+	// This frame so far, moved into the rings by prof_frame_end.
+	incl:        [Prof_Zone]time.Duration,
+	excl:        [Prof_Zone]time.Duration,
+	calls:       [Prof_Zone]u32,
+	child:       [PROF_DEPTH]time.Duration, // time spent in the children of each open zone
+	depth:       int,
+	// The last PROF_FRAMES frames, head is the oldest.
+	ring_incl:   [PROF_FRAMES][Prof_Zone]f32, // ms
+	ring_excl:   [PROF_FRAMES][Prof_Zone]f32, // ms
+	ring_calls:  [PROF_FRAMES][Prof_Zone]u32,
+	interval:    [PROF_FRAMES]f32, // ms from one frame start to the next: the real frame time
+	frame_used:  [PROF_FRAMES]uint, // frame arena bytes
+	head:        int,
+	frames:      u64, // frames finished since game_init
+	last_end:    time.Tick, // the previous prof_frame_end
+	init_start:  time.Tick,
+	shown:       bool,
+	// Spall trace (F4, or the script's profile command). trace_mem is from the perm arena (game_init).
+	trace_on:    bool,
+	trace_ctx:   spall.Context,
+	trace_buf:   spall.Buffer,
+	trace_mem:   []u8,
+	// The script's profile range: sums over its frames, written as CSV when it ends.
+	range_on:    bool,
+	range_from:  int,
+	range_path:  string, // file prefix, into the script text (perm arena)
+	range_n:     int, // frames so far
+	range_incl:  [Prof_Zone]f64, // ms
+	range_excl:  [Prof_Zone]f64,
+	range_calls: [Prof_Zone]u64,
+	range_peak:  [Prof_Zone]f32, // the largest incl ms in one frame
+	range_frame: [3]f64, // update + draw ms: sum, worst, frames over FRAME_BUDGET_MS
 }
 
-prof_begin :: proc() -> time.Tick {
+// Times the rest of the enclosing scope: prof_zone(w, .Trees_Draw) as the first line of a proc or block.
+@(deferred_in_out = prof_end)
+prof_zone :: proc(w: ^World, zone: Prof_Zone) -> time.Tick {
+	return prof_begin(w, zone)
+}
+
+// The pair behind prof_zone, for a span that is not a scope (Update and Draw in game_update).
+prof_begin :: proc(w: ^World, zone: Prof_Zone) -> time.Tick {
 	when PROFILING {
+		p := &w.prof
+		if p.depth < PROF_DEPTH do p.child[p.depth] = 0
+		p.depth += 1
+		if p.trace_on do spall._buffer_begin(&p.trace_ctx, &p.trace_buf, reflect.enum_string(zone))
 		return time.tick_now()
 	} else {
 		return {}
 	}
 }
 
-prof_end :: proc(w: ^World, block: Prof_Block, start: time.Tick) {
+prof_end :: proc(w: ^World, zone: Prof_Zone, start: time.Tick) {
 	when PROFILING {
-		w.prof.ms[block] = f32(time.duration_milliseconds(time.tick_since(start)))
+		d := time.tick_since(start)
+		p := &w.prof
+		if p.trace_on do spall._buffer_end(&p.trace_ctx, &p.trace_buf)
+		p.depth -= 1
+		own := d
+		if p.depth < PROF_DEPTH do own -= p.child[p.depth]
+		if p.depth > 0 && p.depth <= PROF_DEPTH do p.child[p.depth - 1] += d
+		p.incl[zone] += d
+		p.excl[zone] += own
+		p.calls[zone] += 1
+		p.last_ms[zone] = f32(time.duration_milliseconds(d))
+	}
+}
+
+// Zones in order of their value, largest first.
+prof_sorted :: proc(v: [Prof_Zone]f64) -> (order: [len(Prof_Zone)]Prof_Zone) {
+	for z, i in Prof_Zone {
+		j := i
+		for j > 0 && v[order[j - 1]] < v[z] {
+			order[j] = order[j - 1]
+			j -= 1
+		}
+		order[j] = z
+	}
+	return
+}
+
+prof_trace_start :: proc(w: ^World, path: string) {
+	when PROFILING {
+		p := &w.prof
+		if p.trace_on || len(p.trace_mem) == 0 do return
+		ctx, ok := spall.context_create_with_scale(path, false, 1)
+		if !ok {
+			logf(w, "prof", "cannot create trace file %s", path)
+			return
+		}
+		p.trace_ctx = ctx
+		p.trace_buf = spall.buffer_create(p.trace_mem)
+		p.trace_on = true
+		logf(w, "prof", "trace recording to %s", path)
+	}
+}
+
+prof_trace_stop :: proc(w: ^World) {
+	when PROFILING {
+		p := &w.prof
+		if !p.trace_on do return
+		spall.buffer_destroy(&p.trace_ctx, &p.trace_buf)
+		spall.context_destroy(&p.trace_ctx)
+		p.trace_on = false
+		logf(w, "prof", "trace stopped, open it in https://gravitymoth.com/spall")
+	}
+}
+
+// After EndDrawing, with no zone open: this frame goes into the rings, the script's profile ranges start and
+// end, F4 starts and stops a trace. The first frame logs where the start-up time went.
+prof_frame_end :: proc(w: ^World) {
+	when PROFILING {
+		p := &w.prof
+		ms :: proc(d: time.Duration) -> f32 {return f32(time.duration_milliseconds(d))}
+		if p.frames == 0 {
+			b := strings.builder_make(context.temp_allocator)
+			for z in Prof_Zone {
+				if ms(p.incl[z]) >= 0.1 do fmt.sbprintf(&b, "%s%v %.1f", len(b.buf) > 0 ? ", " : "", z, ms(p.incl[z]))
+			}
+			logf(
+				w,
+				"prof",
+				"first frame done %.1f ms after game_init started, ms per zone: %s",
+				ms(time.tick_since(p.init_start)),
+				strings.to_string(b),
+			)
+		}
+		h := p.head
+		now := time.tick_now()
+		if p.last_end != {} do p.interval[h] = ms(time.tick_diff(p.last_end, now))
+		p.last_end = now
+		for z in Prof_Zone {
+			p.ring_incl[h][z] = ms(p.incl[z])
+			p.ring_excl[h][z] = ms(p.excl[z])
+			p.ring_calls[h][z] = p.calls[z]
+		}
+		p.frame_used[h] = w.frame.total_used
+		if p.range_on {
+			for z in Prof_Zone {
+				p.range_incl[z] += f64(p.ring_incl[h][z])
+				p.range_excl[z] += f64(p.ring_excl[h][z])
+				p.range_calls[z] += u64(p.calls[z])
+				p.range_peak[z] = max(p.range_peak[z], p.ring_incl[h][z])
+			}
+			frame := f64(p.ring_incl[h][.Update] + p.ring_incl[h][.Draw])
+			p.range_frame += {frame, 0, frame > FRAME_BUDGET_MS ? 1 : 0}
+			p.range_frame[1] = max(p.range_frame[1], frame)
+			p.range_n += 1
+		}
+		p.incl, p.excl, p.calls = {}, {}, {}
+		p.head = (h + 1) % PROF_FRAMES
+		p.frames += 1
+
+		if key_pressed(w, .F4) {
+			if p.trace_on do prof_trace_stop(w)
+			else do prof_trace_start(w, PROF_TRACE_PATH)
+		}
+
+		// script_end has counted the frame that just ended.
+		sc := &w.script
+		if !sc.on do return
+		done := sc.frame - 1
+		for e in sc.events {
+			if e.kind != .Profile do continue
+			if p.range_on && done == int(e.v.x) && p.range_from == e.frame {
+				p.range_on = false
+				prof_trace_stop(w)
+				b := strings.builder_make(context.temp_allocator)
+				fmt.sbprintln(&b, "zone,calls_per_frame,incl_ms_per_frame,excl_ms_per_frame,peak_ms")
+				n := f64(p.range_n)
+				for z in prof_sorted(p.range_excl) {
+					if p.range_calls[z] == 0 do continue
+					fmt.sbprintfln(
+						&b,
+						"%v,%.3f,%.4f,%.4f,%.3f",
+						z,
+						f64(p.range_calls[z]) / n,
+						p.range_incl[z] / n,
+						p.range_excl[z] / n,
+						p.range_peak[z],
+					)
+				}
+				csv := strings.concatenate({p.range_path, ".csv"}, context.temp_allocator)
+				if err := os.write_entire_file(csv, b.buf[:]); err != nil {
+					logf(w, "prof", "cannot write %s: %v", csv, err)
+					sc.failures += 1
+				}
+				logf(
+					w,
+					"prof",
+					"frames %d..%d: update + draw %.2f ms mean, %.2f worst, %d of %d over %d ms, zones in %s",
+					e.frame,
+					done,
+					p.range_frame[0] / n,
+					p.range_frame[1],
+					int(p.range_frame[2]),
+					p.range_n,
+					FRAME_BUDGET_MS,
+					csv,
+				)
+			}
+			if done + 1 == e.frame {
+				if p.range_on || p.trace_on {
+					logf(
+						w,
+						"prof",
+						"profile range at frame %d skipped: another range or trace is running",
+						e.frame,
+					)
+					continue
+				}
+				p.range_on, p.range_from, p.range_path, p.range_n = true, e.frame, e.path, 0
+				p.range_incl, p.range_excl, p.range_calls, p.range_peak, p.range_frame = {}, {}, {}, {}, {}
+				prof_trace_start(w, strings.concatenate({e.path, ".spall"}, context.temp_allocator))
+			}
+		}
+	}
+}
+
+// F3 or the Profiler toggle in the layers panel. Shows the frames before this one and is not timed itself.
+prof_overlay :: proc(w: ^World) {
+	when PROFILING {
+		p := &w.prof
+		if key_pressed(w, .F3) do p.shown = !p.shown
+		if !p.shown do return
+		LINE :: 12
+		GRAPH_H :: 64
+		W :: 380
+		H :: 6 + 6 * LINE + 6 + GRAPH_H + 8 + (PROF_TOP + 1) * LINE + 6
+		x0 := i32(w.cam.screen.x) - W - 16 - 88 // left of the map controls column
+		y0 := i32(w.cam.screen.y) - 38 - H
+		rl.DrawRectangle(x0, y0, W, H, {0, 0, 0, 190})
+
+		frames: [PROF_FRAMES]f32
+		mean_incl, mean_excl, worst_incl: [Prof_Zone]f64
+		mean_calls: [Prof_Zone]f32
+		swap, interval, peak_used: f32
+		over := 0
+		for i in 0 ..< PROF_FRAMES {
+			r := p.ring_incl[i]
+			frames[i] = r[.Update] + r[.Draw]
+			if frames[i] > FRAME_BUDGET_MS do over += 1
+			for z in Prof_Zone {
+				mean_incl[z] += f64(r[z]) / PROF_FRAMES
+				mean_excl[z] += f64(p.ring_excl[i][z]) / PROF_FRAMES
+				worst_incl[z] = max(worst_incl[z], f64(r[z]))
+				mean_calls[z] += f32(p.ring_calls[i][z]) / PROF_FRAMES
+			}
+			swap += r[.Swap] / PROF_FRAMES
+			interval += p.interval[i] / PROF_FRAMES
+			peak_used = max(peak_used, f32(p.frame_used[i]))
+		}
+		last := p.ring_incl[(p.head + PROF_FRAMES - 1) % PROF_FRAMES]
+		sorted := frames
+		slice.sort(sorted[:])
+		MB :: f32(1 << 20)
+		lines := [6]cstring {
+			fmt.ctprintf(
+				"frame %.2f ms (update %.2f, draw %.2f), budget %d ms",
+				last[.Update] + last[.Draw],
+				last[.Update],
+				last[.Draw],
+				FRAME_BUDGET_MS,
+			),
+			fmt.ctprintf(
+				"%d frames: p50 %.2f, p99 %.2f, worst %.2f ms, %d over budget",
+				PROF_FRAMES,
+				sorted[PROF_FRAMES / 2],
+				sorted[PROF_FRAMES * 99 / 100],
+				sorted[PROF_FRAMES - 1],
+				over,
+			),
+			fmt.ctprintf(
+				"swap %.2f ms (GPU, vsync, fps cap), real frame %.2f ms = %.0f fps",
+				swap,
+				interval,
+				interval > 0 ? 1000 / interval : 0,
+			),
+			fmt.ctprintf(
+				"last route %.2f ms, weather load %.2f ms",
+				p.last_ms[.Route],
+				p.last_ms[.Weather_Load],
+			),
+			fmt.ctprintf(
+				"perm %.2f / %.2f MB, route %.2f / %.2f MB, frame peak %.1f KB",
+				f32(w.perm.total_used) / MB,
+				f32(w.perm.total_reserved) / MB,
+				f32(w.route_mem.total_used) / MB,
+				f32(w.route_mem.total_reserved) / MB,
+				peak_used / 1024,
+			),
+			p.trace_on ? "F4: stop the spall trace (recording)" : "F4: record a spall trace to " + PROF_TRACE_PATH,
+		}
+		y := y0 + 6
+		for line, i in lines {
+			rl.DrawText(line, x0 + 6, y, 10, i == 5 && p.trace_on ? rl.RED : rl.RAYWHITE)
+			y += LINE
+		}
+
+		// 3 px per frame, oldest on the left, 4 px per ms (a 60 fps frame fills it): update green, draw blue, swap grey on top. Red under
+		// the bar: over budget. A bar cut at the top gets a white cap.
+		{
+			y += 6
+			base := y + GRAPH_H
+			PX_PER_MS :: 4
+			rl.DrawLine(
+				x0 + 6,
+				base - FRAME_BUDGET_MS * PX_PER_MS,
+				x0 + 6 + PROF_FRAMES * 3,
+				base - FRAME_BUDGET_MS * PX_PER_MS,
+				rl.YELLOW,
+			)
+			for i in 0 ..< PROF_FRAMES {
+				r := p.ring_incl[(p.head + i) % PROF_FRAMES]
+				x := x0 + 6 + i32(i) * 3
+				top := base
+				parts := [3]struct {
+					ms:    f32,
+					color: rl.Color,
+				}{{r[.Update], rl.GREEN}, {r[.Draw], rl.SKYBLUE}, {r[.Swap], rl.GRAY}}
+				for part in parts {
+					h := min(i32(part.ms * PX_PER_MS + 0.5), top - (base - GRAPH_H))
+					rl.DrawRectangle(x, top - h, 2, h, part.color)
+					top -= h
+				}
+				if top <= base - GRAPH_H do rl.DrawRectangle(x, base - GRAPH_H, 2, 1, rl.WHITE)
+				if r[.Update] + r[.Draw] > FRAME_BUDGET_MS do rl.DrawRectangle(x, base + 1, 2, 2, rl.RED)
+			}
+			y = base + 8
+		}
+
+		// The zones with the most own time (excl) over the window. Update, Draw and Swap are in the lines above.
+		cols := [5]i32{x0 + 6, x0 + 150, x0 + 200, x0 + 260, x0 + 320}
+		head := [5]cstring{"zone, mean per frame", "calls", "self ms", "total ms", "max ms"}
+		for c, i in head do rl.DrawText(c, cols[i], y, 10, rl.YELLOW)
+		y += LINE
+		shown := 0
+		for z in prof_sorted(mean_excl) {
+			if shown == PROF_TOP do break
+			if z == .Update || z == .Draw || z == .Swap || mean_calls[z] == 0 do continue
+			row := [5]cstring {
+				fmt.ctprintf("%v", z),
+				fmt.ctprintf("%.1f", mean_calls[z]),
+				fmt.ctprintf("%.3f", mean_excl[z]),
+				fmt.ctprintf("%.3f", mean_incl[z]),
+				fmt.ctprintf("%.2f", worst_incl[z]),
+			}
+			for c, i in row do rl.DrawText(c, cols[i], y, 10, rl.RAYWHITE)
+			y += LINE
+			shown += 1
+		}
 	}
 }
 
@@ -64,9 +452,7 @@ ROUTE_MODE_NAMES :: [Route_Mode]string {
 //                                                  free flight (the street view's, ship_free_step) from rest
 //   free_on <throttle> <turn> <climb> <seconds>    free flight on from where the last one ended
 headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strings.Builder) -> bool {
-	t := prof_begin()
 	weather_ok := weather_load_snapshot(w, snapshot_path)
-	prof_end(w, .Weather_Load, t)
 	if !weather_ok do return false
 	fmt.sbprintfln(out, "weather start %d", w.weather.start)
 
@@ -134,7 +520,7 @@ headless_run :: proc(w: ^World, snapshot_path: string, inputs: []u8, out: ^strin
 			a, b := w.m.hubs[from].pos, w.m.hubs[to].pos
 			start := [3]f32{a.x, a.y, height_at(w, a.x, a.y) + HUB_TOWER_M}
 			goal := [3]f32{b.x, b.y, height_at(w, b.x, b.y) + HUB_TOWER_M}
-			t = prof_begin()
+			t := prof_begin(w, .Route)
 			path, path_ok := route(w, start, goal, mode, hour)
 			prof_end(w, .Route, t)
 
@@ -596,8 +982,8 @@ game_headless :: proc(args: []string) -> bool {
 		w,
 		"headless",
 		"weather load %.3f ms, last route %.3f ms",
-		w.prof.ms[.Weather_Load],
-		w.prof.ms[.Route],
+		w.prof.last_ms[.Weather_Load],
+		w.prof.last_ms[.Route],
 	)
 	return ok
 }
@@ -726,6 +1112,9 @@ dump_world :: proc(w: ^World, out: ^strings.Builder) {
 //   judder <from> <to> <max px>      how far the car jumps on the screen from one frame to the next beyond its
 //                                    smooth motion (the largest second difference of its screen position); the
 //                                    chase camera keeps it nearly still unless frames and steps do not line up
+//   profile <from> <to> <prefix>     profiler zones over these frames (debug and profile builds, from >= 1):
+//                                    a spall trace in <prefix>.spall and the mean per frame of every zone in
+//                                    <prefix>.csv (calls, incl ms, excl ms, peak ms), plus one log line
 //   quit <frame>
 // Frame 0 is the first frame. The window keeps its size (1440 x 900):
 // SetWindowSize on a macOS Retina screen leaves raylib drawing into a quarter of the framebuffer.
@@ -738,6 +1127,7 @@ Script_Kind :: enum u8 {
 	Shot,
 	Flicker,
 	Judder,
+	Profile,
 	Quit,
 }
 
@@ -867,6 +1257,14 @@ game_script :: proc(memory: rawptr, path: string) -> bool {
 			budget, budget_ok := num(f[3])
 			e.kind, e.v = .Judder, {f32(to), budget, 0, 0}
 			ok = n == 4 && frame_ok && to_ok && to >= frame + 2 && budget_ok && budget >= 0
+		case "profile":
+			to, to_ok := strconv.parse_int(f[2], 10)
+			e.kind, e.v.x, e.path = .Profile, f32(to), f[3]
+			ok = n == 4 && frame_ok && frame >= 1 && to_ok && to >= frame
+			if ok && !PROFILING {
+				logf(w, "script", "%s line %d: profile needs a debug or profile build", path, line_no)
+				return false
+			}
 		case "quit":
 			e.kind = .Quit
 			ok = n == 2 && frame_ok
@@ -929,7 +1327,7 @@ script_frame :: proc(w: ^World) {
 			w.pose_prev = ship_pose(s)
 			w.car_anim.seeded = false
 			w.street.seeded = false
-		case .Shot, .Flicker, .Judder, .Quit:
+		case .Shot, .Flicker, .Judder, .Profile, .Quit:
 		}
 	}
 }
@@ -955,9 +1353,9 @@ script_end :: proc(w: ^World) -> (quit: bool) {
 			if !ok do sc.failures += 1
 			// The mean and worst update + draw ms of the last PROF_FRAMES frames (0 in a release build).
 			mean, worst: f32
-			for v in w.prof.frame_ms {
-				mean += v / PROF_FRAMES
-				worst = max(worst, v)
+			for r in w.prof.ring_incl {
+				mean += (r[.Update] + r[.Draw]) / PROF_FRAMES
+				worst = max(worst, r[.Update] + r[.Draw])
 			}
 			logf(
 				w,
@@ -981,7 +1379,7 @@ script_end :: proc(w: ^World) -> (quit: bool) {
 		case .Quit:
 			quit = true
 			logf(w, "script", "frame %d: quit, %d shots or checks failed", sc.frame, sc.failures)
-		case .Down, .Up, .Mouse, .Wheel, .Ship:
+		case .Down, .Up, .Mouse, .Wheel, .Ship, .Profile:
 		}
 	}
 	sc.frame += 1

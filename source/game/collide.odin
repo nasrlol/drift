@@ -137,6 +137,7 @@ town_lot_clear :: proc(w: ^World, c, ax, ay, half: [2]f32) -> bool {
 // y south) moves it out of the walls it overlaps; roof is the highest roof right under it that it is above
 // (m above the ground, 0 = none), so the car can land on a roof.
 collide_car :: proc(w: ^World, pos: [2]f32, hag, radius_m: f32) -> (push: [2]f32, roof: f32) {
+	prof_zone(w, .Collide_Car)
 	co := &w.collide
 	if !co.built do collide_build(w)
 

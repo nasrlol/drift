@@ -22,6 +22,8 @@ CLOUD_MAX :: 900
 CLOUD_ZOOM_0 :: 2.0
 CLOUD_ZOOM_1 :: 3.5
 CLOUD_TEX :: 128
+CLOUD_OPACITY :: 0.92
+CLOUD_SHADOW_ALPHA :: 34 // of 255
 
 Cloud_Sprites :: struct {
 	puff:  rl.Texture2D, // soft white disc
@@ -66,6 +68,7 @@ cloud_noise :: proc(p: [2]f32) -> f32 {
 }
 
 clouds_build :: proc(w: ^World) {
+	prof_zone(w, .Clouds_Build)
 	s := &w.cloud_sprites
 	if s.ready do return
 	// White with a soft round falloff, (1 - r^2)^2: no visible edge where puffs overlap.
@@ -111,41 +114,45 @@ cloud_px :: proc(w: ^World, pos: [3]f32, r: f32) -> (centre: [2]f32, radius: f32
 	return
 }
 
-// Screen space, after the routes and the car (the clouds fly above both).
+// Screen space, after the routes and the car (the clouds fly above both). The values the cloud editor changes
+// (cloud_edit.odin) come from w.cloud_edit, whose defaults are the constants above. Only the picture: cloud_at
+// and the solar energy stay the forecast.
 clouds_draw :: proc(w: ^World) {
+	prof_zone(w, .Clouds_Draw)
 	s := &w.cloud_sprites
-	if !s.ready do return
-	fade := clamp((w.cam.pose.zoom - CLOUD_ZOOM_0) / (CLOUD_ZOOM_1 - CLOUD_ZOOM_0), 0, 1)
+	e := &w.cloud_edit
+	if !s.ready || !e.show do return
+	fade := clamp((w.cam.pose.zoom - e.zoom_0) / max(e.zoom_1 - e.zoom_0, 1e-3), 0, 1)
 	if fade <= 0 do return
 	hour := sim_hour(w)
 	t := f32(w.tick) / SIM_HZ
 	target := w.cam.view.target.xy
-	drift := wind_at(w, target.x, target.y, WIND_LAYERS - 1, hour) * t / 1000
+	drift := wind_at(w, target.x, target.y, WIND_LAYERS - 1, hour) * t / 1000 * e.drift
+	cell_km := e.cell_km
 	view_km := w.cam.screen.x / max(w.cam.px_per_km, 1e-3)
 	reach := clamp(view_km * 0.9, 4, 24)
 	screen := w.cam.screen
 	cam_pos := w.cam.view.position
 
 	clouds := make([dynamic]Cloud, 0, CLOUD_MAX, context.temp_allocator)
-	lo := linalg.floor((target - drift - reach) / CLOUD_CELL_KM)
-	hi := linalg.floor((target - drift + reach) / CLOUD_CELL_KM)
+	lo := linalg.floor((target - drift - reach) / cell_km)
+	hi := linalg.floor((target - drift + reach) / cell_km)
 	for cy := i32(lo.y); cy <= i32(hi.y); cy += 1 {
 		for cx := i32(lo.x); cx <= i32(hi.x); cx += 1 {
 			if len(clouds) == CLOUD_MAX do break
 			p :=
-				([2]f32{f32(cx), f32(cy)} + {cloud_rand(cx, cy, 1), cloud_rand(cx, cy, 2)}) * CLOUD_CELL_KM +
-				drift
+				([2]f32{f32(cx), f32(cy)} + {cloud_rand(cx, cy, 1), cloud_rand(cx, cy, 2)}) * cell_km + drift
 			edge := belgium_fade(w, p.x, p.y)
 			if edge <= 0 do continue
-			cover := cloud_at(w, p.x, p.y, hour)
+			cover := clamp(cloud_at(w, p.x, p.y, hour) * e.cover, 0, 1)
 			// Noise stretched to 0 .. 1, so a cover of 0.3 clouds about 30 % of the spots. A clear forecast still
 			// keeps a few thin ones (10 %), the sky is never empty.
 			n :=
 				clamp((cloud_noise(p - drift) - 0.5) * 2.2 + 0.5, 0, 1) * 0.85 + 0.15 * cloud_rand(cx, cy, 3)
 			if n >= 0.1 + 0.9 * cover do continue
 			sizes := CLOUD_SIZE_KM
-			size := math.lerp(sizes.x, sizes.y, cloud_rand(cx, cy, 4)) * (0.6 + 0.6 * cover)
-			alt := math.lerp(f32(CLOUD_BASE_M), CLOUD_TOP_M, cloud_rand(cx, cy, 5))
+			size := math.lerp(sizes.x, sizes.y, cloud_rand(cx, cy, 4)) * (0.6 + 0.6 * cover) * e.size
+			alt := math.lerp(e.base_m, max(e.top_m, e.base_m), cloud_rand(cx, cy, 5))
 			world := [3]f32{p.x, p.y, -alt / 1000}
 			append(
 				&clouds,
@@ -154,14 +161,14 @@ clouds_draw :: proc(w: ^World) {
 					size = size,
 					seed = hash_u32(u32(cx) * 31 + u32(cy) * 7919),
 					depth = linalg.length(world - cam_pos),
-					alpha = fade * edge,
+					alpha = fade * edge * (1 - view_fog(w, view_depth(w, world))),
 				},
 			)
 		}
 	}
 	slice.sort_by(clouds[:], proc(a, b: Cloud) -> bool {return a.depth > b.depth})
 
-	shadow_c := rl.Color{0, 0, 0, 34}
+	shadow_c := rl.Color{0, 0, 0, u8(clamp(e.shadow, 0, 255))}
 	src := rl.Rectangle{0, 0, CLOUD_TEX, CLOUD_TEX}
 	// Shadows first: all on the ground, under every cloud.
 	for c in clouds {
@@ -188,7 +195,7 @@ clouds_draw :: proc(w: ^World) {
 			oy := base ? 0.15 + 0.1 * r1 : -0.1 - 0.45 * r1
 			pr := r * (base ? 0.7 + 0.3 * r2 : 0.55 + 0.4 * r2)
 			col := base ? shade : lit
-			col.a = u8(255 * a * 0.92)
+			col.a = u8(255 * a * clamp(e.opacity, 0, 1))
 			p := centre + [2]f32{ox, oy} * r
 			sq: f32 = base ? 0.6 : 0.9 // base puffs are flat
 			rl.DrawTexturePro(

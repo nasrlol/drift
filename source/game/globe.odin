@@ -32,7 +32,13 @@ World_Header :: struct {
 }
 
 World_Line :: struct {
-	start, count, kind: u32,
+	start, count, kind: u32, // kind: a World_Line_Kind
+}
+
+// The kinds tools/bake_world writes into World_Line.kind.
+World_Line_Kind :: enum u32 {
+	Coastline      = 0,
+	Country_Border = 1,
 }
 
 World_City :: struct {
@@ -54,7 +60,8 @@ World_Map :: struct {
 Globe_GPU :: struct {
 	ready:       bool,
 	sphere:      rl.Mesh,
-	lines:       rl.Mesh,
+	lines:       [World_Line_Kind]rl.Mesh,
+	segments:    [World_Line_Kind]int,
 	mask_tex:    rl.Texture2D,
 	region_tex:  rl.Texture2D,
 	loc_region:  i32,
@@ -292,22 +299,26 @@ globe_build :: proc(w: ^World) {
 	g.loc_cam_pos = rl.GetShaderLocation(shader, "u_cam_pos")
 	g.loc_fade = rl.GetShaderLocation(shader, "u_fade")
 
-	// Coastline and country border segments on the sphere, slightly above the sphere surface.
+	// Coastline and country border segments on the sphere, slightly above the sphere surface, one mesh per kind
+	// so the border editor (border_edit.odin) can show each on its own.
 	LINE_R :: EARTH_RADIUS_KM - 0.35
-	segs := 0
-	for l in w.world_map.lines {
-		if l.count >= 2 do segs += int(l.count) - 1
-	}
-	if segs > 0 {
+	for kind in World_Line_Kind {
+		segs := 0
+		for l in w.world_map.lines {
+			if l.count >= 2 && l.kind == u32(kind) do segs += int(l.count) - 1
+		}
+		g.segments[kind] = segs
+		if segs == 0 do continue
 		lv := segs * 6
 		lpos := make([][3]f32, lv, context.temp_allocator)
 		lother := make([][3]f32, lv, context.temp_allocator)
 		lcol := make([][4]u8, lv, context.temp_allocator)
 		li := 0
+		alpha: u8 = kind == .Coastline ? 210 : 120
+		c := [4]u8{u8(Map_Kind.Border), 0, 0, alpha}
 		for l in w.world_map.lines {
+			if l.kind != u32(kind) do continue
 			pts := w.world_map.points[l.start:][:l.count]
-			alpha: u8 = l.kind == 0 ? 210 : 120
-			c := [4]u8{u8(Map_Kind.Border), 0, 0, alpha}
 			for k in 1 ..< len(pts) {
 				a := globe_pos(pts[k - 1].x, pts[k - 1].y, EARTH_RADIUS_KM - LINE_R)
 				b := globe_pos(pts[k].x, pts[k].y, EARTH_RADIUS_KM - LINE_R)
@@ -319,7 +330,7 @@ globe_build :: proc(w: ^World) {
 				li += 6
 			}
 		}
-		g.lines = line_mesh_upload(lpos, lother, lcol, false)
+		g.lines[kind] = line_mesh_upload(lpos, lother, lcol, false)
 	}
 	g.ready = true
 }
@@ -327,7 +338,7 @@ globe_build :: proc(w: ^World) {
 globe_unload :: proc(g: ^Globe_GPU) {
 	if !g.ready do return
 	rl.UnloadMesh(g.sphere)
-	if g.lines.vertexCount > 0 do rl.UnloadMesh(g.lines)
+	for m in g.lines do if m.vertexCount > 0 do rl.UnloadMesh(m)
 	rl.UnloadTexture(g.mask_tex)
 	if g.region_tex.id != 0 do rl.UnloadTexture(g.region_tex)
 	rl.UnloadShader(g.material.shader)
@@ -348,12 +359,13 @@ globe_set_clip :: proc(w: ^World) {
 }
 
 globe_draw :: proc(w: ^World) {
+	prof_zone(w, .Globe)
 	g := &w.globe
 	if !g.ready do globe_build(w)
 	if !g.ready do return
 
 	pal := palette(w)
-	ocean := rl.ColorNormalize(rl.Color{185, 212, 236, 255}).rgb
+	ocean := rl.ColorNormalize(pal.ocean).rgb
 	land := rl.ColorNormalize(pal.land).rgb
 	grid := rl.ColorNormalize(pal.text_2).rgb
 	atmo := rl.ColorNormalize(pal.accent).rgb
@@ -373,10 +385,10 @@ globe_draw :: proc(w: ^World) {
 	rl.DrawMesh(g.sphere, g.material, rl.Matrix(1))
 }
 
-globe_draw_lines :: proc(w: ^World) {
+globe_draw_lines :: proc(w: ^World, kind: World_Line_Kind) {
 	g := &w.globe
-	if !g.ready || g.lines.vertexCount <= 0 do return
-	rl.DrawMesh(g.lines, w.line_meshes.material, rl.Matrix(1))
+	if !g.ready || g.lines[kind].vertexCount <= 0 do return
+	rl.DrawMesh(g.lines[kind], w.line_meshes.material, rl.Matrix(1))
 }
 
 globe_labels_draw :: proc(w: ^World) {

@@ -16,6 +16,8 @@ ROUTE_CASING_PX :: 2
 BANNER_MAX_W :: 560
 BANNER_MIN_H :: 120
 BANNER_ICON_COL :: 96
+BANNER_COL_PAD :: 12 // around the distance in the icon column
+BANNER_DIST_Y :: 74 // top of the distance under the maneuver icon
 SHEET_MAX_W :: 720
 SHEET_H :: 172
 WARNING_TOP :: 170
@@ -104,10 +106,15 @@ catmull_rom :: proc(a, b, c, d: [2]f32, t: f32) -> [2]f32 {
 	return 0.5 * (2 * b + (c - a) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (3 * b - a - 3 * c + d) * t3)
 }
 
-// Draw order 5: the alternatives first (grey, 11 px), then the chosen one (cyan, 14 px), each with a 2 px darker
-// casing. While navigating only the active route from the ship on.
+// Draw order 5: the alternatives first (grey, 11 px), then the chosen one (cyan, 14 px; green for Greenest), each
+// with a 2 px darker casing. While navigating only the active route from the ship on.
 nav_draw_routes :: proc(w: ^World) {
+	prof_zone(w, .Routes)
 	pal := palette(w)
+	route_colors :: proc(pal: ^Palette, mode: Route_Mode) -> (fill, casing: rl.Color) {
+		if mode == .Greenest do return pal.green_route, pal.green_route_casing
+		return pal.route, pal.route_casing
+	}
 	if w.screen == .Navigate {
 		r := nav_route(w)
 		if r == nil do return
@@ -118,8 +125,9 @@ nav_draw_routes :: proc(w: ^World) {
 			f := seg > 0 ? clamp((w.nav.s_km - r.dist[from]) / seg, 0, 1) : 0
 			head = linalg.lerp(r.path[from].xy, r.path[from + 1].xy, f)
 		}
-		draw_path_strip(w, r.path, from, ROUTE_PX + 2 * ROUTE_CASING_PX, pal.route_casing, head, true)
-		draw_path_strip(w, r.path, from, ROUTE_PX, pal.route, head, true)
+		fill, casing := route_colors(pal, w.nav.mode)
+		draw_path_strip(w, r.path, from, ROUTE_PX + 2 * ROUTE_CASING_PX, casing, head, true)
+		draw_path_strip(w, r.path, from, ROUTE_PX, fill, head, true)
 		return
 	}
 	for mode in MODE_ORDER {
@@ -129,8 +137,9 @@ nav_draw_routes :: proc(w: ^World) {
 		draw_path_strip(w, r.path, 0, ALT_ROUTE_PX, pal.alt_route)
 	}
 	if r := &w.routes[w.plan.mode]; r.ok {
-		draw_path_strip(w, r.path, 0, ROUTE_PX + 2 * ROUTE_CASING_PX, pal.route_casing)
-		draw_path_strip(w, r.path, 0, ROUTE_PX, pal.route)
+		fill, casing := route_colors(pal, w.plan.mode)
+		draw_path_strip(w, r.path, 0, ROUTE_PX + 2 * ROUTE_CASING_PX, casing)
+		draw_path_strip(w, r.path, 0, ROUTE_PX, fill)
 	}
 }
 
@@ -178,11 +187,11 @@ nav_draw_bubbles :: proc(w: ^World) {
 		bs := ui_text_size(w, bottom, .Roboto_400, 12)
 		leaf: f32 = mode == .Greenest ? 18 : 0
 		box := rl.Rectangle{p.x + 6, p.y - 46, max(ts.x + leaf, bs.x) + 20, 42}
-		bg := chosen ? pal.accent_strong : rl.WHITE
+		bg := chosen ? pal.accent_strong : pal.surface
 		fg := chosen ? rl.WHITE : pal.text
 		id, hot, fired := ui_widget(w, box)
 		ui_shadow(w, box, 10)
-		round_rect(box, 10, hot && !chosen ? pal.surface_2 : bg)
+		round_rect(w, box, 10, hot && !chosen ? pal.surface_2 : bg)
 		// Tail bottom-left, pointing at the route.
 		rl.DrawTriangle(
 			{box.x, box.y + box.height - 10},
@@ -240,29 +249,33 @@ nav_sheet_rect :: proc(w: ^World) -> rl.Rectangle {
 
 // Navigation screen: road sign, layer pill, banner + Then, warning and the sheet. Draw order 7 and 8.
 nav_ui :: proc(w: ^World) {
+	prof_zone(w, .Nav_Ui)
 	pal := palette(w)
 	n := &w.nav
 	r := nav_route(w)
 	s := &w.ship
 	buf: [96]u8
 	sub: [96]u8
+	// With the rerouting banner off (View tab) a reroute shows the next maneuver at once; "no safe route" still shows.
+	kind := n.banner
+	if kind == .Rerouting && !w.view_edit.reroute_banner && !n.no_route do kind = .Flying
 
 	// Road sign at the next maneuver (within CALLOUT_KM), light cyan with a 3 px white border, tail bottom right.
-	if r != nil && n.banner == .Flying && n.next < len(r.maneuvers) && n.next_m < CALLOUT_KM * 1000 {
+	if r != nil && kind == .Flying && n.next < len(r.maneuvers) && n.next_m < CALLOUT_KM * 1000 {
 		m := &r.maneuvers[n.next]
 		p := r.path[m.path_index]
 		if sp, visible := cam_to_screen(w, {p.x, p.y, 0}); visible {
 			name := cstr(m.road[:])
 			size := ui_text_size(w, name, .Figtree_600, 19)
 			box := rl.Rectangle{sp.x - size.x - 34, sp.y - size.y - 30, size.x + 28, size.y + 14}
-			round_rect({box.x - 3, box.y - 3, box.width + 6, box.height + 6}, 17, rl.WHITE)
+			round_rect(w, {box.x - 3, box.y - 3, box.width + 6, box.height + 6}, 17, rl.WHITE)
 			rl.DrawTriangle(
 				{box.x + box.width - 16, box.y + box.height + 2},
 				{box.x + box.width + 2, box.y + box.height - 12},
 				sp,
 				rl.WHITE,
 			)
-			round_rect(box, 14, pal.bubble)
+			round_rect(w, box, 14, pal.bubble)
 			ui_text(w, {box.x + 14, box.y + 7}, name, .Figtree_600, 19, pal.bubble_text)
 		}
 	}
@@ -277,7 +290,7 @@ nav_ui :: proc(w: ^World) {
 		}
 		size := ui_text_size(w, name, .Figtree_600, 17)
 		box := rl.Rectangle{sp.x - size.x / 2 - 14, sp.y + PILL_BELOW_SHIP, size.x + 28, size.y + 10}
-		round_rect(box, box.height / 2, pal.pill)
+		round_rect(w, box, box.height / 2, pal.pill)
 		ui_text(w, {box.x + 14, box.y + 5}, name, .Figtree_600, 17, rl.WHITE)
 	}
 
@@ -290,7 +303,7 @@ nav_ui :: proc(w: ^World) {
 		icon := Icon.Straight
 		text, subline: string
 		dist_value, dist_unit: string
-		switch n.banner {
+		switch kind {
 		case .Rerouting:
 			color = pal.reroute
 			icon = .Reroute
@@ -318,12 +331,20 @@ nav_ui :: proc(w: ^World) {
 				dist_value, dist_unit = format_distance(sub[64:], n.next_m)
 			}
 		}
-		then := n.banner == .Flying && n.then_visible && n.next + 1 < len(r.maneuvers)
-		round_rect(banner, 18, color)
+		// The icon column and the banner grow to fit the distance, so it never spills out at large text sizes.
+		vs, us: [2]f32
+		if dist_value != "" {
+			vs = ui_text_size(w, dist_value, .Figtree_600, 34)
+			us = ui_text_size(w, dist_unit, .Figtree_500, 18)
+		}
+		col_w := max(BANNER_ICON_COL, vs.x + 2 + us.x + 2 * BANNER_COL_PAD)
+		banner.height = max(BANNER_MIN_H, BANNER_DIST_Y + vs.y + BANNER_COL_PAD)
+		then := kind == .Flying && n.then_visible && n.next + 1 < len(r.maneuvers)
+		round_rect(w, banner, 18, color)
 		if then do rl.DrawRectangleRec({banner.x, banner.y + banner.height - 18, 18, 18}, color)
 		ui_block(w, banner)
-		col := rl.Rectangle{banner.x, banner.y, BANNER_ICON_COL, banner.height}
-		if n.banner == .Rerouting {
+		col := rl.Rectangle{banner.x, banner.y, col_w, banner.height}
+		if kind == .Rerouting {
 			// The circle arrow turns while rerouting.
 			angle := f32(rl.GetTime()) * 360
 			c := [2]f32{col.x + col.width / 2, col.y + 44}
@@ -340,24 +361,26 @@ nav_ui :: proc(w: ^World) {
 			ui_icon(w, icon, {col.x + col.width / 2, col.y + 44}, 64, rl.WHITE)
 		}
 		if dist_value != "" {
-			vs := ui_text_size(w, dist_value, .Figtree_600, 34)
-			us := ui_text_size(w, dist_unit, .Figtree_500, 18)
 			x := col.x + (col.width - vs.x - us.x - 2) / 2
-			ui_text(w, {x, col.y + 74}, dist_value, .Figtree_600, 34, rl.WHITE)
-			ui_text(w, {x + vs.x + 2, col.y + 88}, dist_unit, .Figtree_500, 18, rl.WHITE)
+			y := col.y + BANNER_DIST_Y
+			unit_y := y + ui_text_baseline(w, .Figtree_600, 34) - ui_text_baseline(w, .Figtree_500, 18)
+			ui_text(w, {x, y}, dist_value, .Figtree_600, 34, rl.WHITE)
+			ui_text(w, {x + vs.x + 2, unit_y}, dist_unit, .Figtree_500, 18, rl.WHITE)
 		}
-		tx := banner.x + BANNER_ICON_COL + 4
+		tx := banner.x + col_w + 4
+		text_w := banner.width - col_w - 20
+		sub_y := banner.y + banner.height - 17 - text_px(w, 17)
 		ui_text_wrapped(
 			w,
-			{tx, banner.y + 16, banner.width - BANNER_ICON_COL - 20, 82},
+			{tx, banner.y + 16, text_w, sub_y - banner.y - 20},
 			text,
 			.Figtree_500,
-			n.banner == .Flying ? 34 : 30,
+			kind == .Flying ? 34 : 30,
 			rl.WHITE,
 		)
 		ui_text_wrapped(
 			w,
-			{tx, banner.y + banner.height - 34, banner.width - BANNER_ICON_COL - 20, 22},
+			{tx, sub_y, text_w, text_line_px(w, 17)},
 			subline,
 			.Roboto_400,
 			17,
@@ -367,7 +390,7 @@ nav_ui :: proc(w: ^World) {
 		if then {
 			m := &r.maneuvers[n.next + 1]
 			tab := rl.Rectangle{banner.x, banner.y + banner.height, 132, 46}
-			round_rect(tab, 18, pal.banner_2)
+			round_rect(w, tab, 18, pal.banner_2)
 			rl.DrawRectangleRec({tab.x, tab.y, tab.width, 18}, pal.banner_2)
 			ui_text(w, {tab.x + 16, tab.y + 12}, "Then", .Figtree_500, 19, rl.WHITE)
 			icons := MANEUVER_ICONS
@@ -395,7 +418,7 @@ nav_ui :: proc(w: ^World) {
 			size.x + 50,
 			size.y + 16,
 		}
-		round_rect(box, box.height / 2, pal.warning)
+		round_rect(w, box, box.height / 2, pal.warning)
 		dark := rl.Color{32, 33, 36, 255}
 		ui_icon(w, .Warning, {box.x + 20, box.y + box.height / 2}, 20, dark)
 		ui_text(w, {box.x + 36, box.y + 8}, warning, .Figtree_600, 15, dark)
@@ -404,7 +427,7 @@ nav_ui :: proc(w: ^World) {
 	// Bottom sheet: remaining time (green + leaf), "km, arrive hh:mm", stat chips. Dario adds the buttons
 	// (pilot_ui).
 	sheet := nav_sheet_rect(w)
-	round_rect({sheet.x, sheet.y, sheet.width, sheet.height + 22}, 22, pal.sheet)
+	round_rect(w, {sheet.x, sheet.y, sheet.width, sheet.height + 22}, 22, pal.sheet)
 	ui_block(w, sheet)
 	x := sheet.x + 24
 	if r != nil {
@@ -438,7 +461,14 @@ nav_ui :: proc(w: ^World) {
 		meter:        f32,
 	} {
 		{"USED", fmt.tprintf("%.2f kWh", n.active ? n.used_kwh : s.used_kwh - s.solar_kwh), -1},
-		{"SOLAR", fmt.tprintf("%.1f kW", solar_kw(cloud_at(w, s.pos.x, s.pos.y, sim_hour(w)))), -1},
+		{
+			"SOLAR",
+			fmt.tprintf(
+				"%.1f kW",
+				solar_kw(cloud_at(w, s.pos.x, s.pos.y, sim_hour(w)), sun_factor(w, sim_hour(w))),
+			),
+			-1,
+		},
 		{"HEIGHT", fmt.tprintf("%.0f m", s.alt), -1},
 	}
 	cw := (sheet.width - 48 - f32(len(chips) - 1) * 8) / f32(len(chips))

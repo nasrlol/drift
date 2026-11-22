@@ -212,7 +212,7 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	// 3 min with P(v) = 3 + 0.0085 v^3). The routes never fly that fast, so their energy is unchanged.
 	s.used_kwh +=
 		(power_kw(min(s.speed, SHIP_POWER_CAP_MS), gust) + climb_ms * SHIP_CLIMB_KW_PER_MS) * dt / 3600
-	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, hour)) * dt / 3600
+	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, hour), sun_factor(w, hour)) * dt / 3600
 
 	s.warnings = {}
 	if s.alt - ground < SHIP_TERRAIN_WARN_M do s.warnings += {.Terrain}
@@ -439,7 +439,7 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 		(power_kw(min(airspeed, SHIP_POWER_CAP_MS), gust) + max(s.vel.z, 0) * SHIP_CLIMB_KW_PER_MS) *
 		dt /
 		3600
-	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, hour)) * dt / 3600
+	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, hour), sun_factor(w, hour)) * dt / 3600
 
 	s.warnings = {}
 	for z in w.no_fly {

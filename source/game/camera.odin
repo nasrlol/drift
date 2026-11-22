@@ -25,6 +25,10 @@ CAM_CHASE_ZOOM :: 5.5
 CAM_CHASE_AHEAD :: 0.18
 // Following the ship: the camera closes this share of the gap per second (a small lag, turns with the ship).
 CAM_FOLLOW_RATE :: 4.0
+// Orbiting the chase camera with the right mouse button (nasr, 2026-11-22: "can we move it?"): radians per
+// pixel dragged, and the default steepest tilt (0 = straight down, w.view_edit changes it).
+CAM_ORBIT_RAD_PER_PX :: 0.005
+CAM_ORBIT_MAX_TILT :: 80 * math.RAD_PER_DEG
 
 // Where the camera looks: pan = km from the map centre to the point under the screen centre (in Belgium),
 // globe_rot = (lon, lat) radians away from Belgium when orbiting the globe, zoom, yaw (radians clockwise)
@@ -59,6 +63,10 @@ Cam :: struct {
 	preview_t:    f32, // seconds into the preview
 	preview_mode: Route_Mode,
 	dragged:      bool, // the user moved the map in navigation: Re-centre shows
+	// The chase camera turned around the ship (right drag): yaw added to the heading, tilt added to
+	// CAM_CHASE_TILT. Zero = straight behind; it keeps following while turned.
+	orbit_yaw:    f32,
+	orbit_tilt:   f32,
 	// A zoom in asked for more than ZOOM_MAX while the camera is already there: the street view takes over
 	// (street_switch, street.odin). Cleared every frame by game_update.
 	zoom_past:    bool,
@@ -182,19 +190,22 @@ cam_chase :: proc(w: ^World) {
 	c := &w.cam
 	c.mode = .Chase
 	c.dragged = false
+	c.orbit_yaw, c.orbit_tilt = 0, 0
 	cam_glide(w, cam_chase_pose(w, CAM_CHASE_ZOOM), CAM_CHASE_S)
 }
 
 cam_chase_pose :: proc(w: ^World, zoom: f32) -> Cam_Pose {
 	p := w.pose
-	ppk := cam_fit_scale(w.cam.screen) * math.pow(f32(2), zoom)
-	ahead := CAM_CHASE_AHEAD * w.cam.screen.y / ppk
-	fwd := [2]f32{math.sin(p.heading), -math.cos(p.heading)}
+	c := &w.cam
+	ppk := cam_fit_scale(c.screen) * math.pow(f32(2), zoom)
+	ahead := CAM_CHASE_AHEAD * c.screen.y / ppk
+	yaw := p.heading + c.orbit_yaw
+	fwd := [2]f32{math.sin(yaw), -math.cos(yaw)}
 	return {
 		pan = [2]f32{f32(p.pos.x), f32(p.pos.y)} + fwd * ahead - [2]f32{MAP_W_KM, MAP_H_KM} / 2,
 		zoom = zoom,
-		yaw = p.heading,
-		tilt = CAM_CHASE_TILT,
+		yaw = yaw,
+		tilt = clamp(CAM_CHASE_TILT + c.orbit_tilt, 0, view_max_tilt(w)),
 	}
 }
 
@@ -265,6 +276,24 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 				if c.mode == .Chase {
 					c.mode = .Free
 					c.dragged = true
+				}
+			}
+		}
+		// Right drag turns the camera around the screen centre: sideways turns, up tilts towards the horizon. The
+		// chase camera keeps following the ship while turned (Re-centre puts it behind again).
+		flat := c.pose.globe_rot == {} && c.pose.zoom >= 0
+		if mouse_free && rl.IsMouseButtonDown(.RIGHT) && flat && c.mode != .Preview {
+			if d := rl.GetMouseDelta(); d != {} {
+				turn, tilt := d.x * CAM_ORBIT_RAD_PER_PX, -d.y * CAM_ORBIT_RAD_PER_PX
+				if c.mode == .Chase {
+					c.orbit_yaw = math.mod(c.orbit_yaw + turn + 3 * math.PI, math.TAU) - math.PI
+					lo, hi := f32(-CAM_CHASE_TILT), view_max_tilt(w) - CAM_CHASE_TILT
+					c.orbit_tilt = clamp(c.orbit_tilt + tilt, lo, hi)
+					c.dragged = true
+				} else {
+					c.pose.yaw = math.mod(c.pose.yaw + turn + 3 * math.PI, math.TAU) - math.PI
+					c.pose.tilt = clamp(c.pose.tilt + tilt, 0, view_max_tilt(w))
+					c.glide_dur = 0
 				}
 			}
 		}

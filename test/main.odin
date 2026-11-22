@@ -492,15 +492,16 @@ run_free_flight :: proc() -> bool {
 		}
 	}
 
-	// 3: full throttle in open country: top speed SHIP_MAX_SPEED (70 m/s, 252 km/h).
+	// 3: full throttle in open country: the top speed the game runs with (tune.max_speed, SHIP_MAX_SPEED unless
+	// assets/settings.txt changes it).
 	{
 		r, ok := run("test/data/calm.snap", "free 132.924 83.707 60 0 1 0 0 60\n")
 		defer if r.w != nil do game.game_shutdown(r.w)
-		if !ok || abs(r.w.ship.speed - game.SHIP_MAX_SPEED) > 0.5 || count(r.out, "wall hits") != 0 {
+		if !ok || abs(r.w.ship.speed - r.w.tune.max_speed) > 0.5 || count(r.out, "wall hits") != 0 {
 			fmt.printfln(
 				"test free_flight: top speed %.2f m/s, want %.0f\n  %s",
 				r.w.ship.speed,
-				game.SHIP_MAX_SPEED,
+				r.w.tune.max_speed,
 				r.out,
 			)
 			return false

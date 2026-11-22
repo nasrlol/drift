@@ -108,6 +108,7 @@ Street :: struct {
 	material:   rl.Material,
 	loc:        struct {
 		layer, remap, map_colors, real_colors, origin, cities: i32,
+		grass_size, grass_amt, grass_tone:                     i32,
 		light:                                                 Street_Light_Locs,
 	},
 	// The houses (houses.odin) with the lit shader, and the sky.
@@ -366,6 +367,9 @@ uniform vec3 real_colors[6];
 uniform vec2 origin;
 uniform float layer;
 uniform vec3 cities[16]; // x, z in street metres, radius m (0 = none): the circles of real buildings
+uniform vec4 grass_size; // metres: patches, tufts, clumps, worn spots (grass_edit.odin)
+uniform vec4 grass_amt; // dry patches, tufts, clumps, worn spots
+uniform vec2 grass_tone; // how olive, where worn spots start
 out vec4 finalColor;
 ` +
 	STREET_GLSL +
@@ -386,16 +390,20 @@ float fbm(vec2 p, float f, float fw) {
 	float s = perlin(p * f, 4096.0 * f) * (1.0 - smoothstep(0.15, 0.4, fw * f));
 	return 1.1 * s + 0.55 * perlin(p * f * 2.0, 8192.0 * f) * (1.0 - smoothstep(0.15, 0.4, fw * f * 2.0));
 }
+// Cycles per metre for a feature of about size metres, snapped so the noise still tiles over 4096 m (fbm).
+float grass_f(float size) { return max(floor(4096.0 / max(size, 0.01) + 0.5), 1.0) / 4096.0; }
 // Open grass (Lars, 2026-11-22: "maak van de lege groene vlaktes ook perlin noise"): around the colour c, patches
-// of lush and dry (straw) grass of ~64 m, tufts of ~8 m, clumps of ~1 m and a few worn spots of bare earth.
+// of lush and dry (straw) grass, tufts, clumps and a few worn spots of bare earth. Sizes and strengths are the
+// grass uniforms (the Grass tab of the settings panel).
 vec3 grass(vec3 c, vec2 p, float fw) {
-	float patches = fbm(p, 1.0 / 64.0, fw), tufts = fbm(p + 300.0, 1.0 / 8.0, fw), clumps = fbm(p + 900.0, 1.0, fw);
-	// Real grass is olive rather than paint green: a quarter of the way to a yellow-grey of the same brightness.
-	vec3 lush = mix(c, dot(c, vec3(0.3, 0.59, 0.11)) * vec3(0.95, 1.12, 0.55), 0.3);
-	vec3 g = mix(lush, vec3(0.13, 0.125, 0.05), smoothstep(-0.15, 0.5, patches) * 0.7);
-	g *= 1.0 + 0.45 * tufts + 0.3 * clumps;
-	float worn = smoothstep(0.32, 0.5, fbm(p + 1700.0, 1.0 / 32.0, fw) + 0.25 * tufts);
-	return mix(g, vec3(0.1, 0.075, 0.05) * (1.0 + 0.4 * clumps), worn * 0.55);
+	float patches = fbm(p, grass_f(grass_size.x), fw);
+	float tufts = fbm(p + 300.0, grass_f(grass_size.y), fw), clumps = fbm(p + 900.0, grass_f(grass_size.z), fw);
+	// Real grass is olive rather than paint green: part of the way to a yellow-grey of the same brightness.
+	vec3 lush = mix(c, dot(c, vec3(0.3, 0.59, 0.11)) * vec3(0.95, 1.12, 0.55), grass_tone.x);
+	vec3 g = mix(lush, vec3(0.13, 0.125, 0.05), smoothstep(-0.15, 0.5, patches) * grass_amt.x);
+	g *= 1.0 + grass_amt.y * tufts + grass_amt.z * clumps;
+	float worn = smoothstep(grass_tone.y, grass_tone.y + 0.18, fbm(p + 1700.0, grass_f(grass_size.w), fw) + 0.25 * tufts);
+	return mix(g, vec3(0.1, 0.075, 0.05) * (1.0 + 0.4 * clumps), worn * grass_amt.w);
 }
 // The patchwork of fields: cells of about size metres around jittered points; x = the cell's hash, y = metres
 // to its border.
@@ -985,6 +993,8 @@ STREET_LOOK :: Street_Look {
 	river = {56, 84, 102, 255},
 	buildings = {
 		roof = {0.47, 0.4, 0.37},
+		solar_roof = {0.16, 0.21, 0.32},
+		green_roof = {0.36, 0.47, 0.27},
 		wall = {0.74, 0.7, 0.64},
 		tree = {0.3, 0.4, 0.24},
 		fog = {196.0 / 255, 210.0 / 255, 222.0 / 255},
@@ -1080,6 +1090,7 @@ street_leave :: proc(w: ^World) {
 
 // Builds the line index, the ground plane and the shader. Needs the window.
 street_build :: proc(w: ^World) {
+	prof_zone(w, .Street_Build)
 	st := &w.street
 	if st.ready do return
 	perm := context.allocator
@@ -1191,6 +1202,9 @@ street_build :: proc(w: ^World) {
 		real_colors = rl.GetShaderLocation(sh, "real_colors"),
 		origin      = rl.GetShaderLocation(sh, "origin"),
 		cities      = rl.GetShaderLocation(sh, "cities"),
+		grass_size  = rl.GetShaderLocation(sh, "grass_size"),
+		grass_amt   = rl.GetShaderLocation(sh, "grass_amt"),
+		grass_tone  = rl.GetShaderLocation(sh, "grass_tone"),
 		light       = street_light_locs(sh),
 	}
 	lit := rl.LoadShaderFromMemory(STREET_VS, STREET_FS)
@@ -1452,6 +1466,7 @@ street_area_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 // Once per frame while on: looking around, the chase camera and the raylib camera. Drawing only, frame time is
 // fine.
 street_camera :: proc(w: ^World) {
+	prof_zone(w, .Street_Camera)
 	st := &w.street
 	dt := frame_time(w)
 	st.on_s += dt
@@ -1542,6 +1557,7 @@ street_camera :: proc(w: ^World) {
 
 // The whole street view frame: sky, ground, roads, buildings, trees, the cars, then the HUD.
 street_draw :: proc(w: ^World) {
+	prof_zone(w, .Street_Draw)
 	st := &w.street
 	street_build(w)
 	street_camera(w)
@@ -1602,6 +1618,7 @@ street_draw :: proc(w: ^World) {
 			cities[i] = {d.x, d.y, BUILDINGS_RADIUS_KM * 1000}
 		}
 		rl.SetShaderValueV(sh, st.loc.cities, &cities, .VEC3, 16)
+		grass_set(w, sh)
 
 		// 1: land, a quad kept under the car.
 		layer, remap: f32 = 0, 0
@@ -1702,6 +1719,7 @@ street_cars :: proc(w: ^World, mat: ^rl.Material) {
 
 // The shadow map of this frame (see SHADOW_SIZE), and the light's view-projection in st.light_vp.
 street_shadow_pass :: proc(w: ^World, place: Placement) {
+	prof_zone(w, .Street_Shadow)
 	st := &w.street
 	if st.shadow_fbo == 0 do return
 	look := STREET_LOOK
@@ -1753,6 +1771,7 @@ street_shadow_pass :: proc(w: ^World, place: Placement) {
 
 // Speed, height and heading bottom left, the keys for a few seconds after switching on. Plain, small, legible.
 street_hud :: proc(w: ^World) {
+	prof_zone(w, .Street_Hud)
 	s := &w.ship
 	pal := palette(w)
 	screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
@@ -1764,7 +1783,7 @@ street_hud :: proc(w: ^World) {
 
 	PAD :: 24
 	box := rl.Rectangle{PAD, screen.y - PAD - 92, 210, 92}
-	round_rect(box, 14, rl.ColorAlpha(pal.surface, 0.72))
+	round_rect(w, box, 14, rl.ColorAlpha(pal.surface, 0.72))
 	size := ui_text_size(w, speed, .Figtree_700, 40)
 	ui_text(w, {box.x + 18, box.y + 12}, speed, .Figtree_700, 40, pal.text)
 	ui_text(w, {box.x + 22 + size.x, box.y + 32}, "km/h", .Roboto_500, 14, pal.text_2)
@@ -1779,7 +1798,7 @@ street_hud :: proc(w: ^World) {
 		HINT :: "W/S throttle and brake   A/D turn   Space/Shift up and down   Mouse look around   Scroll out or fly high: map"
 		hint := ui_text_size(w, HINT, .Roboto_500, 14)
 		r := rl.Rectangle{(screen.x - hint.x) / 2 - 14, PAD, hint.x + 28, hint.y + 16}
-		round_rect(r, 10, rl.ColorAlpha(pal.surface, 0.72 * alpha))
+		round_rect(w, r, 10, rl.ColorAlpha(pal.surface, 0.72 * alpha))
 		ui_text(w, {r.x + 14, r.y + 8}, HINT, .Roboto_500, 14, rl.ColorAlpha(pal.text, alpha))
 	}
 }

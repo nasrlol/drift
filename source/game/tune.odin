@@ -1,12 +1,11 @@
 package game
 
 import "core:fmt"
-import rl "vendor:raylib"
 
-// Speed editor (nasr, 2026-11-22): F2 opens sliders for the car's speed while the game runs. The ship reads
-// w.tune instead of the constants; the defaults are those constants, so without touching a slider nothing
-// changes. Reset puts every value back, nothing is saved: a restart is the default again. Changing a value
-// during a recorded run makes its replay differ.
+// Speed settings (nasr, 2026-11-22): the Speed tab of the settings panel (settings.odin) has sliders for the
+// car's speed while the game runs. The ship reads w.tune instead of the constants; the defaults are those
+// constants, so without touching a slider nothing changes. Nothing is saved: a restart is the default again.
+// Changing a value during a recorded run makes its replay differ.
 Tune :: struct {
 	max_speed:   f32, // m/s, flying top speed (map and street view)
 	hand_accel:  f32, // m/s^2, flying by hand on the map
@@ -14,12 +13,25 @@ Tune :: struct {
 	hand_turn:   f32, // rad/s, flying by hand on the map
 	free_accel:  f32, // m/s^2, thrust in the street view
 	cruise_rate: f32, // held throttle per second while W / S is down
-	open:        bool,
-	drag:        int, // slider row + 1 being dragged, 0 = none
+	map_time:    f32, // times real time while driving on the map (map_time_scale)
 }
 
-TUNE_W :: 340
-TUNE_ROW_H :: 50
+// On the map at real speed the car crept across Belgium (nasr, 2026-11-22: "it feels really slow and
+// sluggish"). So while driving on the map the whole simulation runs this many times faster than real time: the
+// car covers more ground per second at the same speed, and the wind, the battery, the arrival times and the
+// clock stay consistent with it (the clock runs faster too). The street view stays real time.
+MAP_TIME_SCALE :: 4.0
+MAP_TIME_MAX :: 10.0
+MAP_TIME_EASE_S :: 0.5 // real seconds to go between real time and map time, so the street switch never jerks
+
+// How many times faster than real time the simulation runs this frame: tune.map_time in navigation on the map,
+// real time on the plan screen and in the street view, eased over MAP_TIME_EASE_S. Once a frame.
+map_time_scale :: proc(w: ^World, frame_dt: f32) -> f32 {
+	target: f32 = w.screen == .Navigate && !w.street.on ? w.tune.map_time : 1
+	if w.map_time_now == 0 do w.map_time_now = 1
+	w.map_time_now += (target - w.map_time_now) * min(frame_dt / MAP_TIME_EASE_S, 1)
+	return w.map_time_now
+}
 
 tune_defaults :: proc() -> Tune {
 	return {
@@ -29,21 +41,14 @@ tune_defaults :: proc() -> Tune {
 		hand_turn = SHIP_MAX_TURN_RATE,
 		free_accel = FREE_ACCEL,
 		cruise_rate = CRUISE_RATE,
+		map_time = MAP_TIME_SCALE,
 	}
 }
 
-tune_reset :: proc(w: ^World) {
-	open := w.tune.open
-	w.tune = tune_defaults()
-	w.tune.open = open
-}
-
-tune_ui :: proc(w: ^World) {
+// The Speed tab from y down, width wide; returns the y under it.
+tune_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 	t := &w.tune
-	if key_pressed(w, .F2) do t.open = !t.open
-	if !t.open do return
-	pal := palette(w)
-	def := tune_defaults()
+	def := w.setting_defaults.tune
 	Row :: struct {
 		label:  string,
 		value:  ^f32,
@@ -59,54 +64,15 @@ tune_ui :: proc(w: ^World) {
 		{"Turn rate (map)", &t.hand_turn, def.hand_turn, 0.1, 2.5, "rad/s", false},
 		{"Thrust (street view)", &t.free_accel, def.free_accel, 1, 40, "m/s2", false},
 		{"Throttle build-up", &t.cruise_rate, def.cruise_rate, 0.05, 2, "/s", false},
+		{"Time on the map", &t.map_time, def.map_time, 1, MAP_TIME_MAX, "x", false},
 	}
-
-	sw := f32(rl.GetScreenWidth())
-	panel := rl.Rectangle{sw - 16 - TUNE_W - 80, 80, TUNE_W, 56 + len(rows) * TUNE_ROW_H + 60}
-	ui_card(w, panel)
-	ui_block(w, panel)
-	x := panel.x + 16
-	ui_text(w, {x, panel.y + 16}, "Speed editor", .Figtree_600, 16, pal.text)
-	ui_text(w, {panel.x + panel.width - 16 - 22, panel.y + 18}, "F2", .Mono_400, 12, pal.text_2)
-
-	if !rl.IsMouseButtonDown(.LEFT) do t.drag = 0
 	buf: [32]u8
-	y := panel.y + 56
+	y := y
 	for row, i in rows {
-		changed := abs(row.value^ - row.def) > 1e-4
-		ui_text(w, {x, y}, row.label, .Roboto_400, 13, pal.text)
 		text :=
 			row.kmh ? fmt.bprintf(buf[:], "%.0f km/h", row.value^ * 3.6) : fmt.bprintf(buf[:], "%.2f %s", row.value^, row.unit)
-		size := ui_text_size(w, text, .Mono_400, 13)
-		ui_text(
-			w,
-			{panel.x + panel.width - 16 - size.x, y},
-			text,
-			.Mono_400,
-			13,
-			changed ? pal.accent : pal.text_2,
-		)
-
-		track := rl.Rectangle{x, y + 26, panel.width - 32, 4}
-		_, _, fired := ui_widget(w, {track.x, track.y - 8, track.width, 20})
-		if fired do t.drag = i + 1
-		if t.drag == i + 1 {
-			k := clamp((rl.GetMousePosition().x - track.x) / track.width, 0, 1)
-			row.value^ = row.lo + k * (row.hi - row.lo)
-		}
-		k := clamp((row.value^ - row.lo) / (row.hi - row.lo), 0, 1)
-		kd := clamp((row.def - row.lo) / (row.hi - row.lo), 0, 1)
-		round_rect(track, 2, pal.surface_3)
-		round_rect({track.x, track.y, track.width * k, track.height}, 2, pal.accent)
-		// The default: a small mark on the track.
-		rl.DrawRectangleV({track.x + track.width * kd - 1, track.y - 4}, {2, 12}, pal.text_2)
-		rl.DrawCircleV({track.x + track.width * k, track.y + 2}, 8, changed ? pal.accent : pal.surface)
-		rl.DrawCircleLinesV({track.x + track.width * k, track.y + 2}, 8, pal.line)
-		y += TUNE_ROW_H
+		ui_slider_row(w, x, y, width, row.label, text, row.value, row.lo, row.hi, row.def, drag, i + 1)
+		y += UI_SLIDER_ROW_H
 	}
-
-	if ui_pill_button(w, {x, y + 8, panel.width - 32, 40}, "Reset to defaults", .Secondary) {
-		tune_reset(w)
-		ui_toast(w, "Speeds back to the defaults")
-	}
+	return y
 }

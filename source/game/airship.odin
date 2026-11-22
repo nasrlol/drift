@@ -114,6 +114,7 @@ void main() {
 // mesh.indices. The GL objects live in raylib, a shared library in debug builds, so they survive a hot reload.
 // Needs the window.
 airship_build :: proc(w: ^World) {
+	prof_zone(w, .Airship_Build)
 	a := &w.airship
 	scratch: virtual.Arena
 	if virtual.arena_init_growing(&scratch) != nil do return
@@ -478,6 +479,7 @@ car_draw_street :: proc(
 
 // The player's car (navigation screen).
 airship_draw :: proc(w: ^World) {
+	prof_zone(w, .Airship_Draw)
 	car_anim_update(w, frame_time(w))
 	an := w.car_anim
 	car_draw(
@@ -499,6 +501,7 @@ CAR_OTHER_PX :: 80.0
 CAR_JAM_TINT :: rl.Color{255, 150, 90, 255}
 
 others_draw :: proc(w: ^World) {
+	prof_zone(w, .Others)
 	px: f32 = w.screen == .Navigate ? CAR_OTHER_PX : CAR_OTHER_PX * 0.6
 	for o in w.others[:w.other_count] {
 		an := Car_Anim {

@@ -1,21 +1,21 @@
 weather start 1795176000
 plan Oostende -> Namur hour 3
-  fastest: 113.4 min, 172.392 km, 91.2 km/h, 94.245 kWh net, Extra_Energy, Via Skyway 800, past Aalst
+  fastest: 113.4 min, 172.392 km, 91.2 km/h, 103.046 kWh net, Extra_Energy, Via Skyway 800, past Aalst
     0.000 km Depart: Head east / Leave Oostende and climb / Vuurkruisenplein
     1.234 km Climb: Climb to Skyway 800 / 800 m, +16 m/s tailwind above / Tweebruggenstraat
     6.484 km Straight: Continue on Skyway 800 / for 162 km / Klemensheule / Clemensheulestraat
     168.983 km Descend: Descend to the Namur tower / 154 m, smoother air below / Rue de Gembloux
     172.392 km Arrive: Dock at Namur / Platform at 148 m / Rue Rogier
-  greenest: 185.5 min, 171.237 km, 55.4 km/h, 31.653 kWh net, Lowest_Energy, Via Skyway 800 and Skyway 550, past Aalst
+  greenest: 179.5 min, 170.683 km, 57.1 km/h, 44.893 kWh net, Lowest_Energy, Via Skyway 800 and Skyway 550, past Aalst
     0.000 km Depart: Head east / Leave Oostende and climb / Vuurkruisenplein
     1.234 km Climb: Climb to Skyway 800 / 800 m, +16 m/s tailwind above / Tweebruggenstraat
-    6.484 km Straight: Continue on Skyway 800 / for 118 km / Klemensheule / Clemensheulestraat
-    124.481 km Descend: Descend to Skyway 550 / 550 m, smoother air below / Waterloose Steenweg - Chaussée de Waterloo
-    125.481 km Slight_Right: Bear right toward Namur / Tailwind 9 m/s / Sint Jansberglaan
-    132.212 km Straight: Continue on Skyway 550 / for 37 km / Route de Genval
-    168.963 km Descend: Descend to the Namur tower / 154 m, smoother air below / Chaussée de Perwez
-    171.237 km Arrive: Dock at Namur / Platform at 148 m / Rue Rogier
-  calmest: 165.2 min, 170.971 km, 62.1 km/h, 48.339 kWh net, Gust_Index, Via Skyway 800 and Skyway 550, past Aalst
+    6.484 km Straight: Continue on Skyway 800 / for 129 km / Klemensheule / Clemensheulestraat
+    135.232 km Descend: Descend to Skyway 550 / 550 m, smoother air below / Chaussée de Bruxelles
+    136.232 km Slight_Right: Bear right toward Namur / Tailwind 9 m/s / Chaussée de Bruxelles
+    142.972 km Straight: Continue on Skyway 550 / for 26 km / Rue Auguste Lannoye
+    168.472 km Descend: Descend to the Namur tower / 154 m, smoother air below / Chaussée de Perwez
+    170.683 km Arrive: Dock at Namur / Platform at 148 m / Rue Rogier
+  calmest: 165.2 min, 170.971 km, 62.1 km/h, 61.159 kWh net, Gust_Index, Via Skyway 800 and Skyway 550, past Aalst
     0.000 km Depart: Head east / Leave Oostende and climb / Vuurkruisenplein
     1.234 km Climb: Climb to Skyway 800 / 800 m, +16 m/s tailwind above / Tweebruggenstraat
     6.484 km Straight: Continue on Skyway 800 / for 103 km / Klemensheule / Clemensheulestraat
@@ -25,21 +25,21 @@ plan Oostende -> Namur hour 3
     168.713 km Descend: Descend to the Namur tower / 154 m, smoother air below / Chaussée de Perwez
     170.971 km Arrive: Dock at Namur / Platform at 148 m / Rue Rogier
 plan Tournai -> Hasselt hour 5
-  fastest: 93.3 min, 152.138 km, 97.9 km/h, 79.284 kWh net, Extra_Energy, Via Skyway 800, past Charleroi
+  fastest: 93.3 min, 152.138 km, 97.9 km/h, 87.321 kWh net, Extra_Energy, Via Skyway 800, past Charleroi
     0.000 km Depart: Head east / Leave Tournai and climb / Grand'Place
     1.229 km Climb: Climb to Skyway 800 / 800 m, +16 m/s tailwind above / Boulevard Walter de Marvis
     6.229 km Straight: Continue on Skyway 800 / for 142 km / Rue d'Havinnes
     148.728 km Descend: Descend to the Hasselt tower / 106 m, smoother air below / Sint-Lambrechts-Herkstraat
     152.138 km Arrive: Dock at Hasselt / Platform at 100 m / Thonissenlaan
-  greenest: 172.3 min, 152.037 km, 52.9 km/h, 29.657 kWh net, Lowest_Energy, Via Skyway 800 and Skyway 550, past Charleroi
+  greenest: 166.1 min, 152.567 km, 55.1 km/h, 43.361 kWh net, Lowest_Energy, Via Skyway 800 and Skyway 550, past Charleroi
     0.000 km Depart: Head east / Leave Tournai and climb / Grand'Place
     1.229 km Climb: Climb to Skyway 800 / 800 m, +16 m/s tailwind above / Boulevard Walter de Marvis
-    6.229 km Straight: Continue on Skyway 800 / for 71 km / Rue d'Havinnes
-    77.229 km Descend: Descend to Skyway 550 / 550 m, smoother air below / Rue Longchamps
-    84.229 km Straight: Continue on Skyway 550 / for 65 km / Rue du 43e Régiment d'Infanterie
-    149.478 km Descend: Descend to the Hasselt tower / 106 m, smoother air below / Sint-Truidersteenweg
-    152.037 km Arrive: Dock at Hasselt / Platform at 100 m / Thonissenlaan
-  calmest: 155.8 min, 150.713 km, 58.0 km/h, 45.705 kWh net, Gust_Index, Via Skyway 800 and Skyway 550, past Bruxelles - Brussel
+    6.229 km Straight: Continue on Skyway 800 / for 80 km / Rue d'Havinnes
+    85.979 km Descend: Descend to Skyway 550 / 550 m, smoother air below / Rue du Village
+    93.229 km Straight: Continue on Skyway 550 / for 57 km / Rue des Boscailles
+    149.978 km Descend: Descend to the Hasselt tower / 106 m, smoother air below / Sint-Truidersteenweg
+    152.567 km Arrive: Dock at Hasselt / Platform at 100 m / Thonissenlaan
+  calmest: 155.8 min, 150.713 km, 58.0 km/h, 59.134 kWh net, Gust_Index, Via Skyway 800 and Skyway 550, past Bruxelles - Brussel
     0.000 km Depart: Head east / Leave Tournai and climb / Grand'Place
     1.229 km Climb: Climb to Skyway 800 / 800 m, +16 m/s tailwind above / Boulevard Walter de Marvis
     6.229 km Straight: Continue on Skyway 800 / for 58 km / Rue d'Havinnes
@@ -49,17 +49,17 @@ plan Tournai -> Hasselt hour 5
     147.972 km Descend: Descend to the Hasselt tower / 106 m, smoother air below / Sint-Truidersteenweg
     150.713 km Arrive: Dock at Hasselt / Platform at 100 m / Thonissenlaan
 plan Liège -> Brugge hour 8
-  fastest: 149.9 min, 191.593 km, 76.7 km/h, 120.198 kWh net, Extra_Energy, Via Skyway 300, past Bruxelles - Brussel
+  fastest: 149.9 min, 191.593 km, 76.7 km/h, 133.115 kWh net, Extra_Energy, Via Skyway 300, past Bruxelles - Brussel
     0.000 km Depart: Head north-west / Leave Liège and climb / Place Saint-Lambert
     0.859 km Straight: Continue on Skyway 300 / for 189 km / Montagne Sainte-Walburge
     189.609 km Descend: Descend to the Brugge tower / 75 m, smoother air below / Baron Ruzettelaan
     191.593 km Arrive: Dock at Brugge / Platform at 69 m / Hoefijzerlaan
-  greenest: 224.1 min, 191.593 km, 51.3 km/h, 36.678 kWh net, Lowest_Energy, Via Skyway 300, past Bruxelles - Brussel
+  greenest: 224.1 min, 191.593 km, 51.3 km/h, 55.990 kWh net, Lowest_Energy, Via Skyway 300, past Bruxelles - Brussel
     0.000 km Depart: Head north-west / Leave Liège and climb / Place Saint-Lambert
     0.859 km Straight: Continue on Skyway 300 / for 189 km / Montagne Sainte-Walburge
     189.609 km Descend: Descend to the Brugge tower / 75 m, smoother air below / Baron Ruzettelaan
     191.593 km Arrive: Dock at Brugge / Platform at 69 m / Hoefijzerlaan
-  calmest: 196.1 min, 191.593 km, 58.6 km/h, 56.193 kWh net, Gust_Index, Via Skyway 300, past Bruxelles - Brussel
+  calmest: 196.1 min, 191.593 km, 58.6 km/h, 73.093 kWh net, Gust_Index, Via Skyway 300, past Bruxelles - Brussel
     0.000 km Depart: Head north-west / Leave Liège and climb / Place Saint-Lambert
     0.859 km Straight: Continue on Skyway 300 / for 189 km / Montagne Sainte-Walburge
     189.609 km Descend: Descend to the Brugge tower / 75 m, smoother air below / Baron Ruzettelaan

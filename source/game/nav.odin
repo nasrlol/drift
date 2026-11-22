@@ -216,6 +216,7 @@ evaluate :: proc(
 	s: Route_Summary,
 ) {
 	wind_sum, tail_sum, gust_sum: f32
+	sun := sun_factor(w, hour)
 	if len(times) > 0 do times[0] = 0
 	if len(dist) > 0 do dist[0] = 0
 	for i in 1 ..< len(path) {
@@ -251,7 +252,7 @@ evaluate :: proc(
 		s.seconds += dt
 		s.km += km
 		s.used_kwh += power_kw(v, gust) * dt / 3600 + climb_kwh(dz)
-		s.solar_kwh += solar_kw(cloud) * dt / 3600
+		s.solar_kwh += solar_kw(cloud, sun) * dt / 3600
 		s.climb_m += max(dz, 0)
 		gust_sum += gust * dt
 		wind_sum += linalg.length(wind) * dt
@@ -277,7 +278,7 @@ plan_routes :: proc(w: ^World, from, to: int, hour: int) {
 	if from < 0 || from >= w.m.hub_count || to < 0 || to >= w.m.hub_count do return
 	a, b := hub_top(w, from), hub_top(w, to)
 	for &r, mode in w.routes {
-		t := prof_begin()
+		t := prof_begin(w, .Route)
 		path, ok := route(w, a, b, mode, hour)
 		prof_end(w, .Route, t)
 		if !ok do continue
@@ -771,7 +772,7 @@ nav_reroute :: proc(w: ^World) {
 	s := &w.ship
 	from := [3]f32{s.pos.x, s.pos.y, s.alt - TOWER_ABOVE_M}
 	hour := sim_hour(w)
-	t := prof_begin()
+	t := prof_begin(w, .Route)
 	path, ok := route(w, from, hub_top(w, n.to), n.mode, hour)
 	prof_end(w, .Route, t)
 	n.reroutes += 1

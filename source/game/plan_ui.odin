@@ -6,6 +6,7 @@ import "core:math"
 import "core:math/linalg"
 import "core:strings"
 import rl "vendor:raylib"
+import rlgl "vendor:raylib/rlgl"
 
 // Plan screen (docs/drift-design.pdf "Scherm 1: Plannen"): the 404 px panel on the left with card A (brand, from /
 // to, mode chips, departure) and card B (routes, wind note, Preview / Start), the map buttons, the layers panel,
@@ -128,21 +129,31 @@ MODE_LABELS :: [Route_Mode]string {
 	.Calmest  = "Calmest",
 }
 
-// Case-insensitive ASCII substring test; non-ASCII bytes (accents) compare as they are.
+// Base letter of U+00C0..U+00FF (UTF-8 0xC3 0x80..0xBF): "Liege" finds the hub spelled with e grave and back.
+LATIN1_BASE :: "aaaaaaaceeeeiiiidnooooo*ouuuuytsaaaaaaaceeeeiiiidnooooo/ouuuuyty"
+#assert(len(LATIN1_BASE) == 64)
+
+// Case- and accent-insensitive substring test. Other non-ASCII bytes compare as they are.
 match_hub :: proc(name, query: string) -> bool {
-	if query == "" do return true
-	lower :: proc(c: u8) -> u8 {return c >= 'A' && c <= 'Z' ? c + 32 : c}
-	for i in 0 ..= len(name) - len(query) {
-		ok := true
-		for j in 0 ..< len(query) {
-			if lower(name[i + j]) != lower(query[j]) {
-				ok = false
-				break
+	#assert(len(Map_Hub{}.name) == len(Plan{}.query))
+	fold :: proc(s: string, buf: ^[len(Map_Hub{}.name)]u8) -> string {
+		n := 0
+		for i := 0; i < len(s) && n < len(buf); i += 1 {
+			c := s[i]
+			if c == 0xC3 && i + 1 < len(s) && s[i + 1] >= 0x80 && s[i + 1] <= 0xBF {
+				i += 1
+				base := LATIN1_BASE
+				c = base[s[i] - 0x80]
+			} else if c >= 'A' && c <= 'Z' {
+				c += 32
 			}
+			buf[n] = c
+			n += 1
 		}
-		if ok do return true
+		return string(buf[:n])
 	}
-	return false
+	name_buf, query_buf: [len(Map_Hub{}.name)]u8
+	return strings.contains(fold(name, &name_buf), fold(query, &query_buf))
 }
 
 // One sentence about the wind on the route (design "Windnotitie"): where it comes from along the route, how
@@ -223,6 +234,7 @@ plan_refresh :: proc(w: ^World) {
 	}
 	if p.planned && p.planned_from == p.from && p.planned_to == p.to && p.planned_hour == p.hour && p.planned_weather == w.weather_hash do return
 	plan_routes(w, p.from, p.to, p.hour)
+	scan_build(w)
 	w.scan_s = 0.001
 	p.planned = true
 	p.planned_from, p.planned_to, p.planned_hour, p.planned_weather = p.from, p.to, p.hour, w.weather_hash
@@ -247,6 +259,7 @@ plan_refresh :: proc(w: ^World) {
 // The whole plan screen UI, drawn after the map. Changes take effect at once (the routes are planned again on
 // the next frame through plan_refresh).
 plan_ui :: proc(w: ^World) {
+	prof_zone(w, .Plan_Ui)
 	pal := palette(w)
 	p := &w.plan
 	panel := plan_panel_rect(w)
@@ -269,6 +282,8 @@ plan_ui :: proc(w: ^World) {
 	for k in 0 ..< 3 do rl.DrawCircleV({x + 11, from_r.y + 36 + f32(k) * 7}, 1.6, pal.text_2)
 	ui_icon(w, .Pin, {x + 11, to_r.y + 22}, 16 * 1.25, pal.red)
 	query := string(p.query[:p.query_len])
+	// The Enter that opens a field must not also pick the first match below.
+	opened := false
 	for field in ([2]Plan_Field{.From, .To}) {
 		r := field == .From ? from_r : to_r
 		has := field == .From ? p.has_from : p.has_to
@@ -280,6 +295,7 @@ plan_ui :: proc(w: ^World) {
 		if nudge && shake > 0 do r.x += math.sin(shake * 60) * PLAN_SHAKE_PX * shake / PLAN_SHAKE_S
 		if ui_input(w, r, text, field == .From ? "Choose start" : "Choose destination", editing, nudge) {
 			p.editing = field
+			opened = true
 			p.query_len = 0
 			p.departure_open = false
 			p.car_open = false
@@ -295,7 +311,7 @@ plan_ui :: proc(w: ^World) {
 	dep := rl.Rectangle{x, y, a.width - 32, 38}
 	{
 		id, hot, fired := ui_widget(w, dep)
-		round_rect(dep, 8, hot ? pal.surface_3 : pal.surface_2)
+		round_rect(w, dep, 8, hot ? pal.surface_3 : pal.surface_2)
 		ui_icon(w, .Clock, {dep.x + 20, dep.y + 19}, 20, pal.text_2)
 		label := plan_hour_label(w, p.hour, buf[:])
 		ui_text(w, {dep.x + 38, dep.y + 10}, label, .Roboto_400, 14, pal.text)
@@ -314,7 +330,7 @@ plan_ui :: proc(w: ^World) {
 	skin_names := CAR_SKIN_NAMES
 	{
 		id, hot, fired := ui_widget(w, car)
-		round_rect(car, 8, hot ? pal.surface_3 : pal.surface_2)
+		round_rect(w, car, 8, hot ? pal.surface_3 : pal.surface_2)
 		ui_text(w, {car.x + 12, car.y + 10}, "Car", .Roboto_400, 14, pal.text_2)
 		ui_text(w, {car.x + 52, car.y + 10}, skin_names[w.car_skin], .Roboto_400, 14, pal.text)
 		ui_icon(w, .Expand, {car.x + car.width - 18, car.y + 19}, 20, pal.text_2)
@@ -334,7 +350,9 @@ plan_ui :: proc(w: ^World) {
 		panel.height - a.height - PLAN_CARD_GAP,
 	}
 	ui_card(w, b)
-	ROW_H :: 112
+	// A route row: padding, the time, two lines under it, padding. Follows the text size and the line spacing.
+	ROW_PAD :: 14
+	row_h := ROW_PAD + text_line_px(w, 21) + text_line_px(w, 14) + text_px(w, 14) + ROW_PAD + 2
 	ACTIONS_H :: 76
 	note_h: f32 = 64
 	routes_box := rl.Rectangle{b.x, b.y + 6, b.width, b.height - ACTIONS_H - note_h - 6}
@@ -346,7 +364,7 @@ plan_ui :: proc(w: ^World) {
 		if rl.CheckCollisionPointRec(mouse, routes_box) {
 			p.scroll -= rl.GetMouseWheelMove() * 40
 		}
-		p.scroll = clamp(p.scroll, 0, max(3 * ROW_H - routes_box.height, 0))
+		p.scroll = clamp(p.scroll, 0, max(3 * row_h - routes_box.height, 0))
 		rl.BeginScissorMode(
 			i32(routes_box.x),
 			i32(routes_box.y),
@@ -356,66 +374,39 @@ plan_ui :: proc(w: ^World) {
 		labels := MODE_LABELS
 		for mode, i in MODE_ORDER {
 			r := &w.routes[mode]
-			row := rl.Rectangle{b.x, routes_box.y + f32(i) * ROW_H - p.scroll, b.width, ROW_H}
+			row := rl.Rectangle{b.x, routes_box.y + f32(i) * row_h - p.scroll, b.width, row_h}
 			id, hot, fired := ui_widget(w, row)
 			if !rl.CheckCollisionPointRec(mouse, routes_box) do hot = false
 			if hot do rl.DrawRectangleRec(row, pal.surface_2)
 			if p.mode == mode do rl.DrawRectangleRec({row.x, row.y + 8, 4, row.height - 16}, pal.accent_strong)
 			if i > 0 do rl.DrawLineEx({row.x + 16, row.y}, {row.x + row.width - 16, row.y}, 1, pal.line)
-			rx, ry := row.x + 16, row.y + 14
+			rx, ry := row.x + 16, row.y + ROW_PAD
+			line2 := ry + text_line_px(w, 21)
+			line3 := line2 + text_line_px(w, 14)
 			if !r.ok {
 				ui_text(w, {rx, ry}, labels[mode], .Figtree_600, 21, pal.text_2)
-				ui_text(w, {rx, ry + 30}, "No safe route with this wind", .Roboto_400, 14, pal.warning)
+				ui_text(w, {rx, line2}, "No safe route with this wind", .Roboto_400, 14, pal.warning)
 			} else {
 				green := mode == .Greenest
-				time_x := rx
-				if green {
-					ui_icon(w, .Leaf, {rx + 11, ry + 13}, 22, pal.green)
-					time_x += 26
-				}
 				ui_text(
 					w,
-					{time_x, ry},
+					{rx, ry},
 					format_duration(buf[:], r.sum.minutes),
 					.Figtree_600,
 					21,
 					green ? pal.green : pal.text,
 				)
-				ui_text(
-					w,
-					{rx, ry + 28},
-					fmt.bprintf(buf[:], "%.0f km, %.0f km/h", r.sum.km, r.sum.kmh),
-					.Roboto_400,
-					14,
-					pal.text_2,
-				)
-				ui_text(w, {rx, ry + 47}, cstr(r.sum.why[:]), .Roboto_400, 14, pal.text)
-				tag: string
-				warn := false
-				switch r.sum.tag {
-				case .None:
-				case .Lowest_Energy:
-					tag =
-						r.sum.vs_straight < 0 ? fmt.bprintf(buf[:], "Lowest energy, %.0f%% vs straight line", r.sum.vs_straight * 100) : "Lowest energy"
-				case .Extra_Energy:
-					tag = fmt.bprintf(buf[:], "%+.0f%% energy", r.sum.vs_greenest * 100)
-					warn = r.sum.vs_greenest > 0.5
-				case .Gust_Index:
-					tag = fmt.bprintf(buf[:], "Gust index %.2f", r.sum.gust)
-					warn = r.sum.gust > 0.25
-				}
-				if tag != "" {
-					size := ui_text_size(w, tag, .Roboto_500, 12)
-					pill := rl.Rectangle{rx, ry + 70, size.x + 18, size.y + 6}
-					c := warn ? pal.warning : pal.green
-					round_rect(pill, pill.height / 2, rl.ColorAlpha(c, 0.16))
-					ui_text(w, {pill.x + 9, pill.y + 3}, tag, .Roboto_500, 12, c)
-				}
+				dist := fmt.bprintf(buf[:], "%.0f km, %.0f km/h, ", r.sum.km, r.sum.kmh)
+				ui_text(w, {rx, line2}, dist, .Roboto_400, 14, pal.text_2)
+				ds := ui_text_size(w, dist, .Roboto_400, 14)
+				solar := fmt.bprintf(buf[:], "+%.1f kWh solar", r.sum.solar_kwh)
+				ui_text(w, {rx + ds.x, line2}, solar, .Roboto_400, 14, pal.green)
+				ui_text(w, {rx, line3}, cstr(r.sum.why[:]), .Roboto_400, 14, pal.text)
 				kwh := fmt.bprintf(buf[:], "%.1f kWh", r.sum.net_kwh)
 				ks := ui_text_size(w, kwh, .Mono_600, 14)
 				ui_text(
 					w,
-					{row.x + row.width - 16 - ks.x, ry + 2},
+					{row.x + row.width - 16 - ks.x, ry + text_px(w, 2)},
 					kwh,
 					.Mono_600,
 					14,
@@ -423,7 +414,14 @@ plan_ui :: proc(w: ^World) {
 				)
 				wind := fmt.bprintf(buf[:], "%.1f m/s", r.sum.wind_ms)
 				ws := ui_text_size(w, wind, .Mono_400, 13)
-				ui_text(w, {row.x + row.width - 16 - ws.x, ry + 22}, wind, .Mono_400, 13, pal.text_2)
+				ui_text(
+					w,
+					{row.x + row.width - 16 - ws.x, ry + text_px(w, 2) + text_line_px(w, 14)},
+					wind,
+					.Mono_400,
+					13,
+					pal.text_2,
+				)
 			}
 			ui_focus_ring(w, id, row, 0)
 			if fired && r.ok do p.mode = mode
@@ -487,7 +485,7 @@ plan_ui :: proc(w: ^World) {
 		w.ui.popup = list
 		w.ui.in_popup = true
 		ui_shadow(w, list, 12)
-		round_rect(list, 12, pal.surface)
+		round_rect(w, list, 12, pal.surface)
 		rl.BeginScissorMode(i32(list.x), i32(list.y), i32(list.width), i32(list.height))
 		for hub, i in matches {
 			row := rl.Rectangle{list.x, list.y + 4 + f32(i) * ROW, list.width, ROW}
@@ -497,7 +495,7 @@ plan_ui :: proc(w: ^World) {
 			ui_text(w, {row.x + 42, row.y + 6}, hub_name(w, hub), .Roboto_400, 15, pal.text)
 			ui_text(w, {row.x + 42, row.y + 25}, "Docking tower", .Roboto_400, 12, pal.text_2)
 			ui_focus_ring(w, id, row, 0)
-			if fired || (i == 0 && rl.IsKeyPressed(.ENTER)) {
+			if fired || (!opened && i == 0 && rl.IsKeyPressed(.ENTER)) {
 				if p.editing == .From {
 					p.from, p.has_from = hub, true
 				} else {
@@ -518,7 +516,7 @@ plan_ui :: proc(w: ^World) {
 		w.ui.popup = list
 		w.ui.in_popup = true
 		ui_shadow(w, list, 12)
-		round_rect(list, 12, pal.surface)
+		round_rect(w, list, 12, pal.surface)
 		for h in 0 ..< FORECAST_HOURS {
 			row := rl.Rectangle{list.x, list.y + 4 + f32(h) * ROW, list.width, ROW}
 			id, hot, fired := ui_widget(w, row)
@@ -538,6 +536,7 @@ plan_ui :: proc(w: ^World) {
 			}
 		}
 		w.ui.in_popup = false
+		if rl.IsKeyPressed(.ESCAPE) do p.departure_open = false
 		if rl.IsMouseButtonPressed(.LEFT) && !rl.CheckCollisionPointRec(rl.GetMousePosition(), list) && !rl.CheckCollisionPointRec(rl.GetMousePosition(), dep) do p.departure_open = false
 	}
 	if p.car_open {
@@ -546,7 +545,7 @@ plan_ui :: proc(w: ^World) {
 		w.ui.popup = list
 		w.ui.in_popup = true
 		ui_shadow(w, list, 12)
-		round_rect(list, 12, pal.surface)
+		round_rect(w, list, 12, pal.surface)
 		for name, skin in skin_names {
 			row := rl.Rectangle{list.x, list.y + 4 + f32(skin) * ROW, list.width, ROW}
 			id, hot, fired := ui_widget(w, row)
@@ -568,6 +567,7 @@ plan_ui :: proc(w: ^World) {
 			}
 		}
 		w.ui.in_popup = false
+		if rl.IsKeyPressed(.ESCAPE) do p.car_open = false
 		m := rl.GetMousePosition()
 		if rl.IsMouseButtonPressed(.LEFT) && !rl.CheckCollisionPointRec(m, list) && !rl.CheckCollisionPointRec(m, car) do p.car_open = false
 	}
@@ -620,7 +620,7 @@ plan_hub_menu :: proc(w: ^World) {
 	w.ui.popup = r
 	w.ui.in_popup = true
 	ui_shadow(w, r, 12)
-	round_rect(r, 12, pal.surface)
+	round_rect(w, r, 12, pal.surface)
 	ui_text(w, {r.x + 16, r.y + 10}, hub_name(w, hub), .Figtree_600, 14, pal.text)
 	items := [2]string{"Fly from here", "Fly to here"}
 	for item, i in items {
@@ -644,6 +644,7 @@ plan_hub_menu :: proc(w: ^World) {
 
 // Map buttons bottom right (music, layers, compass, zoom pill) and the layers panel, on the plan screen.
 plan_map_controls :: proc(w: ^World) {
+	prof_zone(w, .Map_Controls)
 	pal := palette(w)
 	p := &w.plan
 	sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
@@ -753,12 +754,23 @@ wind_color_at :: proc(c: [4]rl.Color, ms: f32) -> rl.Color {
 	return c[3]
 }
 
+// Alpha (of 255) of the solar layer's cloud shade under full cover, and of its sunlit wash (pal.sun) under a
+// clear sky with the sun overhead; the cloud editor changes both (w.cloud_edit).
+SOLAR_SHADE_ALPHA :: 60
+SOLAR_SUN_ALPHA :: 90
+
 // Soft gust risk (warning -> red from gust_at at the wind layer), cloud shade for the solar layer and the no-fly
-// zones hatched in red, on the ground. Drawn between the map fills and the roads (design draw order 2).
+// zones hatched in red, on the ground. Drawn between the map fills and the roads (design draw order 2), without
+// the depth test: the ground grid and the land use triangles round the same z = 0 to slightly different depths,
+// and the shade lost in horizontal strips that moved while zooming.
 layers_draw_ground :: proc(w: ^World) {
+	prof_zone(w, .Ground_Layers)
+	rlgl.DisableDepthTest()
+	defer rlgl.EnableDepthTest()
 	pal := palette(w)
 	l := &w.plan.layers
 	hour := sim_hour(w)
+	sun := sun_factor(w, hour)
 	if (!l.hide_gusts || !l.hide_solar) && w.line_meshes.built {
 		// Soft: a color per grid point, the GPU blends across each quad.
 		colors := make([][4]u8, GROUND_VERTICES, context.temp_allocator)
@@ -773,9 +785,20 @@ layers_draw_ground :: proc(w: ^World) {
 						col = rl.ColorLerp(pal.warning, pal.red, clamp((g - 0.2) / 0.6, 0, 1))
 						col.a = u8(clamp((g - 0.15) / 0.6, 0, 1) * 110)
 					}
+					// Sunlit where it is clear and the sun is up, shaded under the clouds: what solar_kw yields.
 					if !l.hide_solar {
-						shade := u8(clamp(cloud_at(w, x, y, hour), 0, 1) * 60)
-						if shade > col.a do col = {0, 0, 0, shade}
+						cloud := clamp(cloud_at(w, x, y, hour), 0, 1)
+						lit := (1 - cloud) * sun * clamp(w.cloud_edit.ground_sun, 0, 255)
+						shade := cloud * clamp(w.cloud_edit.ground_shade, 0, 255)
+						a := u8(max(lit, shade))
+						if a > col.a {
+							col = rl.ColorLerp(
+								pal.sun,
+								{0, 0, 0, 255},
+								lit + shade > 0 ? shade / (lit + shade) : 1,
+							)
+							col.a = a
+						}
 					}
 					col.a = u8(f32(col.a) * belgium_fade(w, x, y))
 					colors[(gy * (GROUND_W - 1) + gx) * 6 + k] = {col.r, col.g, col.b, col.a}
@@ -811,11 +834,14 @@ layers_draw_ground :: proc(w: ^World) {
 	}
 }
 
-// Text wrapped on spaces inside r (line height 1.35).
+// The default line height of wrapped text, in text sizes (the Fonts tab changes it, w.look.line_spacing).
+TEXT_LINE_SPACING :: 1.35
+
+// Text wrapped on spaces inside r, w.look.line_spacing apart.
 ui_text_wrapped :: proc(w: ^World, r: rl.Rectangle, text: string, font: Font, px: f32, color: rl.Color) {
 	y := r.y
 	rest := text
-	for rest != "" && y + px <= r.y + r.height + 1 {
+	for rest != "" && y + text_px(w, px) <= r.y + r.height + 1 {
 		// Longest prefix that fits, cut at a space.
 		cut := len(rest)
 		for ui_text_size(w, rest[:cut], font, px).x > r.width {
@@ -825,6 +851,6 @@ ui_text_wrapped :: proc(w: ^World, r: rl.Rectangle, text: string, font: Font, px
 		}
 		ui_text(w, {r.x, y}, rest[:cut], font, px, color)
 		rest = strings.trim_left_space(rest[cut:])
-		y += px * 1.35
+		y += text_line_px(w, px)
 	}
 }

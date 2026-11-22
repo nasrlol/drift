@@ -411,6 +411,7 @@ post_float :: proc(sh: rl.Shader, name: cstring, v: f32) {
 
 // After the scene: AO, bloom, grading and FXAA onto the screen (the default framebuffer).
 post_end :: proc(w: ^World, view: Post_View) {
+	prof_zone(w, .Post)
 	p := &w.street.post
 	rl.EndTextureMode()
 	p.frame += 1

@@ -131,6 +131,7 @@ Grid :: struct {
 	weather_wind:  [WIND_LAYERS][WEATHER_CELLS][2]f32,
 	weather_gust:  [WIND_LAYERS][WEATHER_CELLS]f32,
 	weather_cloud: [WEATHER_CELLS]f32,
+	sun:           f32, // sun_factor of this route's hour, set by every route call
 	terrain_built: bool,
 	blocked_built: bool,
 	// Other cars near each node (traffic_build): a node with TRAFFIC_MIN_CARS or more is a traffic jam and
@@ -414,6 +415,7 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 	}
 
 	h := clamp(hour, 0, FORECAST_HOURS - 1)
+	g.sun = sun_factor(w, h)
 	if g.weather_hour != h ||
 	   g.weather_wind != w.weather.wind[h] ||
 	   g.weather_gust != w.weather.gust[h] ||
@@ -458,7 +460,7 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 		for &layer in g.weather_gust do for gv in layer do gust_min = min(gust_min, gv)
 		for c in g.weather_cloud do cloud_min = min(cloud_min, c)
 		// Bilinear sampling stays between the grid values, so no edge gets more sun than solar_max.
-		solar_max := solar_kw(cloud_min)
+		solar_max := solar_kw(cloud_min, g.sun)
 		unit: [8][2]f32
 		rate: [8]f32
 		for k in 0 ..< 8 {
@@ -673,7 +675,7 @@ route :: proc(w: ^World, from, to: [3]f32, mode: Route_Mode, hour: int) -> (path
 				gust := (g.gust[n] + g.gust[next]) * 0.5
 				cloud := (g.cloud[u32(n) % GRID_LAYER_CELLS] + g.cloud[u32(next) % GRID_LAYER_CELLS]) * 0.5
 				// ok = false: blocked by the ground speed rules.
-				step = flight_cost(mode, wind, unit[k], gust, cloud, km[k]) or_continue
+				step = flight_cost(mode, wind, unit[k], gust, cloud, g.sun, km[k]) or_continue
 			}
 			if g.traffic_any do step *= traffic_factor(g.traffic[next])
 			cost := g.cost[n] + step
@@ -752,7 +754,7 @@ line_cost :: proc(g: ^Grid, a, b: [3]f32, mode: Route_Mode) -> (cost: f32, free:
 		if grid_blocked(g, n) do return 0, false
 		reach := min(next.x, next.y, total)
 		cloud := g.cloud[u32(n) % GRID_LAYER_CELLS]
-		piece := flight_cost(mode, g.wind[n], dir, g.gust[n], cloud, reach - done) or_return
+		piece := flight_cost(mode, g.wind[n], dir, g.gust[n], cloud, g.sun, reach - done) or_return
 		cost += g.traffic_any ? piece * traffic_factor(g.traffic[n]) : piece
 		if reach >= total do return cost, true
 		done = reach
@@ -771,7 +773,14 @@ line_cost :: proc(g: ^Grid, a, b: [3]f32, mode: Route_Mode) -> (cost: f32, free:
 
 // Cost of km flown along the unit track dir through wind (m/s), gust index gust and cloud cover cloud at the
 // mode's airspeed, after the ground speed rules (spec). ok = false when they block the flight.
-flight_cost :: proc(mode: Route_Mode, wind, dir: [2]f32, gust, cloud, km: f32) -> (cost: f32, ok: bool) {
+flight_cost :: proc(
+	mode: Route_Mode,
+	wind, dir: [2]f32,
+	gust, cloud, sun, km: f32,
+) -> (
+	cost: f32,
+	ok: bool,
+) {
 	airspeed := MODE_AIRSPEED
 	v := airspeed[mode]
 	ground := ground_speed(v, wind, dir) or_return
@@ -780,7 +789,7 @@ flight_cost :: proc(mode: Route_Mode, wind, dir: [2]f32, gust, cloud, km: f32) -
 		ground = ground_speed(v, wind, dir) or_return
 		if ground < GROUND_MIN do return 0, false
 	}
-	return mode_flight_cost(mode, v, ground, gust, solar_kw(cloud), km), true
+	return mode_flight_cost(mode, v, ground, gust, solar_kw(cloud, sun), km), true
 }
 
 // Ground speed in m/s along the unit track dir at airspeed v in wind (spec): the tailwind plus what is left
@@ -820,8 +829,30 @@ power_kw :: proc(v, gust: f32) -> f32 {
 }
 
 // Solar yield in kW under cloud cover 0..1 (spec S(c)): 9 kW of film at 75 %, overcast takes 78 % of it.
-solar_kw :: proc(cloud: f32) -> f32 {
-	return 9 * 0.75 * (1 - 0.78 * cloud)
+// sun 0..1 is sun_factor: the spec's yield is for the sun straight overhead, the film lies flat on the envelope.
+solar_kw :: proc(cloud, sun: f32) -> f32 {
+	return 9 * 0.75 * (1 - 0.78 * cloud) * sun
+}
+
+// Sine of the sun's elevation over Belgium's centre at forecast hour (0 at night), the share of the overhead
+// sun a flat film gets. Low-precision solar position (Astronomical Almanac, about 0.01 deg until 2050) in f64:
+// days since J2000 times degrees per day needs more than f32's 7 digits.
+sun_factor :: proc(w: ^World, hour: int) -> f32 {
+	UNIX_J2000_DAYS :: 10957.5 // 2000-01-01 12:00 UTC in days since the unix epoch
+	unix := w.weather.start + i64(clamp(hour, 0, FORECAST_HOURS - 1)) * 3600
+	n := f64(unix) / 86400 - UNIX_J2000_DAYS
+	rad :: math.RAD_PER_DEG
+	mean_lon := 280.460 + 0.9856474 * n
+	anomaly := (357.528 + 0.9856003 * n) * rad
+	ecl_lon := (mean_lon + 1.915 * math.sin(anomaly) + 0.020 * math.sin(2 * anomaly)) * rad
+	obliquity := (23.439 - 0.0000004 * n) * rad
+	decl := math.asin(math.sin(obliquity) * math.sin(ecl_lon))
+	right_asc := math.atan2(math.cos(obliquity) * math.sin(ecl_lon), math.cos(ecl_lon))
+	sidereal_deg := (18.697374558 + 24.06570982441908 * n) * 15
+	hour_angle := sidereal_deg * rad + f64(BELGIUM_LON0) * rad - right_asc
+	lat := f64(BELGIUM_LAT0) * rad
+	elev := math.sin(lat) * math.sin(decl) + math.cos(lat) * math.cos(decl) * math.cos(hour_angle)
+	return f32(max(elev, 0))
 }
 
 // Ballonet energy in kWh to change altitude by climb_m metres, negative for a descent (spec):
