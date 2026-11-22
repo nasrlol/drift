@@ -143,6 +143,8 @@ Street_Light_Locs :: struct {
 	sun_col,
 	sky_zen,
 	sky_hor,
+	sky_curve,
+	sky_glow,
 	amb_sky,
 	amb_gnd,
 	cam,
@@ -161,6 +163,8 @@ street_light_locs :: proc(sh: rl.Shader) -> Street_Light_Locs {
 		sun_col = rl.GetShaderLocation(sh, "sun_col"),
 		sky_zen = rl.GetShaderLocation(sh, "sky_zen"),
 		sky_hor = rl.GetShaderLocation(sh, "sky_hor"),
+		sky_curve = rl.GetShaderLocation(sh, "sky_curve"),
+		sky_glow = rl.GetShaderLocation(sh, "sky_glow"),
 		amb_sky = rl.GetShaderLocation(sh, "amb_sky"),
 		amb_gnd = rl.GetShaderLocation(sh, "amb_gnd"),
 		cam = rl.GetShaderLocation(sh, "cam"),
@@ -175,7 +179,7 @@ street_light_locs :: proc(sh: rl.Shader) -> Street_Light_Locs {
 }
 
 street_light_set :: proc(w: ^World, sh: rl.Shader, l: Street_Light_Locs, cam: [3]f32) {
-	look := STREET_LOOK
+	look := street_look(w)
 	cam := cam
 	slot := i32(SHADOW_SLOT)
 	on: f32 = w.street.shadow_tex != 0 ? 1 : 0
@@ -186,6 +190,8 @@ street_light_set :: proc(w: ^World, sh: rl.Shader, l: Street_Light_Locs, cam: [3
 	rl.SetShaderValue(sh, l.sun_col, &look.sun_col, .VEC3)
 	rl.SetShaderValue(sh, l.sky_zen, &look.sky_zen, .VEC3)
 	rl.SetShaderValue(sh, l.sky_hor, &look.sky_hor, .VEC3)
+	rl.SetShaderValue(sh, l.sky_curve, &look.sky_curve, .FLOAT)
+	rl.SetShaderValue(sh, l.sky_glow, &look.sky_glow, .FLOAT)
 	rl.SetShaderValue(sh, l.amb_sky, &look.amb_up, .VEC3)
 	rl.SetShaderValue(sh, l.amb_gnd, &look.amb_down, .VEC3)
 	rl.SetShaderValue(sh, l.cam, &cam, .VEC3)
@@ -205,6 +211,8 @@ uniform vec3 sun_dir;
 uniform vec3 sun_col;
 uniform vec3 sky_zen;
 uniform vec3 sky_hor;
+uniform float sky_curve;
+uniform float sky_glow;
 uniform vec3 amb_sky;
 uniform vec3 amb_gnd;
 uniform vec3 cam;
@@ -249,8 +257,8 @@ float vnoise(vec2 p) {
 }
 vec3 sky_col(vec3 r) {
 	float e = clamp(r.y, 0.0, 1.0);
-	vec3 c = mix(sky_hor, sky_zen, pow(e, 0.5));
-	c += sky_hor * 0.3 * pow(1.0 - e, 12.0);
+	vec3 c = mix(sky_hor, sky_zen, pow(e, sky_curve));
+	c += sky_hor * sky_glow * pow(1.0 - e, 12.0);
 	float s = max(dot(r, sun_dir), 0.0);
 	c += sun_col * (0.035 * pow(s, 4.0) + 0.1 * pow(s, 48.0));
 	return c;
@@ -966,6 +974,8 @@ Street_Look :: struct {
 	// Linear light of the street shaders (STREET_GLSL).
 	sun_col:           [3]f32,
 	sky_zen, sky_hor:  [3]f32,
+	sky_curve:         f32, // the gradient: mix(sky_hor, sky_zen, elevation^sky_curve)
+	sky_glow:          f32, // the bright band just above the horizon
 	amb_up, amb_down:  [3]f32,
 	haze:              [2]f32, // per metre, the most it covers
 }
@@ -1002,6 +1012,8 @@ STREET_LOOK :: Street_Look {
 	sun_col = {2.15, 2.05, 1.85},
 	sky_zen = {0.06, 0.19, 0.6},
 	sky_hor = {0.56, 0.67, 0.82},
+	sky_curve = 0.5,
+	sky_glow = 0.3,
 	amb_up = {0.25, 0.31, 0.42},
 	amb_down = {0.1, 0.095, 0.075},
 	haze = {0.00038, 0.9},
@@ -1561,7 +1573,7 @@ street_draw :: proc(w: ^World) {
 	st := &w.street
 	street_build(w)
 	street_camera(w)
-	look := STREET_LOOK
+	look := street_look(w)
 	screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
 	place := street_place(st.origin)
 	centre := [2]f32{f32(w.pose.pos.x), f32(w.pose.pos.y)}
@@ -1700,7 +1712,7 @@ street_draw :: proc(w: ^World) {
 // shader, or the depth shader of the shadow pass.
 street_cars :: proc(w: ^World, mat: ^rl.Material) {
 	st := &w.street
-	look := STREET_LOOK
+	look := street_look(w)
 	car := street_ship_pos(w)
 	car_draw_street(w, car, w.car_anim, rl.WHITE, look, w.car_skin, mat)
 	for o in w.others[:w.other_count] {
@@ -1722,7 +1734,7 @@ street_shadow_pass :: proc(w: ^World, place: Placement) {
 	prof_zone(w, .Street_Shadow)
 	st := &w.street
 	if st.shadow_fbo == 0 do return
-	look := STREET_LOOK
+	look := street_look(w)
 	fwd := st.view.target - st.view.position
 	fwd.y = 0
 	fwd = linalg.length(fwd) > 1e-3 ? linalg.normalize(fwd) : [3]f32{0, 0, -1}

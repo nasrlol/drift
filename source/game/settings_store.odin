@@ -14,7 +14,7 @@ import rl "vendor:raylib"
 // Stored settings (nasr, 2026-11-22): the values of the settings panel in three layers, each on top of the one
 // before:
 //   1. the code: tune_defaults, border_edit_defaults, cloud_edit_defaults, wind_edit_defaults,
-//      grass_edit_defaults, view_edit_defaults, look_defaults (the design's values)
+//      grass_edit_defaults, view_edit_defaults, sky_edit_defaults, look_defaults (the design's values)
 //   2. assets/settings.txt, embedded in every build: the project's settings, what the release and the tests
 //      run with. Written by Bake in the panel, shipped by committing it.
 //   3. cache/settings.txt: this machine's own, saved by the panel after every change. Debug builds only (the
@@ -35,6 +35,7 @@ Setting_Values :: struct {
 	wind:    Wind_Edit,
 	grass:   Grass_Edit,
 	view:    View_Edit,
+	sky:     Sky_Edit,
 	look:    Look,
 }
 
@@ -46,6 +47,7 @@ Setting_Ptrs :: struct {
 	wind:    ^Wind_Edit,
 	grass:   ^Grass_Edit,
 	view:    ^View_Edit,
+	sky:     ^Sky_Edit,
 	look:    ^Look,
 }
 
@@ -64,23 +66,33 @@ settings_code_defaults :: proc() -> Setting_Values {
 		wind = wind_edit_defaults(),
 		grass = grass_edit_defaults(),
 		view = view_edit_defaults(),
+		sky = sky_edit_defaults(),
 		look = look_defaults(),
 	}
 }
 
 values_ptrs :: proc(v: ^Setting_Values) -> Setting_Ptrs {
-	return {&v.tune, &v.borders, &v.clouds, &v.wind, &v.grass, &v.view, &v.look}
+	return {&v.tune, &v.borders, &v.clouds, &v.wind, &v.grass, &v.view, &v.sky, &v.look}
 }
 
 current_ptrs :: proc(w: ^World) -> Setting_Ptrs {
-	return {&w.tune, &w.border_edit, &w.cloud_edit, &w.wind_edit, &w.grass_edit, &w.view_edit, &w.look}
+	return {
+		&w.tune,
+		&w.border_edit,
+		&w.cloud_edit,
+		&w.wind_edit,
+		&w.grass_edit,
+		&w.view_edit,
+		&w.sky_edit,
+		&w.look,
+	}
 }
 
 current_values :: proc(w: ^World) -> Setting_Values {
-	return {w.tune, w.border_edit, w.cloud_edit, w.wind_edit, w.grass_edit, w.view_edit, w.look}
+	return {w.tune, w.border_edit, w.cloud_edit, w.wind_edit, w.grass_edit, w.view_edit, w.sky_edit, w.look}
 }
 
-store_groups :: proc(p: Setting_Ptrs) -> [8]Store_Group {
+store_groups :: proc(p: Setting_Ptrs) -> [9]Store_Group {
 	return {
 		{"speed", p.tune, Tune, ""},
 		{"borders", p.borders, Border_Edit, ""},
@@ -88,6 +100,7 @@ store_groups :: proc(p: Setting_Ptrs) -> [8]Store_Group {
 		{"wind", p.wind, Wind_Edit, ""},
 		{"grass", p.grass, Grass_Edit, ""},
 		{"view", p.view, View_Edit, ""},
+		{"sky", p.sky, Sky_Edit, ""},
 		{"colors", &p.look.palette, Palette, ""},
 		{"look", p.look, Look, "palette"},
 	}
@@ -100,8 +113,8 @@ settings_init :: proc(w: ^World) {
 	w.setting_defaults = settings_code_defaults()
 	settings_parse(w, SETTINGS_PROJECT, values_ptrs(&w.setting_defaults), SETTINGS_PROJECT_PATH)
 	d := &w.setting_defaults
-	w.tune, w.border_edit, w.cloud_edit, w.wind_edit, w.grass_edit, w.view_edit, w.look =
-		d.tune, d.borders, d.clouds, d.wind, d.grass, d.view, d.look
+	w.tune, w.border_edit, w.cloud_edit, w.wind_edit, w.grass_edit, w.view_edit, w.sky_edit, w.look =
+		d.tune, d.borders, d.clouds, d.wind, d.grass, d.view, d.sky, d.look
 }
 
 // Layer 3 on top of the current values. Returns how many values it set.

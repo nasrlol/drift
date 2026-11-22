@@ -722,6 +722,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   BORDER_DEFAULT_PX (picked in the panel, nasr 2026-11-22: land 0.8, sea 0.3, countries 0.6,
                   coastlines 0 px) and LINE_DASH_*_PX. LINE_VS takes dash_width for dashed segments instead of
                   their widths entry (0 in every pass but the fill pass of map_lines).
+                  Sky (sky_edit.odin, w.sky_edit): the street view's sky and sun. Zenith, horizon and sunlight
+                  colors (sRGB swatches with R, G, B sliders, lin = squared sRGB as STREET_GLSL), gradient curve
+                  (sky_col: mix(sky_hor, sky_zen, e^sky_curve)), horizon glow, sun strength, height and direction
+                  (sun_dir, so the shadows follow), and a preview strip of the gradient. street_look(w) = STREET_LOOK
+                  with these applied, read by every street pass instead of the constant; amb_up and sky_amb take
+                  the sky's tint. Defaults from STREET_LOOK (colors to within 8 bit rounding).
                   Clouds (cloud_edit.odin, w.cloud_edit): on / off, cover (x the forecast, drawn clouds only), size,
                   spacing (cell km), lowest / highest altitude, opacity, shadow, drift (x the wind), the zoom range
                   they fade in over, and the solar layer's ground shade and sunlight (SOLAR_SHADE_ALPHA,
