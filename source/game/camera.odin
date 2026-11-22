@@ -59,6 +59,9 @@ Cam :: struct {
 	preview_t:    f32, // seconds into the preview
 	preview_mode: Route_Mode,
 	dragged:      bool, // the user moved the map in navigation: Re-centre shows
+	// A zoom in asked for more than ZOOM_MAX while the camera is already there: the street view takes over
+	// (street_switch, street.odin). Cleared every frame by game_update.
+	zoom_past:    bool,
 	// This frame, built by cam_update: the raylib camera, the screen size and the scale at the screen centre.
 	view:         rl.Camera3D,
 	screen:       [2]f32,
@@ -232,6 +235,7 @@ cam_preview :: proc(w: ^World, mode: Route_Mode) {
 cam_zoom_by :: proc(w: ^World, steps: f32, anchor: [2]f32) {
 	c := &w.cam
 	if !c.zooming do c.zoom_goal = c.pose.zoom
+	if steps > 0 && c.zoom_goal + steps > ZOOM_MAX && c.pose.zoom > ZOOM_MAX - 0.05 do c.zoom_past = true
 	c.zoom_goal = clamp(c.zoom_goal + steps, cam_min_zoom(w), ZOOM_MAX)
 	c.zoom_anchor = anchor
 	c.zooming = true
@@ -293,8 +297,9 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 			}
 			c.glide_dur = 0
 		}
-		if wheel := rl.GetMouseWheelMove(); mouse_free && wheel != 0 {
-			cam_zoom_by(w, wheel * WHEEL_ZOOM_STEP, rl.GetMousePosition())
+		if wheel := mouse_wheel(w); mouse_free && wheel != 0 {
+			// A scripted run (debug.odin) has no real mouse: it zooms around the middle of the screen.
+			cam_zoom_by(w, wheel * WHEEL_ZOOM_STEP, w.script.on ? c.screen / 2 : rl.GetMousePosition())
 		}
 	}
 

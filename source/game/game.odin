@@ -218,10 +218,12 @@ game_update :: proc(memory: rawptr) -> bool {
 	w.controls = read_controls(w)
 	typing := w.plan.editing != .None
 
+	// No street view key (Lars, 2026-11-22: "geen 2 modes"): zooming in past the closest map view goes down
+	// into the street view, flying high or zooming out there comes back up to the map (street_switch).
+	street_switch(w)
 	if !typing {
-		// V: the third-person street view (street.odin), V again or Esc back to the map.
-		if key_pressed(w, .V) || pad_pressed(w, .RIGHT_FACE_UP) do street_toggle(w)
 		if key_pressed(w, .N) do music_toggle(w)
+		if !w.street.on && pad_zoom(w) != 0 do cam_zoom_by(w, pad_zoom(w), w.cam.screen / 2)
 		// M: free flight without a route (the old drive mode), or back to the plan screen.
 		if key_pressed(w, .M) && !w.street.on {
 			if w.screen == .Plan {
@@ -233,8 +235,8 @@ game_update :: proc(memory: rawptr) -> bool {
 			}
 		}
 	}
-	if w.street.on && (w.screen != .Navigate || key_pressed(w, .ESCAPE) || pad_pressed(w, .MIDDLE_RIGHT)) {
-		street_toggle(w)
+	if w.street.on && street_wants_map(w) {
+		street_leave(w)
 	} else if w.screen == .Navigate {
 		if key_pressed(w, .ESCAPE) do pilot_exit(w)
 		// Design: whoever presses a steering key in navigation takes over at once.
@@ -301,7 +303,8 @@ game_update :: proc(memory: rawptr) -> bool {
 
 	// Camera: input when the mouse is not on last frame's UI, glides, chase / preview, then the raylib camera.
 	// The keyboard and stick pan only on the plan screen, in navigation they steer the ship.
-	cam_update(w, !ui_mouse_captured(w) && !w.street.on, w.screen == .Plan && !typing)
+	// A scripted run has no real mouse: its wheel always reaches the map.
+	cam_update(w, (w.script.on || !ui_mouse_captured(w)) && !w.street.on, w.screen == .Plan && !typing)
 
 	w.palette = PALETTE
 	pal := palette(w)

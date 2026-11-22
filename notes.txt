@@ -322,6 +322,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   simulation stay untouched on top. Night/day ocean + land + 15-deg graticule + Fresnel limb
                   atmosphere shader, coastlines/borders via LINE_VS, world city labels when zoom < -0.8.
                   Camera (camera.odin): ZOOM_MIN -6.2 orbits the globe via Cam_Pose.globe_rot (lon/lat rad).
+                  Alignment with the flat map (andrei, branch andrei/globe-align): globe_pos lays the sphere, its lines
+                  and city labels flat in the map's own projection (MAP_LON0 / MAP_LAT0 / KM_PER_DEG / MAP_COS_LAT)
+                  up to GLOBE_FLAT_DEG 4 from Belgium's centre and bends into the sphere by GLOBE_ROUND_DEG 20, so
+                  coastlines and borders meet belgium.bin (left: Natural Earth 1:50m generalisation, ~1 km). world.bin
+                  version 2 adds a coastal land mask lon 1 .. 5.5, lat 50.9 .. 52.5 at 1/80 deg (Zeeland, Scheldt),
+                  sampled by GLOBE_FS inside u_region and faded into the world mask over its outer 10 %.
   sea border      (andrei) Belgium's border from OSM runs 12 nm out round the territorial sea: those border
                   segments are dashed (LINE_DASH_ON_PX 7 / LINE_DASH_OFF_PX 5 on screen). border_at_sea (render.odin):
                   the surface model is 0 (|h| <= 0.05 m) at the segment middle and 0.5 km round it, so De Moeren (a
@@ -612,7 +618,8 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
                   Gamepad (Lars, 2026-11-21: "controller mode werkt niet", GTA style): R2 throttle, L2 brake and
                   reverse, left stick steers and drives, R1 / L1 climb and sink, right stick looks around in the
-                  street view (climbs on the map), Triangle toggles the street view, Options leaves it. Triggers
+                  street view (climbs on the map), D-pad up / down zoom like the wheel (the map down into the street
+                  view and back up, pad_zoom), Options goes back to the map. Triggers
                   rest at -1 or 0 by mapping: only the upper half counts until one was seen below -0.5. pad_poll
                   logs "[input] gamepad 0 connected: <name>": no such line means raylib does not see the controller
                   (a DualSense was paired on Lars's Mac but not connected when this was written: untested).
@@ -720,9 +727,23 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   0.15-0.3 ms), in a town street 2.4 ms. Over the 4 ms budget in parks: see todo.
   view distance   (street.odin) STREET_VIEW_KM 1.6 km (Lars, 2026-11-21: "kleinere wereld, je kan te ver kijken, het wordt
                   zwaar"; was 3.4 km for houses, 3.6 for roads, 2 for trees, a 4 km far plane): houses, roads, trees
-                  and other cars are built and drawn within it, the far plane is 300 m beyond, and from 55 % to 95 %
-                  of it everything fades into the sky colour of its direction (aerial: fade uniform), the sky shader
-                  paints the same colour below the horizon, so no edge shows. Detailed trees within 250 m.
+                  and other cars are built and drawn within it, the far plane is 300 m beyond. The end is hidden by a
+                  round world, not fog (Lars, 2026-11-21, for Abdellah: "niet fog maar iets ronde wereld, voor we
+                  het einde van de rendering zien"): every street vertex shader lowers its vertex on screen by
+                  d^2 * bend (d = horizontal distance to the camera, bend = 1 / 2R, STREET_BEND_GLSL, a sum in clip
+                  space with the view-projection of the up axis), and every fragment shader discards what lies
+                  behind the horizon (behind_horizon: d * sqrt(bend) > sqrt(eye height) + sqrt(height)), because the
+                  ground's layered far depth hides nothing. R follows the eye height h:
+                  R = (1600 / (sqrt(h + 1) + sqrt(25)))^2 / 2, so things up to STREET_CURVE_TALL_M (25 m) are behind
+                  the horizon at 1.6 km: R ~25 km low over a street (ground horizon ~0.5 km), ~3 km at 250 m (a small
+                  planet). Only the picture bends: light, shadows, haze, collision and physics stay flat. The camera
+                  at rest looks down with the horizon when high (dip + 0.05 rad, never above STREET_CAM_PITCH), so
+                  the land stays in view. The ground is cut fine enough to bend: a disc of 40 rings x 128 sectors
+                  under the car, land use clipped per 1 km tile to an 80 m grid (street_area_tile; neighbours cut at
+                  the same points, no cracks), road ribbons in pieces of at most 40 m. Land use and road tiles are
+                  only built and drawn up to the ground's horizon. Detailed trees within 250 m.
+                  Frame (profile build, round world): tower 2.5 ms, street 2.5, main road 3.1, park 3.1 (worst 4.5
+                  while tiles build after a jump), country 1.9, 250 m up 3.3, 700 m up 2.0.
                   Frame (profile build, before -> after): tower 3.62 -> 2.26 ms (worst 4.62 -> 3.75), 250 m over
                   Brussels 4.33 -> 2.34 (5.13 -> 3.84), town street 3.32 -> 2.83, park 2.9..4.1 -> 3.6 (worst 5.44
                   -> 4.40); the park still has a lot of trees.
@@ -732,17 +753,65 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   to whole texels in f64 world metres so edges do not crawl. Houses, trees and cars cast (depth-only
                   shader), houses and the ground receive (sun_shadow in STREET_GLSL: normal offset 0.12 m, bias
                   0.09 m, 3 x 3 PCF, faded at the box edge). The texture is bound to slot 14 for the main pass.
+  realism         (street.odin, post.odin; Lars, 2026-11-22: "het lijkt te veel op Roblox, ik wil het realistischer,
+                  zoals GTA 6", step one of the research plan: "Light, glass, grading"). Materials: GGX sun highlights
+                  with a roughness per material (slate 0.38, tiles 0.62, walls 0.8-0.85, metal 0.35 with f0 0.5) and
+                  a roughness-aware Fresnel (Lagarde), so grazing rough walls and leaves do not mirror; env_col is
+                  what smooth surfaces mirror: the sky above a skyline band of town that depends only on the
+                  direction (neighbouring windows see the same street across) and the sunlit ground below. Window
+                  panes each tilt a hair (per pane hash), so their reflections differ. Facades weather: splash dirt
+                  at the foot, grime patches, rain streaks under the sills, darker under the cornice; plaster is
+                  greyed by 20 %; the house palettes have no clean whites any more; green roofs on 15 % of the flat
+                  roofs (was 45 %), sedum darker and browner. The cars draw with their own STREET_CAR_VS / FS (the
+                  CAR_FS classes in linear light with the street's sun, shadows, haze, env_col reflections: paint
+                  under a clear coat, dark glass, metal), bent with the round world, so other cars no longer float
+                  above the bent ground. Open grass (land, parks, marsh) is Perlin noise (fbm, 2 octaves each):
+                  lush / straw patches of 64 m, tufts of 8 m, clumps of 1 m, worn earth, olive instead of paint
+                  green (Lars: "maak van de lege groene vlaktes ook perlin noise"). The sky's zenith is deeper blue.
+  post.odin       (Lars) the street view's picture after the scene: the scene draws linear light (hdr_out) into an
+                  RGBA16F target with a depth texture (made with rlgl like the shadow map); ambient occlusion at
+                  half size from the depth (12 points in the half sphere, 1.2 m, normals from the neighbour on the
+                  same surface, the ground's points from the plane under the eye because its depth is layered far,
+                  gone between 70 and 180 m) with a 4 x 4 blur; bloom over 5 halvings (the first weighted 1 / (1 +
+                  luma) against sparkling glints), 3 % of it; exposure, saturation 0.97, warm highlights / cool
+                  shade, ACES, an S-curve (0.3), a soft vignette, +-0.5 % grain; then FXAA on strong edges only (the
+                  float target has no MSAA; the first, unthresholded FXAA smeared windows and grass up to 8 px and
+                  looked like motion blur, Lars: "er is nu echt te veel motion blur"). raylib forgets bound samplers
+                  when it flushes its batch (changing target does), so post_pass binds them inside the pass. The
+                  passes replace (color blending off) unless they add: with raylib's default alpha blending the
+                  final pass (luma in alpha) mixed every frame with the one before, ghost copies when turning
+                  (Lars: "als ik snel draai vervagen veel zaken"); test/data/street_turn.txt shoots a fast turn.
+                  Flicker with post: 0.011 % over the roofs, 0.003 % in a street (max 0.05 %).
+                  Without a float target the shaders tonemap themselves (direct) and the scene goes to the screen.
+                  The ground writes one more depth hair, so the sky (clear value 1) stays apart from it for the AO.
+                  Frame (profile build, mean of 120 frames before each standard shot, now logged with every
+                  scripted shot): with post 2.6-3.2 ms, without 1.5-2.5 ms (tower 3.06 / 2.44, street 2.91 / 2.03,
+                  main road 3.19 / 2.52, park 3.10 / 2.46, country 2.61 / 1.45); part of the difference is the CPU
+                  now waiting for the scene's GPU work that used to finish unseen in EndDrawing.
   street.odin     (Lars) the street view (Lars, 2026-11-21: "een 3d game waar je tussen huizen kan vliegen, zoals
-                  gta in third person, zo realistisch mogelijk"). V on the navigation screen (or the plan screen, which
-                  goes to free flight first) switches it on, V or Esc back to the map; the cursor is locked while on.
+                  gta in third person, zo realistisch mogelijk"). One world, no key for it (Lars, 2026-11-22: "geen 2
+                  modes, als je via de map zo laag naar beneden gaat switch je naar de 3d game, en omgekeerd als je
+                  naar boven gaat terug naar de map"): street_switch goes down into it when a zoom in (wheel, the +
+                  button, R on the plan screen, D-pad up) asks for more than ZOOM_MAX while the map is there
+                  (cam.zoom_past, set in cam_zoom_by), always at the car, from the plan screen too (it leaves the plan
+                  for free flight like M; Lars: "3D at the car"). While flying, the car's height over the ground
+                  picks the view too (Lars, 2026-11-22: "minder als 300 m, een beetje hoger of lager en je switcht"):
+                  below STREET_LOW_M (80 m) the street view, above STREET_HIGH_M (120 m) the map, so take-off from a
+                  tower (58 m) and landing are in 3D and the skyways (300 m and up) on the map. street_wants_map also
+                  goes up when the camera is zoomed out past STREET_CAM_MAX_M (40 m), and with Esc / Options; the map
+                  then takes over at ZOOM_MAX behind the car, so one zoom in goes back down. A view picked by hand
+                  against the band (zoomed down at 200 m, zoomed up at 50 m) holds (st.hold) until the car has been
+                  on the side that agrees with it. The log shows each switch ("[street] down into the street view at
+                  80 m", "up to the map at 120 m"); test/data/street_switch.txt runs every way. The key hint shows
+                  in the first 7 s in the street view of a run. The cursor is locked while on.
                   Street space: metres, x east, y up, z south, around w.street.origin (km, snapped to 0.25 km so the
                   f32 values stay small). street_place puts the map meshes (km, y south, z down) there (tiles.odin). The
                   ground is flat: the car is drawn at alt - height_at, like the buildings stand on the map. Clip
-                  planes 0.25 / 4000 m (rlgl.SetClipPlanes, restored after): raylib's own 0.05 m near plane made
-                  one depth step ~0.3 m deep at 500 m. The camera keeps 0.6 m from walls. Haze closes at 3.5 km.
+                  planes 0.25 / 1900 m (rlgl.SetClipPlanes, restored after): raylib's own 0.05 m near plane made
+                  one depth step ~0.3 m deep at 500 m. The camera keeps 0.6 m from walls.
                   Camera: chase behind the car (8.5 m, wheel 4..40 m), mouse / right stick looks around and swings
                   back after 1.6 s, never inside a wall (collide_car along the line), FOV 62 + 10 at top speed, a
-                  short shake after a hit. Draws: sky gradient, land quad, land use with natural colors (ground
+                  short shake after a hit. Draws: sky gradient, land disc, land use tiles with natural colors (ground
                   shader remaps the palette colors), road ribbons per 1 km tile at real width with lane markings,
                   buildings at real height (height_scale 1 / BUILDINGS_HEIGHT_X), towns, trees, the cars at real size
                   (car_draw_street: no bob, no glow) with a contact shadow, then a HUD (speed, height, heading).
@@ -1005,7 +1074,7 @@ Files and owners
   weather.odin, net.odin, plan_ui.odin            Andrei  weather, network, plan screen, layers panel, legend
   presence.odin                                   Andrei  other cars by gossip (network)
   buildings.odin, nature.odin, clouds.odin        nasr    3D buildings, trees, clouds (map rendering)
-  street.odin, collide.odin                       Lars    street view, building collision
+  street.odin, collide.odin, post.odin            Lars    street view, building collision, post effects
   (owners of the 2026-11-21 files are our guess from the split above, to confirm in the PR)
 
 World fields (zero = the design default: plan screen, nothing chosen)
@@ -1119,3 +1188,12 @@ Broken: compile.bat debug while drift.exe runs stops at "copy /y raylib.dll buil
   the file because it is being used by another process", raylib.dll is loaded by the running exe), so game.dll
   is never rebuilt and no reload happens. Fix for the compile.bat owner: copy raylib.dll only when drift.exe
   is not running (move the tasklist check above the copy). "[host] reloaded game" was not reached, unverified.
+
+PERFORMANCE AUDIT (2026-11-21, main at c16dc11, tracking issue #115)
+docs/performance/README.md is the entry point: short version, how to pick up an item, every issue.
+docs/performance/audit-2026-11-21.md has the method, baseline per scenario, costs, memory, plan and limits.
+docs/performance/data/ has the raw numbers: runs, profiler zones, GPU passes, struct sizes, bench output.
+Measured on Windows (Ryzen 7940HS, Radeon 780M + RTX 4060), profile build, 1440 x 900, no vsync or fps cap.
+Main results: street view 4.1 ms p50 in profile and 17.9 ms in debug (trees_draw 12.1 ms there), route planning
+up to 44 ms in the frame loop, route lines 2.5-4.2 ms per frame, the game starts on the integrated GPU, ship_step
+13 us against the 1 us budget (road_try_land), first frame 623 ms. Not measured: cache misses, the live network path.

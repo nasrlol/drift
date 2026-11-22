@@ -16,11 +16,13 @@ import rlgl "vendor:raylib/rlgl"
 // the buildings stand on the map.
 //
 // How far the street view reaches (Lars, 2026-11-21: "kleinere wereld, want nu kan je te ver kijken waardoor het
-// heel zwaar wordt"): houses, roads, trees and the other cars are built and drawn within STREET_VIEW_KM; from
-// STREET_FADE share of it on, everything turns into the colour of the sky in its direction, so the end of the
-// world is never seen. The far plane sits just beyond.
+// heel zwaar wordt"): houses, roads, trees and the other cars are built and drawn within STREET_VIEW_KM, the far
+// plane sits just beyond, and the world is round (STREET_BEND_GLSL) so its end lies behind the horizon. The
+// curvature follows the eye height h: R = (view / (sqrt(h + 1) + sqrt(STREET_CURVE_TALL_M)))^2 / 2 hides things
+// up to that height at the edge of the view; low over a street R is ~25 km (the ground's horizon ~450 m away),
+// high up it becomes a small planet.
 STREET_VIEW_KM :: 1.6
-STREET_FADE :: [2]f32{0.55, 0.95}
+STREET_CURVE_TALL_M :: 25.0
 STREET_ORIGIN_KM :: 0.25
 // raylib's own near plane of 0.05 m leaves one step of the 24 bit depth buffer ~0.3 m deep at 500 m and ~1.2 m at
 // 1 km, so walls a little apart z-fought in the distance. 0.25 m is five times sharper; the camera keeps
@@ -31,9 +33,15 @@ STREET_CAM_WALL_M :: 0.6
 STREET_REACH_KM :: STREET_VIEW_KM
 STREET_CAM_DIST_M :: 8.5
 STREET_CAM_MIN_M :: 4.0
-STREET_CAM_MAX_M :: 40.0
+STREET_CAM_MAX_M :: 40.0 // zoomed out past this the map takes over (street_wants_map)
+// While flying, the car's height over the ground picks the view (Lars, 2026-11-22: "minder als 300 m, je moet
+// maar een beetje hoger of lager gaan en dan switch je naar de volgende mode"): below STREET_LOW_M the street
+// view, above STREET_HIGH_M the map. The tower tops (HUB_TOWER_M) lie below, so take-off and landing are in 3D.
+STREET_LOW_M :: 80.0
+STREET_HIGH_M :: 120.0
 STREET_CAM_LOOK_UP_M :: 1.6 // the camera looks at this point above the car
 STREET_CAM_PITCH :: 0.16 // radians down at rest
+STREET_CAM_HORIZON :: 0.05 // radians: high up, the horizon stays this far above the middle of the view at rest
 STREET_CAM_RATE :: 7.0 // the camera closes this share of the gap per second
 STREET_MOUSE_RAD_PER_PX :: 0.0035
 STREET_STICK_RAD_PER_S :: 2.5
@@ -45,6 +53,18 @@ STREET_ROAD_CELL_KM :: 2.0
 STREET_ROAD_W :: int(MAP_W_KM) / int(STREET_ROAD_CELL_KM) + 1
 STREET_ROAD_H :: int(MAP_H_KM) / int(STREET_ROAD_CELL_KM) + 1
 STREET_HINT_S :: 7.0 // the key hint shows this long after switching on
+// The round world bends per vertex (STREET_BEND_GLSL), so the ground is cut fine enough that its straight edges
+// stay within a few cm of the curve near the camera: the land is a disc of STREET_LAND_RINGS x STREET_LAND_SEGS
+// cells kept under the car, the land use is clipped per STREET_AREA_TILE_KM tile to a grid of
+// STREET_GROUND_STEP_KM squares (neighbours are cut at the same points, so no cracks open between them), and
+// road ribbons are cut into pieces of at most STREET_ROAD_PIECE_M.
+STREET_LAND_RINGS :: 40
+STREET_LAND_SEGS :: 128
+STREET_AREA_TILE_KM :: 1.0
+STREET_AREA_W :: int(MAP_W_KM / STREET_AREA_TILE_KM) + 1
+STREET_AREA_H :: int(MAP_H_KM / STREET_AREA_TILE_KM) + 1
+STREET_GROUND_STEP_KM :: 0.08
+STREET_ROAD_PIECE_M :: 40.0
 // Sun shadows (Lars, 2026-11-21: shadows come off the NOT DOING list for the street view): one depth map of
 // SHADOW_SIZE^2 texels over a SHADOW_BOX_M square on the ground ahead of the camera, drawn from the sun with an
 // orthographic camera that moves in whole texels (in f64 world metres), so the edges do not crawl while flying.
@@ -59,10 +79,13 @@ Street :: struct {
 	yaw, pitch: f32, // the player's look-around on top of the chase direction, radians
 	dist:       f32, // zero = STREET_CAM_DIST_M
 	idle_s:     f32, // seconds since the player last looked around
-	on_s:       f32, // seconds since the street view switched on
+	on_s:       f32, // seconds in the street view this run, all visits (the key hint shows in the first)
 	origin:     [2]f32, // km
 	eye:        [3]f32, // the camera, street space, eased
 	seeded:     bool,
+	// The view was picked by hand (zoom, Esc) against the height band: the band waits until the car has been on
+	// the side that agrees with it (below STREET_LOW_M in the street view, above STREET_HIGH_M on the map).
+	hold:       bool,
 	view:       rl.Camera3D,
 	// Road ribbons per STREET_ROAD_TILE_KM tile. road_segs lists, per STREET_ROAD_CELL_KM cell, the map line
 	// segments it holds: kind << 24 | index of the segment's first point (road_cells has the offsets).
@@ -71,6 +94,11 @@ Street :: struct {
 	road_segs:  []u32,
 	road_s:     []f32, // metres along its line at each map point, modulo 1200 (a whole number of dash periods)
 	road:       rl.Material, // STREET_ROAD_VS / FS
+	// Land use per STREET_AREA_TILE_KM tile. area_items lists, per tile of the map, the land use triangles that
+	// reach into it: kind << 28 | index of the first point in w.m.area_points (area_cells has the offsets).
+	areas:      Tile_Cache,
+	area_cells: []u32,
+	area_items: []u32,
 	road_loc:   struct {
 		layer: i32,
 		light: Street_Light_Locs,
@@ -85,6 +113,8 @@ Street :: struct {
 	// The houses (houses.odin) with the lit shader, and the sky.
 	houses:     Tile_Cache,
 	lit:        rl.Material,
+	car:        rl.Material, // STREET_CAR_VS / FS
+	car_loc:    Street_Light_Locs,
 	lit_loc:    Street_Light_Locs,
 	sky:        rl.Shader,
 	sky_loc:    struct {
@@ -98,6 +128,11 @@ Street :: struct {
 	shadow_tex: u32,
 	depth:      rl.Material,
 	light_vp:   rl.Matrix,
+	post:       Post, // post.odin
+	up_vs:      [3]f32, // world up in view space this frame, for the AO
+	// The round world of this frame: 1 / 2R and the view-projection of the up axis (STREET_BEND_GLSL).
+	bend:       f32,
+	vp_up:      [4]f32,
 	ready:      bool,
 }
 
@@ -111,10 +146,12 @@ Street_Light_Locs :: struct {
 	amb_gnd,
 	cam,
 	haze,
-	fade,
 	light_vp,
 	shadow_map,
-	shadow_on: i32,
+	shadow_on,
+	bend,
+	vp_up,
+	direct: i32,
 }
 
 street_light_locs :: proc(sh: rl.Shader) -> Street_Light_Locs {
@@ -127,7 +164,9 @@ street_light_locs :: proc(sh: rl.Shader) -> Street_Light_Locs {
 		amb_gnd = rl.GetShaderLocation(sh, "amb_gnd"),
 		cam = rl.GetShaderLocation(sh, "cam"),
 		haze = rl.GetShaderLocation(sh, "haze"),
-		fade = rl.GetShaderLocation(sh, "fade"),
+		bend = rl.GetShaderLocation(sh, "bend"),
+		vp_up = rl.GetShaderLocation(sh, "vp_up"),
+		direct = rl.GetShaderLocation(sh, "direct"),
 		light_vp = rl.GetShaderLocation(sh, "light_vp"),
 		shadow_map = rl.GetShaderLocation(sh, "shadow_map"),
 		shadow_on = rl.GetShaderLocation(sh, "shadow_on"),
@@ -150,8 +189,10 @@ street_light_set :: proc(w: ^World, sh: rl.Shader, l: Street_Light_Locs, cam: [3
 	rl.SetShaderValue(sh, l.amb_gnd, &look.amb_down, .VEC3)
 	rl.SetShaderValue(sh, l.cam, &cam, .VEC3)
 	rl.SetShaderValue(sh, l.haze, &look.haze, .VEC2)
-	fade := STREET_FADE * STREET_VIEW_KM * 1000
-	rl.SetShaderValue(sh, l.fade, &fade, .VEC2)
+	rl.SetShaderValue(sh, l.bend, &w.street.bend, .FLOAT)
+	rl.SetShaderValue(sh, l.vp_up, &w.street.vp_up, .VEC4)
+	direct: f32 = w.street.post.hdr.id == 0 ? 1 : 0
+	rl.SetShaderValue(sh, l.direct, &direct, .FLOAT)
 }
 
 // The light of every street view shader (STREET_GLSL is pasted into each): one sun, a sky gradient that also
@@ -167,7 +208,8 @@ uniform vec3 amb_sky;
 uniform vec3 amb_gnd;
 uniform vec3 cam;
 uniform vec2 haze;
-uniform vec2 fade; // metres: from fade.x to fade.y everything turns into the sky (the end of the view)
+uniform float bend;
+uniform float direct;
 uniform mat4 light_vp;
 uniform sampler2D shadow_map;
 uniform float shadow_on;
@@ -217,10 +259,47 @@ vec3 aerial(vec3 c, vec3 p) {
 	float dist = length(d);
 	vec3 r = d / max(dist, 0.001);
 	vec3 h = sky_col(normalize(vec3(r.x, 0.03 + max(r.y, 0.0) * 0.3, r.z)));
-	return mix(c, h, max(haze.y * (1.0 - exp(-dist * haze.x)), smoothstep(fade.x, fade.y, dist)));
+	return mix(c, h, haze.y * (1.0 - exp(-dist * haze.x)));
 }
 vec3 lin(vec3 c) { return c * c; }
-vec3 tonemap(vec3 c) {
+// What a smooth surface mirrors in direction r (Lars, 2026-11-22: "realistischer, zoals GTA 6"): the sky above
+// a band of town along the horizon (a skyline that depends only on the direction, so neighbouring windows see
+// the same street across), the sunlit ground below. rough blurs it towards the average of its half of the sky.
+vec3 env_col(vec3 r, float rough) {
+	float az = atan(r.z, r.x);
+	float line = 0.03 + 0.2 * vnoise(vec2(az * 9.0, 3.0)) + 0.1 * vnoise(vec2(az * 31.0, 7.0));
+	vec3 town = mix(amb_sky * 0.45, vec3(0.2, 0.13, 0.09), vnoise(vec2(az * 23.0, 1.0)) * 0.6);
+	town += sun_col * 0.05 * (0.5 + vnoise(vec2(az * 70.0, floor(r.y * 50.0))));
+	vec3 below = amb_gnd * 0.7 + sun_col * 0.04;
+	vec3 c = mix(town, sky_col(r), smoothstep(line - 0.015, line + 0.015, r.y));
+	c = mix(c, below, smoothstep(0.0, -0.15, r.y));
+	return mix(c, mix(below, amb_sky * 1.3, clamp(r.y * 0.5 + 0.5, 0.0, 1.0)), rough * rough);
+}
+// The sun's highlight (GGX with Smith shadowing, times n.l; F multiplies it outside).
+float ggx(vec3 n, vec3 v, vec3 l, float rough) {
+	float nl = max(dot(n, l), 0.0);
+	if (nl <= 0.0) return 0.0;
+	float nv = max(dot(n, v), 1e-3);
+	float a = max(rough * rough, 0.003);
+	float nh = max(dot(n, normalize(v + l)), 0.0);
+	float d = nh * nh * (a * a - 1.0) + 1.0;
+	float k = a * 0.5;
+	return a * a / (3.14159 * d * d) * nl / (nl * (1.0 - k) + k) / (nv * (1.0 - k) + k) * 0.25;
+}
+float fresnel(float f0, vec3 n, vec3 v) { return f0 + (1.0 - f0) * pow(1.0 - max(dot(n, v), 0.0), 5.0); }
+// Fresnel of a rough surface: grazing angles do not turn a rough wall into a mirror (Lagarde).
+float fresnel_r(float f0, vec3 n, vec3 v, float rough) {
+	return f0 + (max(1.0 - rough, f0) - f0) * pow(1.0 - max(dot(n, v), 0.0), 5.0);
+}
+// Behind the horizon of the round world (STREET_BEND_GLSL): from eye height h a point y m up at d m is hidden
+// once d * sqrt(bend) > sqrt(h) + sqrt(y), the tangent to the bent ground passes over it.
+bool behind_horizon(vec3 p) {
+	return length(p.xz - cam.xz) * sqrt(bend) > sqrt(max(cam.y, 0.0)) + sqrt(max(p.y, 0.0));
+}
+// The scene draws linear light into post.odin's float target, which tonemaps it; without that target (direct)
+// straight to the screen with the same ACES curve.
+vec3 hdr_out(vec3 c) {
+	if (direct < 0.5) return c;
 	c = clamp((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14), 0.0, 1.0);
 	return sqrt(c);
 }
@@ -239,19 +318,41 @@ float thin(float wd, float fw) { return 1.0 - smoothstep(wd * 0.6, wd * 1.6, fw)
 // against the land quad (measured at 280 m), ten times any usable bias, so they lost the depth test at random.
 // Nothing can stand below the ground and the camera is always above it, so the ground never hides anything:
 // every ground fragment writes the far depth, minus a hair per layer (layer = layer uniform + the vertex alpha,
-// alpha = 1 - layer / 4). A later layer always wins over an earlier one, a tie goes to the draw order, and
-// everything 3D drawn after the ground is nearer than all of it.
-STREET_GROUND_VS :: `#version 330
+// alpha = 1 - layer / 4), and one hair more so the sky (the clear value 1) stays apart for post.odin's AO. A
+// later layer always wins over an earlier one, a tie goes to the draw order, and everything 3D drawn after the
+// ground is nearer than all of it.
+// The round world (Lars, 2026-11-21, for Abdellah: "niet fog maar een ronde wereld, voor we het einde van de
+// rendering zien"): every street vertex shader lowers its vertex on screen by its squared horizontal distance
+// from the camera times bend (1 / 2R), so the land falls away behind a horizon before the end of STREET_VIEW_KM.
+// Only the picture bends: lighting, shadows, haze and collision use the flat world. vp_up is the
+// view-projection of the up axis, so the drop is a sum in clip space. The ground does not hide what lies behind
+// it (its depth is layered far, see STREET_GROUND_FS), so every street fragment shader drops what the curve
+// hides itself: behind_horizon in STREET_GLSL.
+STREET_BEND_GLSL :: `
+uniform float bend;
+uniform vec4 vp_up;
+uniform vec3 cam;
+vec4 bent(vec4 clip, vec3 world) {
+	vec2 d = world.xz - cam.xz;
+	return clip - vp_up * (dot(d, d) * bend);
+}
+`
+
+STREET_GROUND_VS ::
+	`#version 330
 in vec3 vertexPosition;
 in vec4 vertexColor;
 uniform mat4 mvp;
 uniform mat4 matModel;
 out vec4 color;
 out vec3 world;
+` +
+	STREET_BEND_GLSL +
+	`
 void main() {
-	gl_Position = mvp * vec4(vertexPosition, 1.0);
 	color = vertexColor;
 	world = (matModel * vec4(vertexPosition, 1.0)).xyz;
+	gl_Position = bent(mvp * vec4(vertexPosition, 1.0), world);
 }
 `
 
@@ -270,6 +371,32 @@ out vec4 finalColor;
 	STREET_GLSL +
 	`
 vec2 hash22(vec2 p) { return vec2(hash12(p), hash12(p + 19.19)); }
+// Perlin (gradient) noise, about -0.5 .. 0.5 (gradients from the hash, not normalised: no trigonometry), its
+// lattice wrapped every per cells so it tiles.
+float perlin(vec2 p, float per) {
+	vec2 i = floor(p), f = fract(p);
+	vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+	float a = dot(hash22(mod(i, per)) - 0.5, f), b = dot(hash22(mod(i + vec2(1.0, 0.0), per)) - 0.5, f - vec2(1.0, 0.0));
+	float c = dot(hash22(mod(i + vec2(0.0, 1.0), per)) - 0.5, f - vec2(0.0, 1.0)), d = dot(hash22(mod(i + 1.0, per)) - 0.5, f - 1.0);
+	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+// Two octaves of Perlin noise from f cycles per metre over p (metres in 0 .. 4096, f x 4096 whole), each faded
+// to its mean 0 where a cycle covers less than ~3 pixels (fw: metres per pixel), so it never sparkles.
+float fbm(vec2 p, float f, float fw) {
+	float s = perlin(p * f, 4096.0 * f) * (1.0 - smoothstep(0.15, 0.4, fw * f));
+	return 1.1 * s + 0.55 * perlin(p * f * 2.0, 8192.0 * f) * (1.0 - smoothstep(0.15, 0.4, fw * f * 2.0));
+}
+// Open grass (Lars, 2026-11-22: "maak van de lege groene vlaktes ook perlin noise"): around the colour c, patches
+// of lush and dry (straw) grass of ~64 m, tufts of ~8 m, clumps of ~1 m and a few worn spots of bare earth.
+vec3 grass(vec3 c, vec2 p, float fw) {
+	float patches = fbm(p, 1.0 / 64.0, fw), tufts = fbm(p + 300.0, 1.0 / 8.0, fw), clumps = fbm(p + 900.0, 1.0, fw);
+	// Real grass is olive rather than paint green: a quarter of the way to a yellow-grey of the same brightness.
+	vec3 lush = mix(c, dot(c, vec3(0.3, 0.59, 0.11)) * vec3(0.95, 1.12, 0.55), 0.3);
+	vec3 g = mix(lush, vec3(0.13, 0.125, 0.05), smoothstep(-0.15, 0.5, patches) * 0.7);
+	g *= 1.0 + 0.45 * tufts + 0.3 * clumps;
+	float worn = smoothstep(0.32, 0.5, fbm(p + 1700.0, 1.0 / 32.0, fw) + 0.25 * tufts);
+	return mix(g, vec3(0.1, 0.075, 0.05) * (1.0 + 0.4 * clumps), worn * 0.55);
+}
 // The patchwork of fields: cells of about size metres around jittered points; x = the cell's hash, y = metres
 // to its border.
 vec2 fields(vec2 p, float size) {
@@ -308,7 +435,9 @@ void main() {
 	}
 	c = lin(c);
 	vec2 q = world.xz + origin;
+	vec2 qw = mod(q, 4096.0);
 	float gw = max(length(fwidth(world.xz)), 1e-4);
+	if (layer < 0.5 || kind == 1 || kind == 3) c = grass(c, qw, gw);
 	// Inside a circle of real OSM buildings the open land and the City areas are streets and squares (paving);
 	// City areas elsewhere are the gardens of the towns. Parks are their own layer and stay green.
 	if (layer < 0.5 || kind == 0) {
@@ -339,15 +468,17 @@ void main() {
 		float tm = mod(across, 20.0);
 		float tram = max(box(tm - 9.1, 0.2, gw), box(tm - 10.9, 0.2, gw)) * thin(0.4, gw);
 		c = crop * (1.0 - 0.28 * row - 0.35 * tram) * (0.9 + 0.2 * fnoise(q, 0.02, gw));
-		c = mix(c, vec3(0.03, 0.07, 0.02), (1.0 - smoothstep(1.2, 2.6, fd.y)) * thin(2.0, gw));
+		c = mix(c, vec3(0.025, 0.045, 0.016), (1.0 - smoothstep(1.2, 2.6, fd.y)) * thin(2.0, gw));
 	}
-	if (kind == 1) c *= 0.85 + 0.3 * fnoise(q, 0.12, gw);
-	float n = fnoise(q, 1.0 / 9.0, gw) * 0.6 + fnoise(q, 1.0 / 41.0, gw) * 0.4;
-	float fine = fnoise(world.xz, 1.7, gw);
-	c *= 1.0 + (n - 0.5) * 0.22 + (fine - 0.5) * 0.12;
+	if (kind != 1 && kind != 3 && layer > 0.5) {
+		float n = fnoise(q, 1.0 / 9.0, gw) * 0.6 + fnoise(q, 1.0 / 41.0, gw) * 0.4;
+		float fine = fnoise(qw, 1.7, gw);
+		c *= 1.0 + (n - 0.5) * 0.22 + (fine - 0.5) * 0.12;
+	}
 	c *= sun_col * max(sun_dir.y, 0.0) * sun_shadow(world, vec3(0.0, 1.0, 0.0)) + amb_sky;
-	finalColor = vec4(tonemap(aerial(c, world)), 1.0);
-	gl_FragDepth = 1.0 - (layer + floor((1.0 - color.a) * 4.0 + 0.5)) * 2e-7;
+	finalColor = vec4(hdr_out(aerial(c, world)), 1.0);
+	if (behind_horizon(world)) discard;
+	gl_FragDepth = 1.0 - (layer + floor((1.0 - color.a) * 4.0 + 0.5) + 1.0) * 2e-7;
 }
 `
 
@@ -357,7 +488,8 @@ void main() {
 // with a fascia, brick / plaster / stone texture, a bluestone plinth, a cornice and ambient occlusion at the foot
 // and under the eave. Everything is filtered by the pixel's footprint on the surface (fw, m per pixel): thin lines
 // fade into their average instead of flickering, far facades become their average colour.
-STREET_VS :: `#version 330
+STREET_VS ::
+	`#version 330
 in vec3 vertexPosition;
 in vec3 vertexNormal;
 in vec2 vertexTexCoord;
@@ -371,13 +503,16 @@ out vec3 v_normal;
 out vec2 v_uv;
 out vec2 v_lh;
 out vec4 v_color;
+` +
+	STREET_BEND_GLSL +
+	`
 void main() {
 	v_world = (matModel * vec4(vertexPosition, 1.0)).xyz;
 	v_normal = (matNormal * vec4(vertexNormal, 0.0)).xyz;
 	v_uv = vertexTexCoord;
 	v_lh = vertexTexCoord2;
 	v_color = vertexColor;
-	gl_Position = mvp * vec4(vertexPosition, 1.0);
+	gl_Position = bent(mvp * vec4(vertexPosition, 1.0), v_world);
 }
 `
 
@@ -405,7 +540,8 @@ void main() {
 	float ao = 1.0;
 	float glass = 0.0;
 	vec3 interior = vec3(0.012, 0.013, 0.015);
-	float spec = 0.0;
+	float rough = 0.85, f0 = 0.04;
+	float pane = seed;
 	float leaf = 0.0;
 	vec2 uv = v_uv;
 	float fw = max(length(fwidth(uv)), 1e-4);
@@ -425,6 +561,8 @@ void main() {
 		} else if (mat == 2) {
 			float g = fnoise(uv, 2.0, fw) * 0.5 + fnoise(uv, 9.0, fw) * 0.5;
 			base *= (0.94 + 0.1 * g) * mix(0.8, 1.0, smoothstep(0.0, 2.5, v));
+			base = mix(base, vec3(dot(base, vec3(0.3, 0.59, 0.11))), 0.2);
+			rough = 0.8;
 		} else {
 			float cy = v / 0.32; float row = floor(cy); float fy = fract(cy);
 			float cx = u / 0.65 + 0.37 * mod(row, 3.0); float cl = floor(cx); float fx = fract(cx);
@@ -485,6 +623,13 @@ void main() {
 			float reveal = mix(1.0, smoothstep(0.0, 0.25, (y1 - fr) - fy), thin(0.25, fw));
 			interior *= mix(1.0, 0.6 + 0.9 * hash12(vec2(bi, fl) + seed * 13.0), thin(1.0, fw)) * mix(0.45, 1.0, reveal);
 			glass = gc * fdet;
+			pane = hash12(vec2(bi, fl) + seed * 5.0);
+			// Rain streaks under the sills, darker where the water runs off the corners.
+			float below = y0 - 0.04 - fy;
+			if (below < 0.0) below += fh;
+			float streak = box(bx, ww * 0.5, fw) * (1.0 - smoothstep(0.0, 1.9, below)) * step(0.0, below);
+			streak *= 0.55 + 0.45 * vnoise(vec2(bx * 7.0 + seed * 31.0, fy * 0.6)) + 0.3 * box(abs(bx) - ww * 0.45, 0.06, fw);
+			base *= 1.0 - 0.2 * streak * has * fdet * (1.0 - wc) * (is_shop || is_door ? 0.0 : 1.0);
 			float avg = (ww * (y1 - y0)) / (bw * fh) * has;
 			base = mix(mix(base, vec3(0.03), avg * 0.8), base, fdet);
 		}
@@ -492,6 +637,10 @@ void main() {
 		base = mix(base, vec3(0.05, 0.055, 0.06), plinth * (1.0 - glass));
 		float corn = box(v - (H - 0.18), 0.16, fw) * (v < H + 0.05 ? 1.0 : 0.0) * thin(0.32, fw);
 		if (mat != 3) base = mix(base, mat == 1 ? vec3(0.48, 0.46, 0.42) : base * 1.08, corn * 0.85);
+		// Weathering: splash and dirt at the foot, darker patches, grime under the cornice.
+		float grime = fnoise(vec2(u * 0.4, v * 0.15) + seed * 9.0, 1.0, fw);
+		base *= mix(0.78, 1.0, smoothstep(0.35, 1.5, v)) * (0.88 + 0.22 * grime);
+		base *= 1.0 - 0.12 * smoothstep(1.6, 0.0, abs(H - 0.3 - v)) * grime;
 		ao *= mix(0.55, 1.0, smoothstep(0.0, 1.4, v));
 		ao *= mix(0.75, 1.0, smoothstep(0.0, 0.6, abs(H - v)));
 		if (v > H + 0.7 && L > 4.0) {
@@ -507,6 +656,7 @@ void main() {
 		float mull = (1.0 - box(px - 0.75, 0.7, fw)) * thin(0.1, fw);
 		float band = box(fy - 0.45, 0.45, fw);
 		glass = (1.0 - max(mull, band)) * step(0.6, v) * 0.95;
+		pane = hash12(floor(vec2(u / 1.5, v / 3.6)) + seed * 3.0);
 		interior = vec3(0.01, 0.014, 0.018);
 		base = mix(base, vec3(0.1, 0.11, 0.12), mull);
 		ao *= mix(0.65, 1.0, smoothstep(0.0, 1.0, v));
@@ -523,15 +673,18 @@ void main() {
 		float moss = smoothstep(0.55, 0.9, fnoise(uv + seed * 14.0, 0.7, fw)) * 0.35;
 		t = mix(t, vec3(0.05, 0.07, 0.025), moss * (mat == 5 ? 1.0 : 0.6));
 		base = mix(base * 0.86, t, detail);
-		spec = mat == 6 ? 0.12 : 0.03;
+		rough = mat == 6 ? 0.38 : 0.62;
 	} else if (mat == 7) {
 		base *= 0.8 + 0.4 * (fnoise(uv, 3.0, fw) * 0.6 + fnoise(uv, 13.0, fw) * 0.4);
+		base *= 0.75 + 0.35 * fnoise(uv + seed * 7.0, 0.25, fw);
+		rough = 0.9;
 	} else if (mat == 8) {
 		float a = fnoise(uv + seed * 3.0, 0.9, fw), b = fnoise(uv + 7.0, 4.0, fw), c = fnoise(uv, 15.0, fw);
-		vec3 sedum = mix(vec3(0.045, 0.1, 0.018), vec3(0.12, 0.14, 0.03), b);
-		sedum = mix(sedum, vec3(0.15, 0.055, 0.03), smoothstep(0.62, 0.8, a) * 0.8);
-		sedum = mix(sedum, vec3(0.19, 0.17, 0.05), smoothstep(0.7, 0.9, c) * 0.5);
-		base = sedum * 1.5;
+		vec3 sedum = mix(vec3(0.05, 0.075, 0.025), vec3(0.11, 0.11, 0.04), b);
+		sedum = mix(sedum, vec3(0.14, 0.06, 0.035), smoothstep(0.55, 0.8, a) * 0.8);
+		sedum = mix(sedum, vec3(0.16, 0.14, 0.07), smoothstep(0.65, 0.9, c) * 0.6);
+		base = sedum * 1.15;
+		rough = 1.0;
 	} else if (mat == 12) {
 		base *= 0.8 + 0.35 * fnoise(uv * vec2(1.0, 0.3), 3.0, fw);
 	} else if (mat == 13) {
@@ -540,6 +693,7 @@ void main() {
 		base *= mix(vec3(0.82, 0.95, 0.72), vec3(1.18, 1.06, 0.86), t) * (0.85 + 0.3 * hash12(floor(v_lh * 1.3) + 7.7));
 		base *= 0.68 + 0.64 * fnoise(uv, 1.6, fw);
 		leaf = 1.0;
+		rough = 0.95;
 	} else if (mat == 9) {
 		float px = fract(uv.x / 1.05) * 1.05, py = fract(uv.y / 1.75) * 1.75;
 		float frame = (1.0 - box(px - 0.525, 0.5, fw) * box(py - 0.875, 0.83, fw)) * thin(0.05, fw);
@@ -549,7 +703,6 @@ void main() {
 		base = mix(base, vec3(0.04, 0.05, 0.08), cells * 0.6 * (1.0 - frame));
 		glass = (1.0 - frame) * 0.85;
 		interior = base;
-		spec = 0.5;
 	}
 
 	// Leaves take the light around the crown (wrapped) and let it through when the sun is behind them.
@@ -559,19 +712,92 @@ void main() {
 		shd = sun_shadow(v_world, n);
 		ndl *= shd;
 	}
+	if (mat == 10) rough = 0.6;
+	if (mat == 11) { rough = 0.35; f0 = 0.5; }
 	vec3 amb = mix(amb_gnd, amb_sky, n.y * 0.5 + 0.5);
-	vec3 c = base * (sun_col * ndl + amb) * ao;
-	c += sun_col * spec * pow(max(dot(n, normalize(sun_dir + V)), 0.0), 60.0) * ndl;
+	float F = fresnel_r(f0, n, V, rough);
+	vec3 c = base * (sun_col * ndl + amb) * ao * (1.0 - F);
+	c += sun_col * shd * ggx(n, V, sun_dir, rough) * F;
+	c += env_col(reflect(-V, n), rough) * F * ao;
 	if (leaf > 0.5) c += base * sun_col * 0.35 * pow(max(dot(-V, sun_dir), 0.0), 4.0) * shd;
 	if (glass > 0.001) {
-		vec3 r = reflect(-V, n);
-		float fres = 0.05 + 0.95 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
-		vec3 refl = r.y > 0.0 ? sky_col(r) : mix(amb_gnd * 0.7, sky_hor * 0.5, exp(r.y * 6.0));
-		refl += sun_col * 3.0 * pow(max(dot(r, sun_dir), 0.0), 400.0) * (ndl > 0.0 ? 1.0 : 0.0);
-		vec3 g = interior * (amb + sun_col * 0.15) + refl * clamp(fres + 0.18, 0.0, 1.0);
+		// Each pane a hair out of plane, so neighbouring windows mirror the street a little differently.
+		vec3 gn = normalize(n + (vec3(hash12(vec2(pane, 1.0)), hash12(vec2(pane, 2.0)), hash12(vec2(pane, 3.0))) - 0.5) * 0.05);
+		vec3 r = reflect(-V, gn);
+		float fres = fresnel(0.04, gn, V);
+		vec3 refl = env_col(r, 0.0) + sun_col * shd * ggx(gn, V, sun_dir, 0.05);
+		vec3 g = interior * (amb + sun_col * 0.15) + refl * clamp(fres + 0.06, 0.0, 1.0);
 		c = mix(c, g * ao, glass);
 	}
-	finalColor = vec4(tonemap(aerial(c, v_world)), 1.0);
+	finalColor = vec4(hdr_out(aerial(c, v_world)), 1.0);
+	if (behind_horizon(v_world)) discard;
+}
+`
+
+// The cars in the street view (Lars, 2026-11-22: "realistischer"): CAR_FS's shading classes (vertex alpha: 0 matte,
+// 1 paint, 2 glass, 3 metal, 4 light) in linear light with the street's sun, its shadows and haze, and the
+// reflections of env_col: paint is a diffuse coat under a clear coat that mirrors sky and street, glass is dark
+// and mirrors, metal mirrors in its own colour. Bent with the round world like everything else.
+STREET_CAR_VS ::
+	`#version 330
+in vec3 vertexPosition;
+in vec3 vertexNormal;
+in vec4 vertexColor;
+uniform mat4 mvp;
+uniform mat4 matModel;
+uniform mat4 matNormal;
+out vec3 v_world;
+out vec3 v_normal;
+out vec4 v_color;
+` +
+	STREET_BEND_GLSL +
+	`
+void main() {
+	v_world = (matModel * vec4(vertexPosition, 1.0)).xyz;
+	v_normal = normalize((matNormal * vec4(vertexNormal, 0.0)).xyz);
+	v_color = vertexColor;
+	gl_Position = bent(mvp * vec4(vertexPosition, 1.0), v_world);
+}
+`
+
+STREET_CAR_FS ::
+	`#version 330
+in vec3 v_world;
+in vec3 v_normal;
+in vec4 v_color;
+uniform vec4 colDiffuse;
+out vec4 finalColor;
+` +
+	STREET_GLSL +
+	`
+void main() {
+	vec3 n = normalize(v_normal);
+	if (!gl_FrontFacing) n = -n;
+	int cls = int(v_color.a * 255.0 + 0.5);
+	vec3 base = lin(v_color.rgb * colDiffuse.rgb);
+	vec3 V = normalize(cam - v_world);
+	float ndl = max(dot(n, sun_dir), 0.0);
+	float shd = ndl > 0.0 ? sun_shadow(v_world, n) : 1.0;
+	vec3 amb = mix(amb_gnd, amb_sky, n.y * 0.5 + 0.5);
+	vec3 r = reflect(-V, n);
+	vec3 c;
+	if (cls == 4) {
+		c = base * 3.0;
+	} else if (cls == 2) {
+		float F = fresnel(0.04, n, V);
+		c = base * 0.12 * amb + (env_col(r, 0.02) + sun_col * shd * ggx(n, V, sun_dir, 0.05)) * mix(0.1, 1.0, F);
+	} else if (cls == 3) {
+		c = base * (env_col(r, 0.3) * 0.85 + amb * 0.15) + base * sun_col * shd * ggx(n, V, sun_dir, 0.3);
+	} else if (cls == 1) {
+		float F = fresnel(0.04, n, V);
+		c = base * (sun_col * ndl * shd + amb) * (1.0 - F);
+		c += (env_col(r, 0.04) + sun_col * shd * ggx(n, V, sun_dir, 0.06)) * F;
+		c += base * sun_col * shd * ggx(n, V, sun_dir, 0.45) * 0.08;
+	} else {
+		c = base * (sun_col * ndl * shd + amb) + sun_col * shd * ggx(n, V, sun_dir, 0.7) * 0.04;
+	}
+	finalColor = vec4(hdr_out(aerial(c, v_world)), colDiffuse.a);
+	if (behind_horizon(v_world)) discard;
 }
 `
 
@@ -579,7 +805,8 @@ void main() {
 // centre), hk.x = the road's half width, colour r = kind (0 asphalt, 1 motorway, 2 sidewalk, 3 water, 4 zebra),
 // g = lanes, b = 2 for edge lines, a = layer as in the ground shader. Markings are drawn here, filtered by the
 // pixel's footprint like the facades, so dashes do not sparkle in the distance.
-STREET_ROAD_VS :: `#version 330
+STREET_ROAD_VS ::
+	`#version 330
 in vec3 vertexPosition;
 in vec2 vertexTexCoord;
 in vec2 vertexTexCoord2;
@@ -590,9 +817,12 @@ out vec3 world;
 out vec2 uv;
 out vec2 hk;
 out vec4 color;
+` +
+	STREET_BEND_GLSL +
+	`
 void main() {
-	gl_Position = mvp * vec4(vertexPosition, 1.0);
 	world = (matModel * vec4(vertexPosition, 1.0)).xyz;
+	gl_Position = bent(mvp * vec4(vertexPosition, 1.0), world);
 	uv = vertexTexCoord;
 	hk = vertexTexCoord2;
 	color = vertexColor;
@@ -670,8 +900,9 @@ void main() {
 		float fres = 0.03 + 0.97 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
 		c = mix(c, sky_col(r), fres) + sun_col * 2.0 * pow(max(dot(r, sun_dir), 0.0), 200.0) * sh;
 	}
-	finalColor = vec4(tonemap(aerial(c, world)), 1.0);
-	gl_FragDepth = 1.0 - (layer + floor((1.0 - color.a) * 4.0 + 0.5)) * 2e-7;
+	finalColor = vec4(hdr_out(aerial(c, world)), 1.0);
+	if (behind_horizon(world)) discard;
+	gl_FragDepth = 1.0 - (layer + floor((1.0 - color.a) * 4.0 + 0.5) + 1.0) * 2e-7;
 }
 `
 
@@ -707,9 +938,8 @@ void main() {
 	vec3 r = normalize(cam_fwd + cam_right * ndc.x * tan_half.x + cam_up * ndc.y * tan_half.y);
 	vec3 c = sky_col(r);
 	c += sun_col * 6.0 * smoothstep(0.99985, 0.99993, dot(r, sun_dir));
-	// Below the horizon (past the far plane) the same colour as the faded ground (aerial).
-	if (r.y < 0.0) c = sky_col(normalize(vec3(r.x, 0.03, r.z)));
-	finalColor = vec4(tonemap(c), 1.0);
+	// Below the horizon line, down to the curve of the round world, the low sky goes on (sky_col stops at 0).
+	finalColor = vec4(hdr_out(c), 1.0);
 }
 `
 
@@ -760,8 +990,8 @@ STREET_LOOK :: Street_Look {
 		fog = {196.0 / 255, 210.0 / 255, 222.0 / 255},
 	},
 	sun_col = {2.15, 2.05, 1.85},
-	sky_zen = {0.12, 0.27, 0.66},
-	sky_hor = {0.62, 0.7, 0.8},
+	sky_zen = {0.06, 0.19, 0.6},
+	sky_hor = {0.56, 0.67, 0.82},
 	amb_up = {0.25, 0.31, 0.42},
 	amb_down = {0.1, 0.095, 0.075},
 	haze = {0.00038, 0.9},
@@ -782,24 +1012,70 @@ street_ship_pos :: proc(w: ^World) -> [3]f32 {
 	return {f32(x), max(p.alt - height_at(w, km.x, km.y), 0), f32(z)}
 }
 
-// V: on from the navigation screen (and from the plan screen, which first goes to free flight like M).
-street_toggle :: proc(w: ^World) {
+// One world, no street view key (Lars, 2026-11-22: "geen 2 modes, als je via de map zo laag naar beneden gaat
+// switch je naar de 3d game, en omgekeerd als je naar boven gaat terug naar de map"): a zoom in past the closest
+// map view (ZOOM_MAX, the camera ~2.3 km away) goes down into the street view at the car, from the plan screen
+// too (that leaves the plan for free flight, like M; Lars: "3D at the car"). While flying on the map, the car
+// sinking below STREET_LOW_M goes down too. Once a frame from game_update.
+street_switch :: proc(w: ^World) {
 	st := &w.street
-	if st.on {
-		st.on = false
-		if !w.script.on do rl.EnableCursor()
-		return
+	switch {
+	case st.on:
+	case w.cam.zoom_past:
+		street_enter(w)
+	case w.screen != .Navigate:
+		st.hold = false
+	case st.hold:
+		if street_ship_pos(w).y > STREET_HIGH_M do st.hold = false
+	case street_ship_pos(w).y < STREET_LOW_M:
+		street_enter(w)
 	}
+	w.cam.zoom_past = false
+}
+
+// Back up to the map (Lars: "fly high or scroll out"): the car climbs above STREET_HIGH_M, or the camera is
+// zoomed out past STREET_CAM_MAX_M; Esc and Options go back too.
+street_wants_map :: proc(w: ^World) -> bool {
+	st := &w.street
+	if w.screen != .Navigate || key_pressed(w, .ESCAPE) || pad_pressed(w, .MIDDLE_RIGHT) do return true
+	h := street_ship_pos(w).y
+	if st.hold {
+		if h < STREET_LOW_M do st.hold = false
+	} else if h > STREET_HIGH_M {
+		return true
+	}
+	dist := st.dist == 0 ? STREET_CAM_DIST_M : st.dist
+	return mouse_wheel(w) + pad_zoom(w) < 0 && dist >= STREET_CAM_MAX_M
+}
+
+street_enter :: proc(w: ^World) {
+	st := &w.street
 	if w.screen == .Plan {
 		nav_stop(w)
 		w.screen = .Navigate
-		cam_chase(w)
 	}
 	st.on = true
-	st.on_s = 0
-	st.yaw, st.pitch, st.idle_s = 0, 0, 0
+	st.yaw, st.pitch, st.idle_s, st.dist = 0, 0, 0, 0
 	st.seeded = false
+	st.hold = street_ship_pos(w).y >= STREET_LOW_M
 	if !w.script.on do rl.DisableCursor()
+	logf(w, "street", "down into the street view at %.0f m", street_ship_pos(w).y)
+}
+
+// The map takes over at its closest view behind the car, so one zoom in goes back down.
+street_leave :: proc(w: ^World) {
+	w.street.on = false
+	w.street.hold = street_ship_pos(w).y <= STREET_HIGH_M
+	logf(w, "street", "up to the map at %.0f m", street_ship_pos(w).y)
+	if !w.script.on do rl.EnableCursor()
+	if w.screen != .Navigate do return
+	c := &w.cam
+	c.mode = .Chase
+	c.dragged = false
+	c.pose = cam_chase_pose(w, ZOOM_MAX)
+	c.glide_dur = 0
+	c.zooming = false
+	c.zoom_goal = ZOOM_MAX
 }
 
 // Builds the line index, the ground plane and the shader. Needs the window.
@@ -835,6 +1111,43 @@ street_build :: proc(w: ^World) {
 		}
 		logf(w, "street", "%d road segments in %d cells", len(st.road_segs), STREET_ROAD_W * STREET_ROAD_H)
 	}
+	if st.area_cells == nil && len(w.m.area_points) < 1 << 28 {
+		// Land use triangles into every tile their bounding box touches, in map order (water last, on top).
+		counts := make([]u32, STREET_AREA_W * STREET_AREA_H + 1, perm)
+		for pass in 0 ..< 2 {
+			for a in w.m.areas {
+				for k := a.start; k + 2 < a.start + a.count; k += 3 {
+					p := w.m.area_points[k:][:3]
+					lo := linalg.min(p[0], linalg.min(p[1], p[2])) / STREET_AREA_TILE_KM
+					hi := linalg.max(p[0], linalg.max(p[1], p[2])) / STREET_AREA_TILE_KM
+					for y in clamp(int(lo.y), 0, STREET_AREA_H - 1) ..= clamp(int(hi.y), 0, STREET_AREA_H - 1) {
+						for x in clamp(int(lo.x), 0, STREET_AREA_W - 1) ..= clamp(int(hi.x), 0, STREET_AREA_W - 1) {
+							c := y * STREET_AREA_W + x
+							if pass == 0 {
+								counts[c + 1] += 1
+							} else {
+								st.area_items[st.area_cells[c] + counts[c]] = a.kind << 28 | k
+								counts[c] += 1
+							}
+						}
+					}
+				}
+			}
+			if pass == 0 {
+				for c in 1 ..< len(counts) do counts[c] += counts[c - 1]
+				st.area_cells = counts
+				st.area_items = make([]u32, counts[len(counts) - 1], perm)
+				counts = make([]u32, STREET_AREA_W * STREET_AREA_H + 1, context.temp_allocator)
+			}
+		}
+		logf(
+			w,
+			"street",
+			"%d land use entries in %d tiles",
+			len(st.area_items),
+			STREET_AREA_W * STREET_AREA_H,
+		)
+	}
 	if st.road_s == nil {
 		st.road_s = make([]f32, len(w.m.points), perm)
 		for l in w.m.lines {
@@ -846,18 +1159,26 @@ street_build :: proc(w: ^World) {
 		}
 	}
 	ground: {
-		// The land under everything: a quad of 9 x 9 km, drawn under the car in street space.
+		// The land under everything: a disc past the far plane, drawn under the car in street space, cut in rings
+		// and sectors (STREET_LAND_RINGS), each triangle facing up.
 		R :: STREET_FAR_M + 200
-		pos := make([][3]f32, 6, context.temp_allocator)
-		copy(pos, [][3]f32{{-R, 0, -R}, {-R, 0, R}, {R, 0, R}, {-R, 0, -R}, {R, 0, R}, {R, 0, -R}})
-		st.ground = rl.Mesh {
-			vertexCount   = 6,
-			triangleCount = 2,
-			vertices      = ([^]f32)(raw_data(pos)),
-			colors        = ([^]u8)(raw_data(make([][4]u8, 6, context.temp_allocator))),
+		pos := make([dynamic][3]f32, 0, STREET_LAND_RINGS * STREET_LAND_SEGS * 6, context.temp_allocator)
+		at :: proc(ring, seg: int) -> [3]f32 {
+			r := R * f32(ring) / STREET_LAND_RINGS
+			a := 2 * math.PI * f32(seg) / STREET_LAND_SEGS
+			return {r * math.cos(a), 0, -r * math.sin(a)}
 		}
-		rl.UploadMesh(&st.ground, true)
-		st.ground.vertices, st.ground.colors = nil, nil
+		for i in 0 ..< STREET_LAND_RINGS {
+			for j in 0 ..< STREET_LAND_SEGS {
+				p00, p01, p10, p11 := at(i, j), at(i, j + 1), at(i + 1, j), at(i + 1, j + 1)
+				if i > 0 do append(&pos, p00, p10, p01)
+				append(&pos, p01, p10, p11)
+			}
+		}
+		col := make([][4]u8, len(pos), context.temp_allocator)
+		land := STREET_LOOK.land
+		for &c in col do c = {land.r, land.g, land.b, 255}
+		st.ground = tile_mesh(pos[:], col)
 	}
 	sh := rl.LoadShaderFromMemory(STREET_GROUND_VS, STREET_GROUND_FS)
 	if !rl.IsShaderValid(sh) do logf(w, "street", "ground shader did not compile")
@@ -877,6 +1198,11 @@ street_build :: proc(w: ^World) {
 	st.lit = rl.LoadMaterialDefault()
 	st.lit.shader = lit
 	st.lit_loc = street_light_locs(lit)
+	car_sh := rl.LoadShaderFromMemory(STREET_CAR_VS, STREET_CAR_FS)
+	if !rl.IsShaderValid(car_sh) do logf(w, "street", "car shader did not compile")
+	st.car = rl.LoadMaterialDefault()
+	st.car.shader = car_sh
+	st.car_loc = street_light_locs(car_sh)
 	st.sky = rl.LoadShaderFromMemory(nil, STREET_SKY_FS)
 	if !rl.IsShaderValid(st.sky) do logf(w, "street", "sky shader did not compile")
 	st.sky_loc = {
@@ -923,12 +1249,15 @@ street_build :: proc(w: ^World) {
 
 street_unload :: proc(st: ^Street) {
 	tiles_unload(&st.roads)
+	tiles_unload(&st.areas)
 	tiles_unload(&st.houses)
 	trees_unload(&st.trees)
+	post_unload(&st.post)
 	if !st.ready do return
 	rl.UnloadMesh(st.ground)
 	rl.UnloadShader(st.material.shader)
 	rl.UnloadShader(st.lit.shader)
+	rl.UnloadShader(st.car.shader)
 	rl.UnloadShader(st.sky)
 	rl.UnloadShader(st.depth.shader)
 	rl.UnloadShader(st.road.shader)
@@ -962,16 +1291,24 @@ street_road_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 		dir := d / l
 		n := [2]f32{-dir.y, dir.x} * half / 1000
 		e := dir * ext / 1000
-		p0, p1, p2, p3 := a - e - n, a - e + n, b + e + n, b + e - n
-		ua, ub := u0 - ext, u0 + l + ext
 		c := [4]u8{mat, lanes, flags, 255 - layer * 64}
-		for k in ([6]int{0, 1, 2, 0, 2, 3}) {
-			p := [4][2]f32{p0, p1, p2, p3}[k]
-			uvk := [4][2]f32{{ua, -half}, {ua, half}, {ub, half}, {ub, -half}}[k]
-			append(&r.pos, [3]f32{p.x, p.y, 0})
-			append(&r.uv, uvk)
-			append(&r.hk, [2]f32{hw, 0})
-			append(&r.col, c)
+		pieces := max(int(math.ceil((l + 2 * ext) / STREET_ROAD_PIECE_M)), 1)
+		for i in 0 ..< pieces {
+			t0 := f32(i) / f32(pieces)
+			t1 := f32(i + 1) / f32(pieces)
+			pa := linalg.lerp(a - e, b + e, t0)
+			pb := linalg.lerp(a - e, b + e, t1)
+			ua := u0 - ext + (l + 2 * ext) * t0
+			ub := u0 - ext + (l + 2 * ext) * t1
+			p0, p1, p2, p3 := pa - n, pa + n, pb + n, pb - n
+			for k in ([6]int{0, 1, 2, 0, 2, 3}) {
+				p := [4][2]f32{p0, p1, p2, p3}[k]
+				uvk := [4][2]f32{{ua, -half}, {ua, half}, {ub, half}, {ub, -half}}[k]
+				append(&r.pos, [3]f32{p.x, p.y, 0})
+				append(&r.uv, uvk)
+				append(&r.hk, [2]f32{hw, 0})
+				append(&r.col, c)
+			}
 		}
 	}
 	cx := clamp(int(lo.x / STREET_ROAD_CELL_KM), 0, STREET_ROAD_W - 1)
@@ -1029,6 +1366,89 @@ street_road_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 	return mesh
 }
 
+// The round world's bend (1 / 2R, STREET_BEND_GLSL) for an eye h m above the ground (see STREET_VIEW_KM).
+street_bend :: proc(h: f32) -> f32 {
+	k := STREET_VIEW_KM * 1000 / (math.sqrt(max(h, 0) + 1) + math.sqrt(f32(STREET_CURVE_TALL_M)))
+	return 1 / (k * k)
+}
+
+// The land use of the tile lo ..< hi (km) in its palette colors (remapped by STREET_GROUND_FS): each triangle
+// clipped to every STREET_GROUND_STEP_KM square of the tile it touches, points relative to lo, facing up.
+street_area_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
+	st := &w.street
+	if st.area_cells == nil do return {}
+	pal := palette(w)
+	colors := [Area_Kind]rl.Color {
+		.City     = pal.city,
+		.Park     = pal.park,
+		.Farmland = pal.farmland,
+		.Marsh    = pal.marsh,
+		.Beach    = pal.beach,
+		.Water    = pal.water,
+	}
+	pos := make([dynamic][3]f32, 0, 1 << 15, context.temp_allocator)
+	col := make([dynamic][4]u8, 0, 1 << 15, context.temp_allocator)
+	// Sutherland-Hodgman: keeps the part of poly[:n] where the coordinate axis is >= v (side 1) or <= v (-1).
+	clip :: proc(poly: ^[10][2]f32, n: int, axis: int, v, side: f32) -> int {
+		out: [10][2]f32
+		m := 0
+		for i in 0 ..< n {
+			a, b := poly[i], poly[(i + 1) % n]
+			da, db := (a[axis] - v) * side, (b[axis] - v) * side
+			if da >= 0 {
+				out[m] = a
+				m += 1
+			}
+			if (da >= 0) != (db >= 0) {
+				out[m] = linalg.lerp(a, b, da / (da - db))
+				out[m][axis] = v
+				m += 1
+			}
+		}
+		poly^ = out
+		return m
+	}
+	size := hi - lo
+	steps := int(math.round(size.x / STREET_GROUND_STEP_KM))
+	step := size / f32(steps)
+	cx := clamp(int(lo.x / STREET_AREA_TILE_KM + 0.5), 0, STREET_AREA_W - 1)
+	cy := clamp(int(lo.y / STREET_AREA_TILE_KM + 0.5), 0, STREET_AREA_H - 1)
+	cell := cy * STREET_AREA_W + cx
+	for item in st.area_items[st.area_cells[cell]:st.area_cells[cell + 1]] {
+		k := item & (1 << 28 - 1)
+		cc := colors[Area_Kind(item >> 28)]
+		c := [4]u8{cc.r, cc.g, cc.b, 255}
+		tri := [3][2]f32{w.m.area_points[k] - lo, w.m.area_points[k + 1] - lo, w.m.area_points[k + 2] - lo}
+		t_lo := linalg.min(tri[0], linalg.min(tri[1], tri[2]))
+		t_hi := linalg.max(tri[0], linalg.max(tri[1], tri[2]))
+		i0, i1 := max(int(t_lo.x / step.x), 0), min(int(t_hi.x / step.x), steps - 1)
+		j0, j1 := max(int(t_lo.y / step.y), 0), min(int(t_hi.y / step.y), steps - 1)
+		for j in j0 ..= j1 {
+			for i in i0 ..= i1 {
+				poly: [10][2]f32
+				poly[0], poly[1], poly[2] = tri[0], tri[1], tri[2]
+				n := 3
+				q_lo := [2]f32{f32(i), f32(j)} * step
+				q_hi := [2]f32{f32(i + 1), f32(j + 1)} * step
+				n = clip(&poly, n, 0, q_lo.x, 1)
+				n = clip(&poly, n, 0, q_hi.x, -1)
+				n = clip(&poly, n, 1, q_lo.y, 1)
+				n = clip(&poly, n, 1, q_hi.y, -1)
+				for t in 1 ..< n - 1 {
+					p0, p1, p2 := poly[0], poly[t], poly[t + 1]
+					e1, e2 := p1 - p0, p2 - p0
+					cr := e1.x * e2.y - e1.y * e2.x
+					if cr == 0 do continue
+					if cr > 0 do p1, p2 = p2, p1
+					append(&pos, [3]f32{p0.x, p0.y, 0}, [3]f32{p1.x, p1.y, 0}, [3]f32{p2.x, p2.y, 0})
+					append(&col, c, c, c)
+				}
+			}
+		}
+	}
+	return tile_mesh(pos[:], col[:])
+}
+
 // Once per frame while on: looking around, the chase camera and the raylib camera. Drawing only, frame time is
 // fine.
 street_camera :: proc(w: ^World) {
@@ -1063,7 +1483,7 @@ street_camera :: proc(w: ^World) {
 		st.yaw = angle_lerp(st.yaw, 0, k)
 		st.pitch += (0 - st.pitch) * k
 	}
-	if wheel := mouse_wheel(w); wheel != 0 {
+	if wheel := mouse_wheel(w) + pad_zoom(w); wheel != 0 {
 		if st.dist == 0 do st.dist = STREET_CAM_DIST_M
 		st.dist = clamp(st.dist * (1 - wheel * 0.12), STREET_CAM_MIN_M, STREET_CAM_MAX_M)
 	}
@@ -1072,7 +1492,10 @@ street_camera :: proc(w: ^World) {
 	car := street_ship_pos(w)
 	target := car + {0, STREET_CAM_LOOK_UP_M, 0}
 	yaw := w.car_anim.heading + st.yaw
-	pitch := STREET_CAM_PITCH + st.pitch
+	// High up the round world's horizon sinks (~22 degrees at 250 m, 46 at 700 m): the camera at rest looks
+	// down with it so the land stays in the picture, the horizon STREET_CAM_HORIZON above the middle.
+	dip := math.atan(2 * math.sqrt(max(car.y, 0) * street_bend(car.y)))
+	pitch := max(STREET_CAM_PITCH, dip + STREET_CAM_HORIZON) + st.pitch
 	back := [3]f32{-math.sin(yaw) * math.cos(pitch), math.sin(pitch), math.cos(yaw) * math.cos(pitch)}
 	goal := target + back * dist
 	if !st.seeded {
@@ -1128,6 +1551,10 @@ street_draw :: proc(w: ^World) {
 	centre := [2]f32{f32(w.pose.pos.x), f32(w.pose.pos.y)}
 	car_anim_update(w, frame_time(w))
 	street_shadow_pass(w, place)
+	post_on := post_begin(w)
+	th := math.tan(st.view.fovy * math.PI / 360)
+	render := [2]f32{f32(rl.GetRenderWidth()), f32(rl.GetRenderHeight())}
+	tan_half := [2]f32{th * render.x / render.y, th}
 
 	// Sky: every pixel's ray from the camera's axes (STREET_SKY_FS).
 	{
@@ -1136,9 +1563,6 @@ street_draw :: proc(w: ^World) {
 		fwd := linalg.normalize(st.view.target - st.view.position)
 		right := linalg.normalize(linalg.cross(fwd, [3]f32{0, 1, 0}))
 		up := linalg.cross(right, fwd)
-		th := math.tan(st.view.fovy * math.PI / 360)
-		render := [2]f32{f32(rl.GetRenderWidth()), f32(rl.GetRenderHeight())}
-		tan_half := [2]f32{th * render.x / render.y, th}
 		rl.SetShaderValue(sh, st.sky_loc.fwd, &fwd, .VEC3)
 		rl.SetShaderValue(sh, st.sky_loc.right, &right, .VEC3)
 		rl.SetShaderValue(sh, st.sky_loc.up, &up, .VEC3)
@@ -1160,6 +1584,14 @@ street_draw :: proc(w: ^World) {
 	}
 	rl.BeginMode3D(st.view)
 	{
+		st.vp_up = (rlgl.GetMatrixProjection() * rlgl.GetMatrixModelview()) * [4]f32{0, 1, 0, 0}
+		st.up_vs = (rlgl.GetMatrixModelview() * [4]f32{0, 1, 0, 0}).xyz
+		st.bend = street_bend(st.view.position.y)
+	}
+	// Land use and roads lie flat: past the horizon (behind_horizon) nothing of them shows, so only the tiles
+	// within it are built and drawn (~0.5 km low over a street, ~1.3 km at 250 m).
+	ground_reach := min(STREET_REACH_KM, math.sqrt(max(st.view.position.y, 0) / st.bend) / 1000 + 0.1)
+	{
 		sh := st.material.shader
 		origin := st.origin * 1000
 		rl.SetShaderValue(sh, st.loc.origin, &origin, .VEC2)
@@ -1177,16 +1609,12 @@ street_draw :: proc(w: ^World) {
 		rl.SetShaderValue(sh, st.loc.remap, &remap, .FLOAT)
 		mat := st.material
 		{
-			land: [6][4]u8
-			for &c in land do c = {look.land.r, look.land.g, look.land.b, 255}
-			rl.UpdateMeshBuffer(st.ground, 3, &land[0], size_of(land), 0)
 			car := street_ship_pos(w)
 			rl.DrawMesh(st.ground, mat, rl.Matrix(linalg.matrix4_translate_f32({car.x, 0, car.z})))
 		}
 
 		// 2: land use with natural colors.
-		lm := &w.line_meshes
-		if lm.areas.vertexCount > 0 {
+		{
 			pal := palette(w)
 			map_colors := [6][3]f32 {
 				rl.ColorNormalize(pal.city).rgb,
@@ -1203,8 +1631,16 @@ street_draw :: proc(w: ^World) {
 			rl.SetShaderValue(sh, st.loc.remap, &remap, .FLOAT)
 			rl.SetShaderValueV(sh, st.loc.map_colors, &map_colors, .VEC3, 6)
 			rl.SetShaderValueV(sh, st.loc.real_colors, &real_colors, .VEC3, 6)
-			// One mesh in km for the whole map: x and z land within ~1.5 cm, the depth is layered (see the shader).
-			rl.DrawMesh(lm.areas, mat, place_at(place, {}))
+			tiles_update_draw(
+				w,
+				&st.areas,
+				STREET_AREA_TILE_KM,
+				ground_reach,
+				street_area_tile,
+				mat,
+				centre,
+				place,
+			)
 		}
 
 		// 3: rivers, sidewalks, roads and zebra crossings (layers 1 .. 4, STREET_ROAD_FS).
@@ -1215,7 +1651,7 @@ street_draw :: proc(w: ^World) {
 			w,
 			&st.roads,
 			STREET_ROAD_TILE_KM,
-			STREET_REACH_KM,
+			ground_reach,
 			street_road_tile,
 			st.road,
 			centre,
@@ -1230,23 +1666,26 @@ street_draw :: proc(w: ^World) {
 	trees_draw(w, centre, TREES_REACH_KM, st.view.position, false)
 
 	// 5: the cars.
-	street_cars(w, nil)
+	street_light_set(w, st.car.shader, st.car_loc, st.view.position)
+	street_cars(w, &st.car)
 	rl.EndMode3D()
 	if st.shadow_tex != 0 {
 		rlgl.ActiveTextureSlot(SHADOW_SLOT)
 		rlgl.DisableTexture()
 		rlgl.ActiveTextureSlot(0)
 	}
+	if post_on do post_end(w, {tan_half = tan_half, up_vs = st.up_vs, eye_h = max(st.view.position.y, 0.1)})
 
 	street_hud(w)
 }
 
-// The cars at real size: ours and the others from the presence gossip. depth: the shadow pass's material.
-street_cars :: proc(w: ^World, depth: ^rl.Material) {
+// The cars at real size, ours and the others from the presence gossip, with the material of this pass: the car
+// shader, or the depth shader of the shadow pass.
+street_cars :: proc(w: ^World, mat: ^rl.Material) {
 	st := &w.street
 	look := STREET_LOOK
 	car := street_ship_pos(w)
-	car_draw_street(w, car, w.car_anim, rl.WHITE, look, w.car_skin, depth)
+	car_draw_street(w, car, w.car_anim, rl.WHITE, look, w.car_skin, mat)
 	for o in w.others[:w.other_count] {
 		p := others_draw_pos(w, o)
 		d := (p - st.origin) * 1000
@@ -1257,7 +1696,7 @@ street_cars :: proc(w: ^World, depth: ^rl.Material) {
 			heading = o.heading,
 		}
 		jam := traffic_near(w, o.pos, o.alt, o.on_road, TRAFFIC_RADIUS_KM) >= TRAFFIC_MIN_CARS
-		car_draw_street(w, pos, an, jam ? CAR_JAM_TINT : rl.WHITE, look, o.skin, depth)
+		car_draw_street(w, pos, an, jam ? CAR_JAM_TINT : rl.WHITE, look, o.skin, mat)
 	}
 }
 
@@ -1337,7 +1776,7 @@ street_hud :: proc(w: ^World) {
 
 	if w.street.on_s < STREET_HINT_S {
 		alpha := 1 - clamp((w.street.on_s - (STREET_HINT_S - 1)) / 1, 0, 1)
-		HINT :: "W/S throttle and brake   A/D turn   Space/Shift up and down   Mouse look around   V or Esc map"
+		HINT :: "W/S throttle and brake   A/D turn   Space/Shift up and down   Mouse look around   Scroll out or fly high: map"
 		hint := ui_text_size(w, HINT, .Roboto_500, 14)
 		r := rl.Rectangle{(screen.x - hint.x) / 2 - 14, PAD, hint.x + 28, hint.y + 16}
 		round_rect(r, 10, rl.ColorAlpha(pal.surface, 0.72 * alpha))

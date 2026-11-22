@@ -231,7 +231,9 @@ LARS, 2026-11-21 (second list, on lars/all-todos)
     "zoals in het filmpje": no film was shared, so the look is ours.
 
 STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detailed, day, lots of green)
-[x] V: third-person chase camera at real scale, mouse look, never inside a wall (street.odin)
+[x] third-person chase camera at real scale, mouse look, never inside a wall (street.odin)
+[x] one world, no street view key: below 80 m over the ground the street view, above 120 m the map; zoom in
+    past the closest map view or out past 40 m switches by hand (Lars, test/data/street_switch.txt)
 [x] free flight with momentum, wind and gusts, hover over ground and roofs (ship_free_step)
 [x] building collision against real and generated buildings (collide.odin)
 [x] buildings at real height, towns, trees, the car at real size, HUD
@@ -251,14 +253,53 @@ STREET VIEW (Lars, 2026-11-21: third person between the houses, realistic, detai
 [x] facades in the shader: floors, windows, doors, shop fronts, brick / plaster / stone per building
 [x] roofs: gables for houses, parapets and roof details (solar panels, green roofs) for flat roofs
 [ ] shadows over the whole view (a second, coarser cascade beyond 420 m)
+[x] realism step 1 "Light, glass, grading" (Lars: "te veel Roblox, zoals GTA 6"): GGX highlights, mirrored street
+    in windows and car paint, weathered facades, fewer green roofs, street car shader, Perlin grass, HDR target
+    with AO, bloom, grading and edge-only FXAA (post.odin)
+[ ] realism step 2: trees from leaf cards with wind, impostors far away; window recesses and interiors behind
+    the glass (interior mapping), cornices, balconies, gutters; photo textures (CC0, needs Lars's yes)
+[ ] realism step 3: street furniture, parked cars, traffic; a physical sky with clouds; the round world against
+    LOD + haze (decide with Abdellah)
 [x] trees with trunks near the camera, street trees, instanced (trees.odin)
 [ ] hedges, street furniture (lampposts, benches, bike racks)
-[ ] frame over 4 ms in parks (4.1 ms profile): shadow pass every frame, tree instances built twice
+[ ] frame over 4 ms in parks: mean 3.1 ms now (profile, with post effects), worst 4.8 while tiles build after a jump
+[x] round world instead of fog: the end of the view lies behind a curved horizon (Abdellah via Lars)
 [ ] other cars (presence) tested in the street view with two nodes
 [x] land on the ground or a roof, wheels down, drive like a car; up takes off (test/ run_free_flight case 6)
 [~] gamepad: GTA-style mapping and a connect log line built; untested with a controller (the DualSense was not
     connected)
 [ ] collision with pitched roofs (now flat at the ridge height)
+
+PERFORMANCE (audit 2026-11-21: docs/performance, tracking issue #115; one issue per pull request)
+[ ] Question: may route planning run on a worker thread with a start / poll API? (#86, nasr)
+[ ] Question: does the 100 ms startup budget include creating the window? (#87, nasr)
+[ ] Question: is dev-2026-11-nightly:9a69916 the pinned Odin dev-2026-11a? (#88, nasr)
+[ ] Question: should the game ask Windows for the discrete GPU by default? (#89, nasr)
+[ ] Question: should the game turn vsync on instead of the fixed 60 fps cap? (#90, nasr)
+[ ] Question: do we keep the unused live partner code (trip_start and its chain)? (#91, nasr)
+[ ] bug: heap corruption (0xC0000374) on exit after opening the street view (#92)
+[ ] perf: add spall zones per system behind DRIFT_PROFILE (#93)
+[ ] perf: use the discrete GPU on hybrid laptops (#94)
+[ ] perf: road_try_land scans every road point (ship_step 13x over budget) (#95)
+[ ] perf: draw_path_strip is the largest CPU cost on the plan and nav screens (#96)
+[ ] perf: draw the A* scan animation as one mesh (#97)
+[ ] perf: cache the ground layer colors and unchanged shader uniforms (#98)
+[ ] perf: present frames in step with the display (#99)
+[ ] perf: run route planning outside the frame (#100)
+[ ] perf: trees_draw rebuilds all tree matrices twice per frame (#101)
+[ ] perf: other cars need culling, LOD and instancing (#102)
+[ ] perf: street camera runs up to 30 collision queries per frame (#103)
+[ ] perf: reroutes grow plan_mem until the next plan (#104)
+[ ] perf: cut startup work (#105)
+[ ] perf: network threads need a total deadline and a DNS timeout (#106)
+[ ] perf: stop recomputing static plan and map UI every frame (#107)
+[ ] perf: move file writes and signing off the frame thread (#108)
+[ ] perf: rasterize fonts before the first use (#109)
+[ ] perf: map lines with 3 detail levels and 10 km cells (#110)
+[ ] perf: build tile meshes on a worker thread (#111)
+[ ] perf: synthesize music on its own thread (#112)
+[ ] perf: add a quality setting for MSAA and shadows (#113)
+[ ] chore: remove dead code found in the performance audit (#114)
 
 TOGETHER, AT THE END
 [ ] demo run: plan Brussels -> Gent, pick greenest, Preview, Start, report gust, reroute, dock, Done

@@ -953,15 +953,23 @@ script_end :: proc(w: ^World) -> (quit: bool) {
 			img := rl.LoadImageFromScreen()
 			ok := rl.ExportImage(img, strings.clone_to_cstring(e.path, context.temp_allocator))
 			if !ok do sc.failures += 1
+			// The mean and worst update + draw ms of the last PROF_FRAMES frames (0 in a release build).
+			mean, worst: f32
+			for v in w.prof.frame_ms {
+				mean += v / PROF_FRAMES
+				worst = max(worst, v)
+			}
 			logf(
 				w,
 				"script",
-				"frame %d: shot %s %dx%d %s",
+				"frame %d: shot %s %dx%d %s(frames %.2f ms mean, %.2f worst)",
 				sc.frame,
 				e.path,
 				img.width,
 				img.height,
-				ok ? "" : "FAILED",
+				ok ? "" : "FAILED ",
+				mean,
+				worst,
 			)
 			rl.UnloadImage(img)
 		case .Flicker:

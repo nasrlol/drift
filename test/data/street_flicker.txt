@@ -5,7 +5,9 @@
 # shook by whole simulation steps.
 snapshot test/data/calm.snap
 frame_ms 15.2 18.1 16.0 17.4 15.9 17.4
-press 2 V
+# Down into the street view: zoom the map all the way in, then one notch more (street_switch).
+wheel 2 40
+wheel 45 1
 # over the roofs from the tower
 ship 300 139.6685 79.4001 40 0
 mouse 400 0.05 0

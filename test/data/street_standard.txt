@@ -1,19 +1,21 @@
 # The standard street view shots (./build/drift --script test/data/street_standard.txt), see notes.txt.
-# Each place gets ~110 frames for the tiles around it to build. The key hint is gone after frame ~420.
+# Each place gets ~110 frames for the tiles around it to build. The key hint is gone after frame ~470.
 snapshot test/data/calm.snap
-press 2 V
+# Down into the street view: zoom the map all the way in, then one notch more (street_switch).
+wheel 2 40
+wheel 45 1
 # 1: Brussels from the tower (the start, 58 m up), looking north
-shot 440 build/shots/1_tower.png
+shot 500 build/shots/1_tower.png
 # 2: low in a street between the houses of Brussels (a secondary road, 0.7 km east of the tower)
-ship 450 140.315 79.543 3 198
-shot 560 build/shots/2_street.png
+ship 510 140.315 79.543 3 198
+shot 620 build/shots/2_street.png
 # 3: a main road (primary, 1 km west of the tower)
-ship 570 138.661 79.521 6 169
-shot 680 build/shots/3_main_road.png
+ship 630 138.661 79.521 6 169
+shot 740 build/shots/3_main_road.png
 # 4: a park (4 km south-east of the tower)
-ship 690 141.199 83.094 12 0
-shot 800 build/shots/4_park.png
+ship 750 141.199 83.094 12 0
+shot 860 build/shots/4_park.png
 # 5: the countryside (farmland 8 km south-west of the tower)
-ship 810 132.924 83.707 25 0
-shot 920 build/shots/5_country.png
-quit 921
+ship 870 132.924 83.707 25 0
+shot 980 build/shots/5_country.png
+quit 981

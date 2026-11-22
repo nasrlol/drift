@@ -1,0 +1,48 @@
+--- run 1
+bench: 200 rounds, 4096 points per round for the *_at procs, build profile
+wind_at                min       4.4  avg       5.0  max       8.5 ns
+gust_at                min       3.5  avg       3.9  max      11.7 ns
+cloud_at               min       3.2  avg       3.6  max       6.6 ns
+height_at              min      31.2  avg      42.3  max     293.4 ns
+ship_step              min      68.4  avg   12801.6  max  128912.9 ns
+route                  min     2.081  avg     3.088  max    14.612 ms
+route, three modes     min     0.007  avg     5.816  max    24.076 ms
+route after gust       min     1.643  avg     2.423  max     7.909 ms
+weather snapshot load  min     0.099  avg     0.235  max     8.814 ms
+load_map               min     0.682  avg     0.770  max     1.453 ms
+arenas: perm 19522640 / 19894298, route 8576 / 1048584, frame 0 / 0 bytes (used / reserved)
+(sink 1.0677934e+08)
+bench: ship_step takes 0.013 ms on average, budget 0.001 ms
+bench: over budget
+--- run 2
+bench: 200 rounds, 4096 points per round for the *_at procs, build profile
+wind_at                min       4.5  avg       5.8  max      73.4 ns
+gust_at                min       3.5  avg       4.6  max      64.2 ns
+cloud_at               min       3.2  avg       4.1  max      58.3 ns
+height_at              min      33.6  avg      46.6  max     248.2 ns
+ship_step              min      68.9  avg   13712.5  max  147999.1 ns
+route                  min     2.088  avg     3.295  max    15.405 ms
+route, three modes     min     0.007  avg     6.155  max    28.924 ms
+route after gust       min     1.648  avg     2.626  max     8.621 ms
+weather snapshot load  min     0.114  avg     0.214  max     0.444 ms
+load_map               min     0.693  avg     0.824  max     1.694 ms
+arenas: perm 19522640 / 19894298, route 8576 / 1048584, frame 0 / 0 bytes (used / reserved)
+(sink 1.0677934e+08)
+bench: ship_step takes 0.014 ms on average, budget 0.001 ms
+bench: over budget
+--- run 3
+bench: 200 rounds, 4096 points per round for the *_at procs, build profile
+wind_at                min       4.5  avg       4.9  max      13.6 ns
+gust_at                min       3.5  avg       3.9  max       7.3 ns
+cloud_at               min       3.2  avg       3.5  max       6.5 ns
+height_at              min      31.0  avg      40.4  max     165.5 ns
+ship_step              min      68.3  avg   12580.0  max  130103.2 ns
+route                  min     2.089  avg     3.035  max    14.894 ms
+route, three modes     min     0.007  avg     5.660  max    22.233 ms
+route after gust       min     1.609  avg     2.391  max     6.398 ms
+weather snapshot load  min     0.105  avg     0.171  max     0.297 ms
+load_map               min     0.679  avg     0.761  max     1.165 ms
+arenas: perm 19522640 / 19894298, route 8576 / 1048584, frame 0 / 0 bytes (used / reserved)
+(sink 1.0677934e+08)
+bench: ship_step takes 0.013 ms on average, budget 0.001 ms
+bench: over budget

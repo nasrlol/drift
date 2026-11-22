@@ -44,13 +44,14 @@ Car_Part :: struct {
 }
 
 Airship :: struct {
-	parts:      [CAR_MAX_PARTS]Car_Part,
-	part_count: int,
-	glow:       rl.Mesh, // thruster disc under a folded wheel
-	material:   rl.Material,
-	ready:      bool,
-	skins:      [Car_Skin]Skin_Mesh, // generated bodies (car_models.odin), Concept unused
-	preview:    rl.RenderTexture2D, // the plan panel's skin preview
+	parts:       [CAR_MAX_PARTS]Car_Part,
+	part_count:  int,
+	glow:        rl.Mesh, // thruster disc under a folded wheel
+	material:    rl.Material,
+	ready:       bool,
+	skins:       [Car_Skin]Skin_Mesh, // generated bodies (car_models.odin), Concept unused
+	preview:     rl.RenderTexture2D, // the plan panel's skin preview
+	preview_yaw: f32, // its turn, from frame_time so scripted runs draw the same frames
 }
 
 CAR_VS :: `#version 330
@@ -461,18 +462,18 @@ car_draw_street :: proc(
 	tint: rl.Color,
 	look: Street_Look,
 	skin: Car_Skin,
-	depth: ^rl.Material = nil, // the street view's shadow pass: this material, no lighting
+	own: ^rl.Material = nil, // the street view's own material (its car shader, its shadow pass), else CAR_FS
 ) {
 	a := &w.airship
 	if !a.ready do return
 	view := linalg.normalize(w.street.view.position - pos)
-	if depth == nil do car_shader_set(w, look.sun_dir, view, look.sky_amb, look.gnd_amb, look.sun)
+	if own == nil do car_shader_set(w, look.sun_dir, view, look.sky_amb, look.gnd_amb, look.sun)
 	// Model space: x forward, y up, z right. Heading 0 is north (-z in street space).
 	m := linalg.matrix4_translate_f32(pos)
 	m = m * linalg.matrix4_rotate_f32(math.PI / 2 - an.heading, {0, 1, 0})
 	m = m * linalg.matrix4_rotate_f32(-an.bank, {1, 0, 0})
 	m = m * linalg.matrix4_rotate_f32(an.pitch, {0, 0, 1})
-	mat := depth != nil ? depth^ : a.material
+	mat := own != nil ? own^ : a.material
 	mat.maps[0].color = tint
 	car_parts_draw(w, skin, m, an, mat, false)
 }
