@@ -86,13 +86,9 @@ pilot_ui :: proc(w: ^World) {
 		sv := fmt.tprintf("%.0f", s.speed * 3.6)
 		svs := ui_text_size(w, sv, .Figtree_700, 25)
 		sus := ui_text_size(w, "km/h", .Figtree_700, 11)
-		charge := clamp(ship_battery_kwh(s) / BATTERY_KWH, 0, 1)
-		bv := fmt.tprintf("%.0f%%", charge * 100)
-		bvs := ui_text_size(w, bv, .Figtree_700, 20)
-		bus := ui_text_size(w, "battery", .Figtree_700, 10)
 		spd_h := svs.y + sus.y + 2
-		bat_h := bvs.y + bus.y + 2
-		dia := max(f32(SPEED_CIRCLE), spd_h + 18, bat_h + 18, max(svs.x, sus.x) + 18, max(bvs.x, bus.x) + 18)
+		bat := ui_battery_badge(w, SPEED_CIRCLE)
+		dia := max(bat.dia, spd_h + 18, max(svs.x, sus.x) + 18)
 		r := dia / 2
 
 		sc := [2]f32{16 + r, sheet.y - 84 - dia - 12 - r}
@@ -102,15 +98,7 @@ pilot_ui :: proc(w: ^World) {
 		ui_text(w, {sc.x - svs.x / 2, stop}, sv, .Figtree_700, 25, pal.text)
 		ui_text(w, {sc.x - sus.x / 2, stop + svs.y + 2}, "km/h", .Figtree_700, 11, pal.text_2)
 
-		bc := [2]f32{16 + r, sheet.y - 84 - r}
-		ui_shadow(w, {bc.x - r, bc.y - r, dia, dia}, r)
-		rl.DrawCircleV(bc, r, pal.surface)
-		// The charge as a ring from the top, clockwise.
-		rl.DrawRing(bc, r - 6, r - 2, 0, 360, 48, pal.surface_3)
-		rl.DrawRing(bc, r - 6, r - 2, -90, -90 + 360 * charge, 48, pal.green)
-		btop := bc.y - bat_h / 2
-		ui_text(w, {bc.x - bvs.x / 2, btop}, bv, .Figtree_700, 20, pal.text)
-		ui_text(w, {bc.x - bus.x / 2, btop + bvs.y + 2}, "battery", .Figtree_700, 10, pal.text_2)
+		ui_battery_circle(w, {16 + r, sheet.y - 84 - r}, dia, bat)
 	}
 
 	// Re-centre after the user moved the map.

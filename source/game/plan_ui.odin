@@ -503,7 +503,7 @@ plan_ui :: proc(w: ^World) {
 	if p.editing != .None {
 		r := p.editing == .From ? from_r : to_r
 		ui_text_edit(p.query[:], &p.query_len)
-		if rl.IsKeyPressed(.ESCAPE) do p.editing = .None
+		if rl.IsKeyPressed(.ESCAPE) || pad_pressed(w, .RIGHT_FACE_RIGHT) do p.editing = .None
 		matches := make([dynamic]int, 0, w.m.hub_count, context.temp_allocator)
 		for i in 0 ..< w.m.hub_count do if match_hub(hub_name(w, i), string(p.query[:p.query_len])) do append(&matches, i)
 		ROW :: 44
@@ -567,28 +567,47 @@ plan_ui :: proc(w: ^World) {
 			}
 		}
 		w.ui.in_popup = false
-		if rl.IsKeyPressed(.ESCAPE) do p.departure_open = false
+		if rl.IsKeyPressed(.ESCAPE) || pad_pressed(w, .RIGHT_FACE_RIGHT) do p.departure_open = false
 		if rl.IsMouseButtonPressed(.LEFT) && !rl.CheckCollisionPointRec(rl.GetMousePosition(), list) && !rl.CheckCollisionPointRec(rl.GetMousePosition(), dep) do p.departure_open = false
 	}
 	if p.car_open {
-		ROW :: 36
-		list := rl.Rectangle{car.x, car.y + car.height + 4, car.width, len(Car_Skin) * ROW + 8}
+		preview := car_preview_atlas(w)
+		skin_row_h := max(f32(40), f32(text_px(w, 14)) + 14)
+		list_y := car.y + car.height + 4
+		max_h := max(f32(rl.GetScreenHeight()) - list_y - 12, f32(len(Car_Skin)) * 28 + 8)
+		if f32(len(Car_Skin)) * skin_row_h + 8 > max_h {
+			skin_row_h = (max_h - 8) / f32(len(Car_Skin))
+		}
+		list := rl.Rectangle{car.x, list_y, car.width, f32(len(Car_Skin)) * skin_row_h + 8}
 		w.ui.popup = list
 		w.ui.in_popup = true
 		ui_shadow(w, list, 12)
 		round_rect(w, list, 12, pal.surface)
 		for name, skin in skin_names {
-			row := rl.Rectangle{list.x, list.y + 4 + f32(skin) * ROW, list.width, ROW}
+			row := rl.Rectangle{list.x, list.y + 4 + f32(skin) * skin_row_h, list.width, skin_row_h}
 			id, hot, fired := ui_widget(w, row)
 			if hot || skin == w.car_skin do rl.DrawRectangleRec(row, pal.surface_2)
+			sz := ui_text_size(w, name, .Roboto_400, 14)
 			ui_text(
 				w,
-				{row.x + 16, row.y + 9},
+				{row.x + 16, row.y + (skin_row_h - sz.y) / 2},
 				name,
 				.Roboto_400,
 				14,
 				skin == w.car_skin ? pal.accent : pal.text,
 			)
+			if preview.id != 0 {
+				ph := max(skin_row_h - 4, 16)
+				pw := ph * f32(CAR_PREVIEW_W) / f32(CAR_PREVIEW_H)
+				src := rl.Rectangle {
+					0,
+					f32(len(Car_Skin) - 1 - int(skin)) * CAR_PREVIEW_H,
+					CAR_PREVIEW_W,
+					-CAR_PREVIEW_H,
+				}
+				dst := rl.Rectangle{row.x + row.width - pw - 12, row.y + (skin_row_h - ph) / 2, pw, ph}
+				rl.DrawTexturePro(preview, src, dst, {}, 0, rl.WHITE)
+			}
 			ui_focus_ring(w, id, row, 0)
 			if fired {
 				w.car_skin = skin
@@ -598,7 +617,7 @@ plan_ui :: proc(w: ^World) {
 			}
 		}
 		w.ui.in_popup = false
-		if rl.IsKeyPressed(.ESCAPE) do p.car_open = false
+		if rl.IsKeyPressed(.ESCAPE) || pad_pressed(w, .RIGHT_FACE_RIGHT) do p.car_open = false
 		m := rl.GetMousePosition()
 		if rl.IsMouseButtonPressed(.LEFT) && !rl.CheckCollisionPointRec(m, list) && !rl.CheckCollisionPointRec(m, car) do p.car_open = false
 	}
@@ -1134,7 +1153,7 @@ carpool_nav_ui :: proc(w: ^World) {
 	)
 	ui_focus_ring(w, id, btn_r, bh / 2)
 	if !w.street.on do ui_block(w, r)
-	if fired || key_pressed(w, .Y) {
+	if fired || key_pressed(w, .Y) || pad_pressed(w, .RIGHT_FACE_UP) {
 		if acc, ok := carpool_accept_make(w, &req); ok {
 			if carpool_post(w, &acc) == .Added && trip_start(w, &req, &acc, true) {
 				p.partner_pub = req.author

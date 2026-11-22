@@ -183,15 +183,7 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 	)
 	// Nor Belgium (nasr, 2026-11-21): at the border it keeps the axis that stays inside, so it slides along.
 	// A ship that is already outside moves freely, so it can come back.
-	if belgium_inside(w, prev.x, prev.y) && !belgium_inside(w, s.pos.x, s.pos.y) {
-		if belgium_inside(w, s.pos.x, prev.y) {
-			s.pos.y = prev.y
-		} else if belgium_inside(w, prev.x, s.pos.y) {
-			s.pos.x = prev.x
-		} else {
-			s.pos = prev
-		}
-	}
+	s.pos = ship_clamp_belgium(w, s.pos, prev)
 
 	alt0 := s.alt
 	s.alt += c.climb * SHIP_CLIMB_RATE * dt
@@ -238,6 +230,16 @@ ship_step :: proc(w: ^World, c: Controls, dt: f32) {
 			break
 		}
 	}
+}
+
+// At the Belgian border, keeps the axis that stays inside so the car slides along; outside moves freely.
+ship_clamp_belgium :: proc(w: ^World, pos, prev: [2]f32) -> [2]f32 {
+	if belgium_inside(w, prev.x, prev.y) && !belgium_inside(w, pos.x, pos.y) {
+		if belgium_inside(w, pos.x, prev.y) do return {pos.x, prev.y}
+		if belgium_inside(w, prev.x, pos.y) do return {prev.x, pos.y}
+		return prev
+	}
+	return pos
 }
 
 // How much the other cars around the ship slow it down: 1 when the way is free (see traffic_factor).
@@ -312,7 +314,9 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 		v := linalg.dot(vh, fwd)
 		steer := c.turn * DRIVE_STEER * (1 - 0.75 * clamp(abs(v) / ROAD_MAX_SPEED, 0, 1))
 		limit := DRIVE_LAT_ACCEL / max(abs(v), 1)
-		target := clamp(v * math.tan(steer) / DRIVE_WHEELBASE_M, -limit, limit)
+		// Keep a minimum pivot speed so A/D turns out of a wall at 0 km/h.
+		turn_v := v < -0.5 ? v : max(v, 1.5)
+		target := clamp(turn_v * math.tan(steer) / DRIVE_WHEELBASE_M, -limit, limit)
 		s.turn_rate += (target - s.turn_rate) * min(dt / DRIVE_STEER_SMOOTH_S, 1)
 	} else {
 		max_turn :=
@@ -378,6 +382,7 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 	if jam > 1 do s.vel.xy *= 1 - min(dt * (jam - 1), 1)
 
 	// Move. pos is f32 km (~1.5 cm steps at 150 km): the rest goes into pos_frac and is added on in f64.
+	prev := s.pos
 	{
 		frac := s.pos_frac + s.vel.xy * dt
 		x := f64(s.pos.x) + f64(frac.x) / 1000
@@ -423,6 +428,13 @@ ship_free_step :: proc(w: ^World, c: Controls, dt: f32) {
 	if s.alt > SHIP_CEILING {
 		s.alt = SHIP_CEILING
 		s.vel.z = min(s.vel.z, 0)
+	}
+	clamped := ship_clamp_belgium(w, s.pos, prev)
+	if clamped.x != s.pos.x {
+		s.pos.x, s.pos_frac.x, s.vel.x = clamped.x, 0, 0
+	}
+	if clamped.y != s.pos.y {
+		s.pos.y, s.pos_frac.y, s.vel.y = clamped.y, 0, 0
 	}
 	edge_lo := [2]f32{SHIP_EDGE_KM, SHIP_EDGE_KM}
 	edge_hi := [2]f32{MAP_W_KM, MAP_H_KM} - SHIP_EDGE_KM

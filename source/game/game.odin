@@ -229,19 +229,25 @@ game_update :: proc(memory: rawptr) -> bool {
 		weather_poll(w)
 		node_poll(w)
 	}
-	ui_begin(w)
 	pad_poll(w)
+	ui_begin(w)
 	w.controls = read_controls(w)
 	typing := w.plan.editing != .None
+	was_navigate := w.screen == .Navigate
 
 	// No street view key (Lars, 2026-11-22: "geen 2 modes"): zooming in past the closest map view goes down
 	// into the street view, flying high or zooming out there comes back up to the map (street_switch).
 	street_switch(w)
 	if !typing {
-		if key_pressed(w, .N) do music_toggle(w)
+		if key_pressed(w, .N) || pad_pressed(w, .MIDDLE_LEFT) do music_toggle(w)
 		if !w.street.on && pad_zoom(w) != 0 do cam_zoom_by(w, pad_zoom(w), w.cam.screen / 2)
-		// M: free flight without a route (the old drive mode), or back to the plan screen.
-		if key_pressed(w, .M) && !w.street.on {
+		if !w.street.on && pad_pressed(w, .RIGHT_THUMB) {
+			if w.screen == .Navigate do cam_recentre(w)
+			else do cam_north(w)
+		}
+		// M (or Options on the plan screen): free flight without a route, or back to the plan screen.
+		enter_free := w.screen == .Plan && w.ui.last_popup.width == 0 && pad_pressed(w, .MIDDLE_RIGHT)
+		if (key_pressed(w, .M) || enter_free) && !w.street.on {
 			if w.screen == .Plan {
 				if carpool_is_passenger(w) {
 					carpool_board(w)
@@ -260,7 +266,22 @@ game_update :: proc(memory: rawptr) -> bool {
 	if w.street.on && street_wants_map(w) {
 		street_leave(w)
 	} else if w.screen == .Navigate {
-		if key_pressed(w, .ESCAPE) do pilot_exit(w)
+		if was_navigate &&
+		   (key_pressed(w, .ESCAPE) ||
+				   pad_pressed(w, .MIDDLE_RIGHT) ||
+				   (!w.ui.cancelled && w.ui.focus == 0 && pad_pressed(w, .RIGHT_FACE_RIGHT))) {
+			pilot_exit(w)
+		}
+		if w.nav.active && !carpool_is_passenger(w) && pad_pressed(w, .RIGHT_FACE_UP) {
+			nav_set_manual(w, !w.nav.manual)
+		}
+		if pad_pressed(w, .RIGHT_FACE_LEFT) {
+			if gust_report(w) do ui_toast(w, "Gust reported, rerouting around it")
+			else do ui_toast(w, "No route to report a gust on")
+		}
+		if !w.street.on && w.ui.focus == 0 && pad_pressed(w, .RIGHT_FACE_DOWN) {
+			w.nav_wind = !w.nav_wind
+		}
 		// Design: whoever presses a steering key in navigation takes over at once.
 		if w.nav.active && !w.nav.manual && w.controls != {} do nav_set_manual(w, true)
 	} else {
@@ -286,7 +307,11 @@ game_update :: proc(memory: rawptr) -> bool {
 					c = nav_autopilot(w)
 					w.cruise = -1
 				} else if !free {
-					c.throttle = cruise_throttle(w, c.throttle, SIM_DT)
+					if w.pad.pedal {
+						w.cruise = -1
+					} else {
+						c.throttle = cruise_throttle(w, c.throttle, SIM_DT)
+					}
 				}
 				step := controls_pack(c)
 				if w.replay.count < len(w.replay.steps) {
@@ -701,6 +726,17 @@ game_update :: proc(memory: rawptr) -> bool {
 		}
 	}
 	if w.screen == .Navigate do carpool_nav_ui(w)
+	if w.view_edit.peer_names && w.identity_pub != {} {
+		buf: [16]u8
+		name := peer_name_text(w.identity_pub, buf[:])
+		size := ui_text_size(w, name, .Mono_400, 10)
+		sw := f32(rl.GetScreenWidth())
+		pos := [2]f32{sw - 12 - size.x, 10}
+		for o in ([?][2]f32{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}) {
+			ui_text(w, pos + o, name, .Mono_400, 10, pal.label_halo)
+		}
+		ui_text(w, pos, name, .Mono_400, 10, pal.text_2)
+	}
 	credit: {
 		// The OpenStreetMap license (ODbL) asks for this credit wherever the map is shown, CC BY 4.0 for the car
 		// model (assets/car-LICENSE.txt).
@@ -756,6 +792,7 @@ game_shutdown :: proc(memory: rawptr) {
 	tiles_unload(&w.nature)
 	tiles_unload(&w.towns)
 	street_unload(&w.street)
+	airship_unload(&w.airship)
 	music_stop(w)
 	virtual.arena_destroy(&w.fetch.mem)
 	virtual.arena_destroy(&w.node.mem)

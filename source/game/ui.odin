@@ -1,6 +1,7 @@
 // author: nasr
 package game
 
+import "core:fmt"
 import "core:math"
 import "core:math/linalg"
 import "core:strings"
@@ -20,6 +21,18 @@ Font :: enum u8 {
 	Roboto_700,
 	Mono_400,
 	Mono_600,
+	Space_400,
+	Space_500,
+	Space_700,
+	Lora_400,
+	Lora_500,
+	Lora_600,
+	Lora_700,
+	Lora_Italic_400,
+	JetBrains_400,
+	JetBrains_500,
+	JetBrains_600,
+	JetBrains_700,
 	Icons, // Material Symbols Rounded, only the codepoints of Icon
 }
 
@@ -46,6 +59,30 @@ font_file :: proc(font: Font) -> []u8 {
 		return #load("../../assets/fonts/RobotoMono-Regular.ttf")
 	case .Mono_600:
 		return #load("../../assets/fonts/RobotoMono-Bold.ttf")
+	case .Space_400:
+		return #load("../../assets/fonts/SpaceGrotesk-Regular.ttf")
+	case .Space_500:
+		return #load("../../assets/fonts/SpaceGrotesk-Medium.ttf")
+	case .Space_700:
+		return #load("../../assets/fonts/SpaceGrotesk-Bold.ttf")
+	case .Lora_400:
+		return #load("../../assets/fonts/Lora-Regular.ttf")
+	case .Lora_500:
+		return #load("../../assets/fonts/Lora-Medium.ttf")
+	case .Lora_600:
+		return #load("../../assets/fonts/Lora-SemiBold.ttf")
+	case .Lora_700:
+		return #load("../../assets/fonts/Lora-Bold.ttf")
+	case .Lora_Italic_400:
+		return #load("../../assets/fonts/Lora-Italic.ttf")
+	case .JetBrains_400:
+		return #load("../../assets/fonts/JetBrainsMono-Regular.ttf")
+	case .JetBrains_500:
+		return #load("../../assets/fonts/JetBrainsMono-Medium.ttf")
+	case .JetBrains_600:
+		return #load("../../assets/fonts/JetBrainsMono-SemiBold.ttf")
+	case .JetBrains_700:
+		return #load("../../assets/fonts/JetBrainsMono-Bold.ttf")
 	case .Icons:
 		return #load("../../assets/fonts/MaterialSymbolsRounded-Filled.ttf")
 	}
@@ -333,7 +370,8 @@ Ui :: struct {
 	next_id:      int, // widgets this frame, in draw order
 	focus:        int, // 1-based id of the focused widget, 0 = none
 	last_count:   int, // widgets in the previous frame, Tab wraps there
-	activate:     bool, // Enter / Space pressed this frame
+	activate:     bool, // Enter / Space / Cross pressed this frame
+	cancelled:    bool, // Circle cleared the focus this frame, so it does not also exit the screen
 	// Rectangles that hide the map from the mouse, collected while drawing and read by the camera next frame
 	// (the camera runs before the UI is drawn).
 	blocks:       [32]rl.Rectangle,
@@ -360,11 +398,28 @@ ui_begin :: proc(w: ^World) {
 	u.block_count = 0
 	u.last_popup = u.popup
 	u.popup = {}
-	if rl.IsKeyPressed(.TAB) && u.last_count > 0 {
-		back := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
-		u.focus = back ? (u.focus + u.last_count - 2) %% u.last_count + 1 : u.focus %% u.last_count + 1
+	u.cancelled = false
+	tab := rl.IsKeyPressed(.TAB)
+	back := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+	pad_next :=
+		pad_pressed(w, .LEFT_FACE_RIGHT) || (u.last_popup.width > 0 && pad_pressed(w, .LEFT_FACE_DOWN))
+	pad_prev := pad_pressed(w, .LEFT_FACE_LEFT) || (u.last_popup.width > 0 && pad_pressed(w, .LEFT_FACE_UP))
+	if (tab || pad_next || pad_prev) && u.last_count > 0 {
+		go_back := (tab && back) || pad_prev
+		if u.focus == 0 {
+			u.focus = go_back ? u.last_count : 1
+		} else {
+			u.focus =
+				go_back ? (u.focus + u.last_count - 2) %% u.last_count + 1 : u.focus %% u.last_count + 1
+		}
 	}
-	u.activate = u.focus > 0 && (rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.SPACE))
+	u.activate =
+		u.focus > 0 &&
+		(rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.SPACE) || pad_pressed(w, .RIGHT_FACE_DOWN))
+	if u.focus > 0 && pad_pressed(w, .RIGHT_FACE_RIGHT) {
+		u.focus = 0
+		u.cancelled = true
+	}
 	if rl.IsMouseButtonPressed(.LEFT) do u.focus = 0
 	u.toast_t += frame_time(w)
 }
@@ -536,7 +591,8 @@ ui_toggle :: proc(w: ^World, r: rl.Rectangle, on: ^bool) -> bool {
 	a^ = target > a^ ? min(a^ + step, target) : max(a^ - step, target)
 	round_rect(w, r, r.height / 2, on^ ? pal.accent_strong : pal.surface_3)
 	knob := r.height - 4
-	rl.DrawCircleV({r.x + 2 + knob / 2 + a^ * (r.width - 4 - knob), r.y + r.height / 2}, knob / 2, rl.WHITE)
+	knob_r := rl.Rectangle{r.x + 2 + a^ * (r.width - 4 - knob), r.y + 2, knob, knob}
+	rl.DrawRectangleRounded(knob_r, min(w.look.radius_scale, 1), 12, rl.WHITE)
 	ui_focus_ring(w, id, r, r.height / 2)
 	return fired
 }
@@ -724,4 +780,38 @@ ui_toast_draw :: proc(w: ^World) {
 	r := rl.Rectangle{(f32(rl.GetScreenWidth()) - size.x) / 2 - 16, 22, size.x + 32, size.y + 20}
 	round_rect(w, r, 10, rl.ColorAlpha({48, 49, 52, 255}, alpha))
 	ui_text(w, {r.x + 16, r.y + 10}, text, .Roboto_400, 14, rl.ColorAlpha({232, 234, 237, 255}, alpha))
+}
+
+Battery_Badge :: struct {
+	charge: f32,
+	bv:     string,
+	bvs:    [2]f32,
+	bus:    [2]f32,
+	h:      f32,
+	dia:    f32,
+}
+
+// Measures the circular battery gauge so callers can reserve space alongside other HUD elements.
+ui_battery_badge :: proc(w: ^World, min_dia: f32) -> Battery_Badge {
+	charge := clamp(ship_battery_kwh(&w.ship) / BATTERY_KWH, 0, 1)
+	bv := fmt.tprintf("%.0f%%", charge * 100)
+	bvs := ui_text_size(w, bv, .Figtree_700, 20)
+	bus := ui_text_size(w, "battery", .Figtree_700, 10)
+	h := bvs.y + bus.y + 2
+	dia := max(min_dia, h + 18, max(bvs.x, bus.x) + 18)
+	return {charge = charge, bv = bv, bvs = bvs, bus = bus, h = h, dia = dia}
+}
+
+// Draws the circular battery gauge (charge ring from the top, clockwise) centred at c.
+ui_battery_circle :: proc(w: ^World, c: [2]f32, dia: f32, b: Battery_Badge, alpha: f32 = 1) {
+	pal := palette(w)
+	r := dia / 2
+	if alpha >= 0.99 do ui_shadow(w, {c.x - r, c.y - r, dia, dia}, r)
+	rl.DrawCircleV(c, r, alpha < 1 ? rl.ColorAlpha(pal.surface, alpha) : pal.surface)
+	track := alpha < 1 ? rl.ColorAlpha(pal.surface_3, alpha) : pal.surface_3
+	rl.DrawRing(c, r - 6, r - 2, 0, 360, 48, track)
+	rl.DrawRing(c, r - 6, r - 2, -90, -90 + 360 * b.charge, 48, pal.green)
+	top := c.y - b.h / 2
+	ui_text(w, {c.x - b.bvs.x / 2, top}, b.bv, .Figtree_700, 20, pal.text)
+	ui_text(w, {c.x - b.bus.x / 2, top + b.bvs.y + 2}, "battery", .Figtree_700, 10, pal.text_2)
 }

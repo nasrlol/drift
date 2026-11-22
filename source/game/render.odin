@@ -477,10 +477,11 @@ hill_build :: proc(w: ^World, lm: ^Line_Meshes) {
 	if len(hs) != HEIGHT_W * HEIGHT_H do return
 	pixels := make([][4]u8, len(hs), context.temp_allocator)
 	for v, i in hs {
+		fade := f32(w.belgium[i]) / BELGIUM_DEPTH
 		if v < HILL_FLAT {
-			pixels[i] = {0, 0, 0, u8(f32(HILL_FLAT - v) / HILL_FLAT * HILL_SHADOW_ALPHA)}
+			pixels[i] = {0, 0, 0, u8(f32(HILL_FLAT - v) / HILL_FLAT * HILL_SHADOW_ALPHA * fade)}
 		} else {
-			pixels[i] = {255, 255, 255, u8(f32(v - HILL_FLAT) / (255 - HILL_FLAT) * HILL_LIGHT_ALPHA)}
+			pixels[i] = {255, 255, 255, u8(f32(v - HILL_FLAT) / (255 - HILL_FLAT) * HILL_LIGHT_ALPHA * fade)}
 		}
 	}
 	img := rl.Image {

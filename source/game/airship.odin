@@ -2,6 +2,7 @@
 package game
 
 import "core:compress/deflate"
+import "core:fmt"
 import "core:math"
 import "core:math/linalg"
 import "core:mem"
@@ -50,6 +51,7 @@ Airship :: struct {
 	material:   rl.Material,
 	ready:      bool,
 	skins:      [Car_Skin]Skin_Mesh, // generated bodies (car_models.odin), Concept unused
+	preview:    rl.RenderTexture2D, // dropdown thumbnails, built on first open (car_preview_atlas)
 }
 
 CAR_VS :: `#version 330
@@ -381,6 +383,56 @@ car_draw :: proc(
 	rl.EndMode3D()
 }
 
+CAR_PREVIEW_W :: 160
+CAR_PREVIEW_H :: 76
+
+// Renders a rotating 3D thumbnail for every Car_Skin into an offscreen strip texture (top = first skin).
+car_preview_atlas :: proc(w: ^World) -> rl.Texture2D {
+	a := &w.airship
+	if !a.ready do return {}
+	n := len(Car_Skin)
+	if a.preview.id == 0 {
+		a.preview = rl.LoadRenderTexture(CAR_PREVIEW_W, CAR_PREVIEW_H * i32(n))
+		if a.preview.id == 0 do return {}
+		rl.SetTextureFilter(a.preview.texture, .BILINEAR)
+	}
+	CELL_WORLD_H :: 3.5
+	cam_dir := linalg.normalize([3]f32{0, 0.36, 1})
+	cam_up := linalg.cross(cam_dir, [3]f32{1, 0, 0})
+	cam3 := rl.Camera3D {
+		position   = cam_dir * 30,
+		target     = {},
+		up         = cam_up,
+		fovy       = f32(n) * CELL_WORLD_H,
+		projection = .ORTHOGRAPHIC,
+	}
+	yaw := 0.55 + f32(w.tick) * SIM_DT * 0.85
+	mat := a.material
+	mat.maps[0].color = rl.WHITE
+
+	rl.BeginTextureMode(a.preview)
+	rl.ClearBackground({0, 0, 0, 0})
+	car_shader_light(w, {-0.45, 1.3, 0.3}, cam_dir)
+	rl.BeginMode3D(cam3)
+	for skin in Car_Skin {
+		y_off := (f32(n - 1) * 0.5 - f32(skin)) * CELL_WORLD_H
+		cy: f32 = skin == .Dirigible ? 1.35 : 0.80
+		m := linalg.matrix4_translate_f32(cam_up * y_off + {0, -cy, 0})
+		m = m * linalg.matrix4_rotate_f32(yaw, {0, 1, 0})
+		car_parts_draw(w, skin, m, {}, mat, false)
+	}
+	rl.EndMode3D()
+	rl.EndTextureMode()
+	return a.preview.texture
+}
+
+airship_unload :: proc(a: ^Airship) {
+	if a.preview.id != 0 {
+		rl.UnloadRenderTexture(a.preview)
+		a.preview = {}
+	}
+}
+
 // Sky, ground and sun of the map view for CAR_FS, with the light and view direction.
 car_shader_light :: proc(w: ^World, light, view: [3]f32) {
 	sky, gnd, sun := [3]f32{0.72, 0.82, 0.98}, [3]f32{0.24, 0.26, 0.3}, f32(1)
@@ -509,7 +561,32 @@ others_draw :: proc(w: ^World) {
 			fly  = o.on_road ? 0 : 1,
 			time = w.car_anim.time + f32(o.author[0]),
 		}
+		pos := others_draw_pos(w, o)
 		jam := traffic_near(w, o.pos, o.alt, o.on_road, TRAFFIC_RADIUS_KM) >= TRAFFIC_MIN_CARS
-		car_draw(w, others_draw_pos(w, o), o.alt, o.heading, an, px, jam ? CAR_JAM_TINT : rl.WHITE, o.skin)
+		car_draw(w, pos, o.alt, o.heading, an, px, jam ? CAR_JAM_TINT : rl.WHITE, o.skin)
+		if w.view_edit.peer_names {
+			if sp, ok := cam_to_screen(w, {pos.x, pos.y, -o.alt / 1000}); ok {
+				peer_label_draw(w, {sp.x, sp.y - px * 0.24 - 6}, o.author)
+			}
+		}
 	}
+}
+
+// Short readable handle derived from a peer's public key.
+peer_name_text :: proc(author: [32]u8, buf: []u8) -> string {
+	return fmt.bprintf(buf, "#%06x", key_short(author) & 0xffffff)
+}
+
+// Short readable handle derived from a peer's public key, drawn centred above p.
+peer_label_draw :: proc(w: ^World, p: [2]f32, author: [32]u8) {
+	pal := palette(w)
+	px := max(w.view_edit.peer_name_px, 6)
+	buf: [16]u8
+	name := peer_name_text(author, buf[:])
+	size := ui_text_size(w, name, .Figtree_600, px)
+	pos := [2]f32{p.x - size.x / 2, p.y - size.y}
+	for o in ([?][2]f32{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}) {
+		ui_text(w, pos + o, name, .Figtree_600, px, pal.label_halo)
+	}
+	ui_text(w, pos, name, .Figtree_600, px, pal.area_label)
 }

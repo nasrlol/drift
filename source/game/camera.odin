@@ -28,6 +28,7 @@ CAM_FOLLOW_RATE :: 4.0
 // Orbiting the chase camera with the right mouse button (nasr, 2026-11-22: "can we move it?"): radians per
 // pixel dragged, and the default steepest tilt (0 = straight down, w.view_edit changes it).
 CAM_ORBIT_RAD_PER_PX :: 0.005
+CAM_ORBIT_RAD_PER_S :: 1.8
 CAM_ORBIT_MAX_TILT :: 80 * math.RAD_PER_DEG
 
 // Where the camera looks: pan = km from the map centre to the point under the screen centre (in Belgium),
@@ -279,12 +280,19 @@ cam_update :: proc(w: ^World, mouse_free: bool, controls_pan: bool) {
 				}
 			}
 		}
-		// Right drag turns the camera around the screen centre: sideways turns, up tilts towards the horizon. The
-		// chase camera keeps following the ship while turned (Re-centre puts it behind again).
+		// Right drag or right stick turns the camera around the screen centre: sideways turns, up tilts towards
+		// the horizon. The chase camera keeps following the ship while turned (Re-centre puts it behind again).
 		flat := c.pose.globe_rot == {} && c.pose.zoom >= 0
-		if mouse_free && rl.IsMouseButtonDown(.RIGHT) && flat && c.mode != .Preview {
-			if d := rl.GetMouseDelta(); d != {} {
-				turn, tilt := d.x * CAM_ORBIT_RAD_PER_PX, -d.y * CAM_ORBIT_RAD_PER_PX
+		if flat && c.mode != .Preview {
+			orbit: [2]f32
+			if mouse_free && rl.IsMouseButtonDown(.RIGHT) {
+				orbit += rl.GetMouseDelta() * CAM_ORBIT_RAD_PER_PX
+			}
+			if !w.script.on {
+				orbit += pad_right_stick(w) * CAM_ORBIT_RAD_PER_S * dt
+			}
+			if orbit != {} {
+				turn, tilt := orbit.x, -orbit.y
 				if c.mode == .Chase {
 					c.orbit_yaw = math.mod(c.orbit_yaw + turn + 3 * math.PI, math.TAU) - math.PI
 					lo, hi := f32(-CAM_CHASE_TILT), view_max_tilt(w) - CAM_CHASE_TILT

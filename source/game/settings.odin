@@ -39,11 +39,23 @@ Settings :: struct {
 	save_err:   bool, // the last save failed
 }
 
-// The design's font families. Font_Family_Of gives the family and weight of each Font.
+// The design's font families plus additional bundled families. Font_Family_Of gives the family and weight of each Font.
 Font_Family :: enum u8 {
 	Figtree,
 	Roboto,
 	Mono,
+	Space,
+	Lora,
+	JetBrains,
+}
+
+FONT_FAMILY_NAMES :: [Font_Family]string {
+	.Figtree   = "Figtree",
+	.Roboto    = "Roboto",
+	.Mono      = "Roboto Mono",
+	.Space     = "Space Grotesk",
+	.Lora      = "Lora",
+	.JetBrains = "JetBrains",
 }
 
 Look :: struct {
@@ -61,13 +73,21 @@ SETTINGS_TEXT_STEP :: 0.05 // the text size snaps to this, so dragging makes few
 SETTINGS_MAX_RADIUS_SCALE :: 2.5
 SETTINGS_COLOR_COLS :: 10
 SETTINGS_TAB_COLS :: 4 // tabs per row of the tab bar: eight in one row run their labels together
+SETTINGS_PICKER_COLS :: 3 // themes and font families per row so labels never crowd
 
 look_defaults :: proc() -> Look {
 	return {
 		palette = PALETTE,
 		text_scale = 1,
 		line_spacing = TEXT_LINE_SPACING,
-		family = {.Figtree = .Figtree, .Roboto = .Roboto, .Mono = .Mono},
+		family = {
+			.Figtree = .Figtree,
+			.Roboto = .Roboto,
+			.Mono = .Mono,
+			.Space = .Space,
+			.Lora = .Lora,
+			.JetBrains = .JetBrains,
+		},
 		radius_scale = 1,
 	}
 }
@@ -94,20 +114,55 @@ font_family_of :: proc(font: Font) -> (family: Font_Family, weight: int, italic:
 		return .Mono, 400, false
 	case .Mono_600:
 		return .Mono, 600, false
+	case .Space_400:
+		return .Space, 400, false
+	case .Space_500:
+		return .Space, 500, false
+	case .Space_700:
+		return .Space, 700, false
+	case .Lora_400:
+		return .Lora, 400, false
+	case .Lora_500:
+		return .Lora, 500, false
+	case .Lora_600:
+		return .Lora, 600, false
+	case .Lora_700:
+		return .Lora, 700, false
+	case .Lora_Italic_400:
+		return .Lora, 400, true
+	case .JetBrains_400:
+		return .JetBrains, 400, false
+	case .JetBrains_500:
+		return .JetBrains, 500, false
+	case .JetBrains_600:
+		return .JetBrains, 600, false
+	case .JetBrains_700:
+		return .JetBrains, 700, false
 	case .Icons:
 	}
 	return .Roboto, 400, false
 }
 
-// The font of family closest to weight; italic only exists in Figtree (400).
+// The font of family closest to weight, preferring an italic face when requested.
 font_in :: proc(family: Font_Family, weight: int, italic: bool) -> Font {
-	if italic && family == .Figtree do return .Figtree_Italic_400
 	best := Font.Roboto_400
 	best_d := max(int)
+	if italic {
+		for f in Font {
+			if f == .Icons do continue
+			fam, wt, ital := font_family_of(f)
+			if fam == family && ital {
+				if d := abs(wt - weight); d < best_d {
+					best, best_d = f, d
+				}
+			}
+		}
+		if best_d < max(int) do return best
+	}
 	for f in Font {
-		if f == .Icons || f == .Figtree_Italic_400 do continue
-		fam, wt, _ := font_family_of(f)
-		if fam != family do continue
+		if f == .Icons do continue
+		fam, wt, ital := font_family_of(f)
+		if fam != family || ital do continue
 		if d := abs(wt - weight); d < best_d {
 			best, best_d = f, d
 		}
@@ -218,14 +273,10 @@ settings_ui :: proc(w: ^World) {
 	names: [len(Settings_Tab)]string
 	for t in Settings_Tab do names[int(t)] = fmt.tprint(t)
 	y := panel.y + 48
-	for first := 0; first < len(names); first += SETTINGS_TAB_COLS {
-		row := names[first:min(first + SETTINGS_TAB_COLS, len(names))]
-		sel := s.tab - first if s.tab >= first && s.tab < first + len(row) else -1
-		if ui_segment(w, {x, y, inner, 34}, row, &sel) {
-			s.tab = first + sel
-			s.drag = 0
-		}
-		y += 34 + 6
+	tab_sel := s.tab
+	if settings_segment_grid(w, x, &y, inner, 34, 6, SETTINGS_TAB_COLS, names[:], &tab_sel) {
+		s.tab = tab_sel
+		s.drag = 0
 	}
 	tab := Settings_Tab(clamp(s.tab, 0, len(Settings_Tab) - 1))
 
@@ -276,6 +327,29 @@ settings_ui :: proc(w: ^World) {
 	s.height = y + 14 + 16 - panel.y
 }
 
+// Wraps a segmented bar into rows of at most cols items, updating chosen on selection and advancing y.
+settings_segment_grid :: proc(
+	w: ^World,
+	x: f32,
+	y: ^f32,
+	width, row_h, gap: f32,
+	cols: int,
+	names: []string,
+	chosen: ^int,
+) -> bool {
+	changed := false
+	for first := 0; first < len(names); first += cols {
+		row := names[first:min(first + cols, len(names))]
+		sel := chosen^ - first if chosen^ >= first && chosen^ < first + len(row) else -1
+		if ui_segment(w, {x, y^, width, row_h}, row, &sel) {
+			chosen^ = first + sel
+			changed = true
+		}
+		y^ += row_h + gap
+	}
+	return changed
+}
+
 // A slider for a u8 channel: value as f32 while dragging, written back rounded.
 settings_channel :: proc(w: ^World, x, y, width: f32, label: string, c: ^u8, def: u8, drag: ^int, id: int) {
 	v := f32(c^)
@@ -284,7 +358,7 @@ settings_channel :: proc(w: ^World, x, y, width: f32, label: string, c: ^u8, def
 }
 
 // Every palette entry as a swatch (Palette field order: the UI, the map, labels and markers, wind), the chosen
-// one with R, G, B sliders under the grid. A changed entry has an accent dot.
+// one with R, G, B sliders under them. A changed entry has an accent dot.
 colors_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 	s := &w.settings
 	pal := palette(w)
@@ -305,8 +379,10 @@ colors_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 		themes[int(t)] = fmt.tprint(t)
 		if theme_palette(t) == w.look.palette do chosen = int(t)
 	}
-	if ui_segment(w, {x, y, width, 32}, themes[:], &chosen) do w.look.palette = theme_palette(Theme(chosen))
-	y += 46
+	if settings_segment_grid(w, x, &y, width, 32, 6, SETTINGS_PICKER_COLS, themes[:], &chosen) {
+		w.look.palette = theme_palette(Theme(chosen))
+	}
+	y += 8
 
 	cell := width / SETTINGS_COLOR_COLS
 	for f, i in fields {
@@ -385,24 +461,29 @@ fonts_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 	y += sample_h + 12
 
 	Row :: struct {
+		family: Font_Family,
 		label:  string,
 		sample: Font,
 		text:   string,
 	}
-	rows := [Font_Family]Row {
-		.Figtree = {"Headings (Figtree)", .Figtree_600, "Choose a destination"},
-		.Roboto  = {"Body (Roboto)", .Roboto_400, "or click a docking tower on the map."},
-		.Mono    = {"Numbers (Roboto Mono)", .Mono_400, "128 km/h  12.5 kWh"},
+	rows := [?]Row {
+		{.Figtree, "Headings (Figtree)", .Figtree_600, "Choose a destination"},
+		{.Roboto, "Body (Roboto)", .Roboto_400, "or click a docking tower on the map."},
+		{.Mono, "Numbers (Roboto Mono)", .Mono_400, "128 km/h  12.5 kWh"},
 	}
-	families := [?]string{"Figtree", "Roboto", "Roboto Mono"}
-	for row, family in rows {
+	fam_names := FONT_FAMILY_NAMES
+	families: [len(Font_Family)]string
+	for fam in Font_Family do families[int(fam)] = fam_names[fam]
+	for row in rows {
 		ui_text(w, {x, y}, row.label, .Roboto_400, 13, pal.text)
 		y += 22
-		sel := int(look.family[family])
-		if ui_segment(w, {x, y, width, 32}, families[:], &sel) do look.family[family] = Font_Family(sel)
-		y += 40
+		sel := int(look.family[row.family])
+		if settings_segment_grid(w, x, &y, width, 32, 6, SETTINGS_PICKER_COLS, families[:], &sel) {
+			look.family[row.family] = Font_Family(sel)
+		}
+		y += 2
 		ui_text(w, {x, y}, row.text, row.sample, 15, pal.text_2)
-		y += text_px(w, 15) + 18
+		y += text_px(w, 15) + 16
 	}
 	return y
 }

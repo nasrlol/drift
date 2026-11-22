@@ -27,6 +27,8 @@ View_Edit :: struct {
 	label_end:      f32,
 	hub_end:        f32,
 	reroute_banner: bool, // the grey "Rerouting..." banner after a reroute (nav_ui.odin)
+	peer_names:     bool, // short handle above P2P cars
+	peer_name_px:   f32,
 }
 
 view_edit_defaults :: proc() -> View_Edit {
@@ -39,6 +41,8 @@ view_edit_defaults :: proc() -> View_Edit {
 		label_end = VIEW_LABEL_END,
 		hub_end = VIEW_HUB_END,
 		reroute_banner = true,
+		peer_names = true,
+		peer_name_px = 10,
 	}
 }
 
@@ -176,6 +180,7 @@ view_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 		{"Sky gradient", &e.sky_fade, def.sky_fade, 0.01, 1, "%.2f"},
 		{"Labels until", &e.label_end, def.label_end, 0.5, 12, "x %.2f"},
 		{"Towers until", &e.hub_end, def.hub_end, 0.5, 12, "x %.2f"},
+		{"P2P name size", &e.peer_name_px, def.peer_name_px, 8, 16, "%.0f px"},
 	}
 
 	y := y
@@ -183,6 +188,9 @@ view_tab :: proc(w: ^World, x, y, width: f32, drag: ^int) -> f32 {
 	y += 26
 	ui_text(w, {x, y}, "Rerouting banner", .Roboto_400, 13, pal.text)
 	ui_toggle(w, {x + width - 36, y - 2, 36, 20}, &e.reroute_banner)
+	y += 28
+	ui_text(w, {x, y}, "P2P car names", .Roboto_400, 13, pal.text)
+	ui_toggle(w, {x + width - 36, y - 2, 36, 20}, &e.peer_names)
 	y += 32
 	buf: [32]u8
 	for row, i in rows {

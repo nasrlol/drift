@@ -26,17 +26,25 @@ Car_Skin :: enum u8 {
 	Solar_Van,
 	Buggy,
 	Tram,
+	Solar_Glider,
+	Greenhouse,
+	Wind_Sailer,
+	Sunbeam,
 }
 CAR_SKIN_NAMES :: [Car_Skin]string {
-	.Concept   = "Concept",
-	.Sport     = "Sport",
-	.Hatch     = "Hatch",
-	.Offroad   = "4x4",
-	.Cigarette = "Smoke",
-	.Dirigible = "Airship",
-	.Solar_Van = "Solar",
-	.Buggy     = "Rover",
-	.Tram      = "Tram",
+	.Concept      = "Concept",
+	.Sport        = "Sport",
+	.Hatch        = "Hatch",
+	.Offroad      = "4x4",
+	.Cigarette    = "Smoke",
+	.Dirigible    = "Airship",
+	.Solar_Van    = "Solar",
+	.Buggy        = "Rover",
+	.Tram         = "Tram",
+	.Solar_Glider = "Glider",
+	.Greenhouse   = "Terrarium",
+	.Wind_Sailer  = "Sailer",
+	.Sunbeam      = "Sunbeam",
 }
 CAR_SKIN_PATH :: "cache/car_skin.txt"
 
@@ -376,6 +384,124 @@ TRAM :: Body_Spec {
 	wheel_r = 0.33,
 }
 
+// Solarpunk winged land-glider: sleek mint fuselage, outstretched solar wings and brass wingtip fins.
+GLIDER_KEYS :: [?]Body_Key {
+	{2.34, 0.30, 0.44, 0.44, 0.32, 0, .None},
+	{1.90, 0.24, 0.62, 0.68, 0.66, 0, .None},
+	{1.05, 0.22, 0.80, 1.06, 0.74, 0.56, .Top},
+	{-0.75, 0.22, 0.84, 1.04, 0.70, 0.54, .Top},
+	{-1.75, 0.24, 0.78, 0.82, 0.54, 0, .None},
+	{-2.22, 0.34, 0.66, 0.66, 0.38, 0, .None},
+}
+GLIDER_PARTS :: [?]Body_Part {
+	{.Box, {0, 0.68, 1.38}, {0.58, 0.025, 0.74}, CAR_SOLAR, true}, // solar wings
+	{.Box, {0, 0.68, 0.68}, {0.64, 0.035, 0.12}, CAR_BRASS, true}, // wing roots
+	{.Box, {-0.05, 0.78, 2.12}, {0.50, 0.14, 0.025}, CAR_BRASS, true}, // wingtip fins
+	{.Box, {-1.88, 1.18, 0}, {0.38, 0.30, 0.025}, {72, 148, 114, CLASS_PAINT}, false}, // tail fin
+	{.Cylinder, {-1.95, 0.54, 0.32}, {0.24, 0.11, 0.11}, CAR_BRASS, true}, // ion ducts
+	{.Blob, {-2.18, 0.54, 0.32}, {0.04, 0.08, 0.08}, {90, 230, 255, CLASS_LIGHT}, true}, // tail glow
+	{.Blob, {2.24, 0.46, 0.32}, {0.06, 0.06, 0.08}, CAR_HEAD, true}, // headlamps
+}
+SOLAR_GLIDER :: Body_Spec {
+	r_low   = 0.08,
+	r_belt  = 0.12,
+	r_roof  = 0.14,
+	crown   = 0.03,
+	paint   = {72, 148, 114},
+	wheel_x = {1.34, -1.34},
+	wheel_z = 0.78,
+	wheel_r = 0.31,
+}
+
+// Solarpunk botanical terrarium: timber tub beneath a vaulted glass conservatory full of living greenery.
+GREENHOUSE_KEYS :: [?]Body_Key {
+	{2.18, 0.30, 0.80, 0.80, 0.72, 0, .None},
+	{1.98, 0.22, 0.90, 0.94, 0.86, 0, .None},
+	{1.35, 0.22, 0.94, 1.02, 0.90, 0, .None},
+	{-1.35, 0.22, 0.94, 1.02, 0.90, 0, .None},
+	{-1.98, 0.24, 0.90, 0.94, 0.86, 0, .None},
+	{-2.18, 0.30, 0.80, 0.80, 0.72, 0, .None},
+}
+GREENHOUSE_PARTS :: [?]Body_Part {
+	{.Blob, {0, 1.24, 0}, {1.38, 0.56, 0.78}, CAR_GLASS, false}, // vaulted conservatory glass
+	{.Cylinder, {0, 1.24, 0}, {0.04, 0.58, 0.80}, CAR_COPPER, false}, // center copper arch
+	{.Box, {0, 1.78, 0}, {1.12, 0.04, 0.16}, CAR_COPPER, false}, // ridge vent
+	{.Box, {0, 0.54, 0.92}, {1.62, 0.14, 0.025}, CAR_WOOD, true}, // cedar side planks
+	{.Blob, {0.52, 1.20, 0.24}, {0.36, 0.26, 0.26}, {74, 148, 70, CLASS_MATTE}, true}, // front foliage
+	{.Blob, {-0.48, 1.24, 0.22}, {0.40, 0.30, 0.28}, {96, 166, 78, CLASS_MATTE}, true}, // rear foliage
+	{.Blob, {2.12, 0.76, 0.54}, {0.06, 0.09, 0.09}, {255, 212, 110, CLASS_LIGHT}, true}, // warm lanterns
+	{.Blob, {-2.12, 0.76, 0.54}, {0.05, 0.08, 0.08}, CAR_TAIL, true}, // tail lights
+}
+GREENHOUSE :: Body_Spec {
+	r_low   = 0.08,
+	r_belt  = 0.10,
+	r_roof  = 0.08,
+	crown   = 0.02,
+	paint   = {174, 122, 68},
+	wheel_x = {1.34, -1.34},
+	wheel_z = 0.82,
+	wheel_r = 0.34,
+}
+
+// Solarpunk wind-sailer: narrow terracotta land-yacht with tall canvas aero-sail and outrigger solar pods.
+SAILER_KEYS :: [?]Body_Key {
+	{2.32, 0.34, 0.56, 0.56, 0.26, 0, .None},
+	{1.90, 0.26, 0.72, 0.78, 0.62, 0, .None},
+	{0.85, 0.24, 0.84, 0.92, 0.72, 0.54, .Top},
+	{-1.05, 0.24, 0.84, 0.92, 0.70, 0.52, .Top},
+	{-1.95, 0.28, 0.76, 0.82, 0.58, 0, .None},
+	{-2.24, 0.36, 0.68, 0.68, 0.42, 0, .None},
+}
+SAILER_PARTS :: [?]Body_Part {
+	{.Box, {-0.12, 1.72, 0}, {0.045, 0.90, 0.045}, CAR_BRASS, false}, // brass mast
+	{.Box, {-0.46, 1.80, 0}, {0.58, 0.76, 0.03}, CAR_CANVAS, false}, // linen wing-sail
+	{.Box, {-0.46, 1.54, 0}, {0.62, 0.025, 0.045}, CAR_BRASS, false}, // lower batten
+	{.Box, {-0.46, 2.08, 0}, {0.50, 0.025, 0.045}, CAR_BRASS, false}, // upper batten
+	{.Box, {0, 0.58, 1.02}, {1.24, 0.04, 0.22}, CAR_SOLAR, true}, // solar outriggers
+	{.Blob, {2.24, 0.54, 0.42}, {0.06, 0.08, 0.08}, CAR_HEAD, true}, // headlamps
+	{.Blob, {-2.18, 0.60, 0.44}, {0.04, 0.08, 0.08}, CAR_TAIL, true}, // tail lights
+}
+WIND_SAILER :: Body_Spec {
+	r_low   = 0.08,
+	r_belt  = 0.12,
+	r_roof  = 0.10,
+	crown   = 0.02,
+	paint   = {206, 122, 68},
+	wheel_x = {1.36, -1.36},
+	wheel_z = 0.84,
+	wheel_r = 0.34,
+}
+
+// Solarpunk art-nouveau sun-roadster: teal paint, brass cowl and roll hoops, cream cabin and solar decklid.
+SUNBEAM_KEYS :: [?]Body_Key {
+	{2.26, 0.30, 0.66, 0.66, 0.64, 0, .None},
+	{2.04, 0.22, 0.86, 0.88, 0.80, 0, .None},
+	{0.95, 0.22, 0.90, 0.94, 0.82, 0.70, .Side},
+	{-0.75, 0.22, 0.92, 0.96, 0.82, 0.70, .None},
+	{-1.85, 0.24, 0.88, 0.92, 0.76, 0, .None},
+	{-2.18, 0.32, 0.80, 0.80, 0.66, 0, .None},
+}
+SUNBEAM_PARTS :: [?]Body_Part {
+	{.Box, {-0.10, 0.96, 0}, {0.72, 0.10, 0.66}, CAR_CREAM, false}, // open cream cockpit
+	{.Box, {0.62, 1.18, 0}, {0.04, 0.20, 0.68}, CAR_GLASS, false}, // swept windscreen
+	{.Box, {-0.72, 1.18, 0.42}, {0.05, 0.22, 0.05}, CAR_BRASS, true}, // brass roll hoops
+	{.Box, {-1.38, 0.94, 0}, {0.52, 0.03, 0.64}, CAR_SOLAR, false}, // rear solar tonneau
+	{.Box, {2.24, 0.46, 0}, {0.04, 0.14, 0.42}, CAR_BRASS, false}, // brass radiator grille
+	{.Blob, {2.12, 0.72, 0.64}, {0.10, 0.08, 0.09}, CAR_BRASS, true}, // brass lamp shells
+	{.Blob, {2.20, 0.72, 0.64}, {0.04, 0.06, 0.06}, CAR_HEAD, true}, // headlamps
+	{.Blob, {-2.14, 0.74, 0.58}, {0.04, 0.07, 0.08}, CAR_TAIL, true}, // tail lights
+}
+SUNBEAM :: Body_Spec {
+	r_low   = 0.08,
+	r_belt  = 0.14,
+	r_roof  = 0.08,
+	crown   = 0.02,
+	paint   = {48, 124, 114},
+	wheel_x = {1.38, -1.36},
+	wheel_z = 0.82,
+	wheel_r = 0.34,
+}
+
 // Vertex data while a body is built, in the scratch arena.
 Car_Builder :: struct {
 	pos: [dynamic][3]f32,
@@ -430,6 +556,26 @@ car_skins_build :: proc(w: ^World, tmp: mem.Allocator) {
 		case .Tram:
 			keys, parts := TRAM_KEYS, TRAM_PARTS
 			spec = TRAM
+			spec.keys, spec.parts = keys[:], parts[:]
+			a.skins[skin] = car_body_upload(w, &spec, tmp)
+		case .Solar_Glider:
+			keys, parts := GLIDER_KEYS, GLIDER_PARTS
+			spec = SOLAR_GLIDER
+			spec.keys, spec.parts = keys[:], parts[:]
+			a.skins[skin] = car_body_upload(w, &spec, tmp)
+		case .Greenhouse:
+			keys, parts := GREENHOUSE_KEYS, GREENHOUSE_PARTS
+			spec = GREENHOUSE
+			spec.keys, spec.parts = keys[:], parts[:]
+			a.skins[skin] = car_body_upload(w, &spec, tmp)
+		case .Wind_Sailer:
+			keys, parts := SAILER_KEYS, SAILER_PARTS
+			spec = WIND_SAILER
+			spec.keys, spec.parts = keys[:], parts[:]
+			a.skins[skin] = car_body_upload(w, &spec, tmp)
+		case .Sunbeam:
+			keys, parts := SUNBEAM_KEYS, SUNBEAM_PARTS
+			spec = SUNBEAM
 			spec.keys, spec.parts = keys[:], parts[:]
 			a.skins[skin] = car_body_upload(w, &spec, tmp)
 		}

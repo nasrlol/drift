@@ -192,6 +192,15 @@ license (SIL OFL 1.1) next to it. Raw downloads in assets/raw/fonts (not in git)
     Italic 5983a032...06599439, license Figtree-OFL.txt
   Roboto Mono v3.001 (github.com/googlefonts/RobotoMono, tag v3.001, fonts/ttf/): Regular af0bff75...1be17cb4,
     Bold 3ecf35e5...aa95c4db (no static SemiBold exists, Font.Mono_600 uses Bold), license RobotoMono-OFL.txt
+  Space Grotesk v2.0.0 (github.com/floriankarsten/space-grotesk/releases/download/2.0.0/SpaceGrotesk-2.0.0.zip,
+    2026-11-22, zip sha256 53b41557...36cabffd, static TTFs): Regular 5ede28c4...8a98bd, Medium 3183b7eb...772b44,
+    Bold 7209bbb7...a96bdb, license SpaceGrotesk-OFL.txt (SIL OFL 1.1)
+  Lora v3.021 (github.com/cyrealtype/Lora-Cyrillic/releases/download/v3.021/Lora.zip, 2026-11-22, zip sha256
+    19061972...38e8647f, static TTFs): Regular c72a9250...a7cef3, Medium 0342ce54...bba1f9a, SemiBold a9f5bbce...
+    6701a81, Bold 32baf740...8b3791, Italic 1985f2fa...e471fe, license Lora-OFL.txt (SIL OFL 1.1)
+  JetBrains Mono v2.304 (github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip,
+    2026-11-22, zip sha256 6f6376c6...d1fdcd7e, static TTFs): Regular a0bf60ef...8d138f, Medium 31c92d01...e14d3d,
+    SemiBold 1b3bfa1e...166a0, Bold 5590990c...479dcb, license JetBrainsMono-OFL.txt (SIL OFL 1.1)
   Material Symbols Rounded (Apache 2.0, license MaterialSymbolsRounded-LICENSE.txt), 2026-11-21: a subset from
     the Google Fonts css2 API (family Material Symbols Rounded, FILL 1, wght 500, opsz 24, icon_names = the 38
     icons of ui.odin ICON_CODEPOINTS), file MaterialSymbolsRounded-Filled.ttf, 12756 bytes, sha256 f6fc79a3...
@@ -655,15 +664,18 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   height_at is only called for a hub that is within 30 m horizontally, not for all 15, because the real
                   height_at will cost more than the stub.
   input.odin      read_controls() -> Controls, called once per frame into w.controls. W/S throttle, A/D turn (right = +),
-                  R/F climb up / down (arrows = W/A/S/D, PgUp / PgDn = R / F), gamepad 0: left stick throttle + turn, right stick Y climb. Keyboard and stick
-                  add up, clamped to -1..1. Deadzone 0.15, rescaled so the stick still reaches 1.
-                  Gamepad (Lars, 2026-11-21: "controller mode werkt niet", GTA style): R2 throttle, L2 brake and
-                  reverse, left stick steers and drives, R1 / L1 climb and sink, right stick looks around in the
-                  street view (climbs on the map), D-pad up / down zoom like the wheel (the map down into the street
-                  view and back up, pad_zoom), Options goes back to the map. Triggers
-                  rest at -1 or 0 by mapping: only the upper half counts until one was seen below -0.5. pad_poll
-                  logs "[input] gamepad 0 connected: <name>": no such line means raylib does not see the controller
-                  (a DualSense was paired on Lars's Mac but not connected when this was written: untested).
+                  R/F climb up / down (arrows = W/A/S/D, PgUp / PgDn = R / F). Keyboard and gamepad add up,
+                  clamped to -1..1. Sticks use a 2D radial deadzone (0.15, rescaled to 1); triggers use 0.05.
+                  Gamepad (first available in 0..3, GTA style): R2 analog gas (direct target speed on the map via
+                  w.pad.pedal, r2^1.5 curve in street-view air so speed scales smoothly with pull; keyboard W/S
+                  resumes cruise control), L2 brake and reverse, left stick steers (and pans on the plan screen),
+                  R1 / L1 climb and sink, right stick looks around in street view and orbits/tilts on the map,
+                  R3 re-centres, D-pad up / down zoom (tap = notch, hold = smooth; into street view and back),
+                  D-pad left / right cycle UI focus, Cross activates (or toggles wind in navigate), Triangle
+                  toggles autopilot (or accepts carpool on plan), Square reports gust, Circle / Options go back
+                  (Options on plan enters free flight), Select toggles music. Triggers rest at -1 or 0 by
+                  mapping: only the upper half counts until one was seen below -0.5. pad_poll logs
+                  "[input] gamepad <n> connected: <name>".
   airship.odin    The flying car (Lars, 2026-11-21: "iets realistisch in 3d"): assets/car.bin.gz from tools/bake_car
                   (Car Concept, Khronos glTF sample, CC BY 4.0 Eric Chadwick, credited bottom right, assets/car-LICENSE.txt),
                   unpacked once in game_init (airship_build) into body parts + 4 wheels, lit by CAR_VS / CAR_FS (paint,
@@ -675,13 +687,13 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   every wheel straight, the front ones are drawn steered by Car_Anim.steer (0.45 rad x turn input,
                   only with the wheels down). others_draw draws the
                   other cars (presence.odin) 80 px in their own skin, orange in a traffic jam.
-  car_models.odin (author andrei) car skins: Concept (car.bin) plus three generic bodies without brand or logo
-                  (Sport, Hatch, 4x4) lofted at start-up from a side profile (Body_Key rings, wheel arches, lights,
-                  grille, bumpers, mirrors as boxes and blobs) into one u16 mesh each; the Car Concept wheels are moved
-                  and scaled to their axles. Smoke (Andrei: "een sigaret op wielen") has no shell, only cylinders
-                  (filter, gold band, paper, ash) and a glowing tip. Picked in plan panel card A (the Car row opens a
-                  list of the skins, plan_ui.odin), saved by name in cache/car_skin.txt, sent in Presence.skin (a padding byte, the size
-                  stays 136; unknown values draw as Concept). Shapes and colours are ours.
+  car_models.odin (author andrei) car skins: Concept (car.bin), Sport, Hatch, 4x4, Smoke, plus eight solarpunk
+                  skins (Airship, Solar, Rover, Tram, Glider, Terrarium, Sailer, Sunbeam) lofted at start-up from
+                  a side profile (Body_Key rings, wheel arches, solar panels, wings, sails, brass/copper/wood
+                  trim, greenhouse glass and lights) into one u16 mesh each; the Car Concept wheels are moved and
+                  scaled to their axles. Picked in plan panel card A (the Car row opens a list of the skins,
+                  plan_ui.odin), saved by name in cache/car_skin.txt, sent in Presence.skin (a padding byte, the
+                  size stays 136; unknown values draw as Concept). Shapes and colours are ours.
   music.odin      (author andrei) the soundtrack, made in code (no audio file): Am F C G, two bars per chord at
                   84 BPM, pad + bass + plucked arpeggio with a ping-pong echo + hi-hat + soft kick. A raylib audio
                   stream (44100 Hz, f32 stereo) refilled from game_update (music_frame), no callback thread. Off by
@@ -745,20 +757,19 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   settings_apply copies it into w.palette every frame instead of PALETTE and rebuilds the land use
                   mesh when its colors changed (Line_Meshes.area_colors, its colors are baked per vertex). Meshes
                   built once elsewhere (street view) take new colors on their next build.
-                  Themes (themes.odin): a row above the swatches applies a whole palette (Theme, theme_palette); the
-                  one the palette matches is shown chosen. Design = PALETTE. Handmade (nasr 2026-11-22) = the colors
-                  of Casey Muratori's Emacs on Handmade Hero (#161616, burlywood3, DarkGoldenrod3, olive drab,
-                  gray50, cursor #40FF40, midnight blue), spread over the palette's roles by us; it is opt-in, the
-                  game stays light by default (Lars: light mode only). For the themes the speed and battery circles
-                  (pilot_ui), the route bubbles (nav_ui) and the globe's seas (new palette entry ocean, same value as
-                  the old literal) take palette colors instead of literals equal to them, so the default is pixel
-                  identical. Other literals (rl.WHITE on colored buttons and pins, the logo) stay.
+                  Themes (themes.odin): rows above the swatches apply a whole palette (Theme, theme_palette); the
+                  one the palette matches is shown chosen. Design = PALETTE, Handmade (nasr 2026-11-22), Solarpunk
+                  (sunlit parchment, brass & botanical green), Gruvbox, Nord, and Blueprint. For the themes the
+                  speed and battery circles (pilot_ui, street_hud via ui_battery_circle), the route bubbles (nav_ui)
+                  and the globe's seas (new palette entry ocean, same value as the old literal) take palette colors
+                  instead of literals equal to them, so the default is pixel identical. Other literals (rl.WHITE on
+                  colored buttons and pins, the logo) stay.
                   Fonts (w.look.text_scale, w.look.family): text size x 0.7 .. 1.6 in steps of 0.05 (the font
                   atlases are dropped and remade at each step, text_px in ui_text / ui_text_size), and per design
-                  family (Figtree headings, Roboto body, Roboto Mono numbers) the family drawn in its place, the
-                  closest weight of it (font_remap in font_get; italic only exists in Figtree). The positions in the
-                  panels stay the design's, so big text can overflow them. The map's water labels are remapped but
-                  not scaled (they call font_get themselves).
+                  family (Figtree headings, Roboto body, Roboto Mono numbers) any bundled family (Figtree, Roboto,
+                  Roboto Mono, Space Grotesk, Lora, JetBrains) drawn in its place, closest weight (font_remap in
+                  font_get; italic faces in Figtree and Lora). The map's water labels are remapped but not scaled
+                  (they call font_get themselves).
                   Corners (w.look.radius_scale): one scale 0 .. 2.5 for every corner of round_rect /
                   round_rect_lines (which now take w). A square drawn fully round stays a circle (round buttons
                   are circles with a round_rect shadow).

@@ -1056,10 +1056,13 @@ street_switch :: proc(w: ^World) {
 }
 
 // Back up to the map (Lars: "fly high or scroll out"): the car climbs above STREET_HIGH_M, or the camera is
-// zoomed out past STREET_CAM_MAX_M; Esc and Options go back too.
+// zoomed out past STREET_CAM_MAX_M; Esc, Circle and Options go back too.
 street_wants_map :: proc(w: ^World) -> bool {
 	st := &w.street
-	if w.screen != .Navigate || key_pressed(w, .ESCAPE) || pad_pressed(w, .MIDDLE_RIGHT) do return true
+	if w.screen != .Navigate || key_pressed(w, .ESCAPE) || pad_pressed(w, .MIDDLE_RIGHT) {
+		return true
+	}
+	if !w.ui.cancelled && w.ui.focus == 0 && pad_pressed(w, .RIGHT_FACE_RIGHT) do return true
 	h := street_ship_pos(w).y
 	if st.hold {
 		if h < STREET_LOW_M do st.hold = false
@@ -1493,10 +1496,9 @@ street_camera :: proc(w: ^World) {
 		st.origin = origin
 	}
 
-	look := mouse_delta(w) * STREET_MOUSE_RAD_PER_PX
-	if w.pad.connected {
-		look.x += stick_axis(rl.GetGamepadAxisMovement(0, .RIGHT_X)) * STREET_STICK_RAD_PER_S * dt
-		look.y += stick_axis(rl.GetGamepadAxisMovement(0, .RIGHT_Y)) * STREET_STICK_RAD_PER_S * dt
+	look := mouse_delta(w) * STREET_MOUSE_RAD_PER_PX + pad_right_stick(w) * STREET_STICK_RAD_PER_S * dt
+	if pad_pressed(w, .RIGHT_THUMB) {
+		st.yaw, st.pitch, st.idle_s = 0, 0, 0
 	}
 	if look != {} {
 		st.yaw += look.x
@@ -1510,7 +1512,7 @@ street_camera :: proc(w: ^World) {
 		st.yaw = angle_lerp(st.yaw, 0, k)
 		st.pitch += (0 - st.pitch) * k
 	}
-	if wheel := mouse_wheel(w) + pad_zoom(w); wheel != 0 {
+	if wheel := mouse_wheel(w) + pad_zoom(w) * 3; wheel != 0 {
 		if st.dist == 0 do st.dist = STREET_CAM_DIST_M
 		st.dist = clamp(st.dist * (1 - wheel * 0.12), STREET_CAM_MIN_M, STREET_CAM_MAX_M)
 	}
@@ -1793,6 +1795,19 @@ street_shadow_pass :: proc(w: ^World, place: Placement) {
 // Speed, height and heading bottom left, the keys for a few seconds after switching on. Plain, small, legible.
 street_hud :: proc(w: ^World) {
 	prof_zone(w, .Street_Hud)
+	st := &w.street
+	if w.view_edit.peer_names {
+		fwd := st.view.target - st.view.position
+		car := street_ship_pos(w)
+		for o in w.others[:w.other_count] {
+			p := others_draw_pos(w, o)
+			d := (p - st.origin) * 1000
+			if linalg.length(d - car.xz) > STREET_REACH_KM * 1000 do continue
+			pos := [3]f32{d.x, max(o.alt - height_at(w, p.x, p.y), 0) + 2.2, d.y}
+			if linalg.dot(pos - st.view.position, fwd) <= 0 do continue
+			peer_label_draw(w, rl.GetWorldToScreen(pos, st.view), o.author)
+		}
+	}
 	s := &w.ship
 	pal := palette(w)
 	screen := [2]f32{f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())}
@@ -1803,23 +1818,30 @@ street_hud :: proc(w: ^World) {
 	heading := compass[(int(math.round(s.heading / (math.TAU / 8))) % 8 + 8) % 8]
 
 	PAD :: 24
-	box := rl.Rectangle{PAD, screen.y - PAD - 92, 210, 92}
-	round_rect(w, box, 14, rl.ColorAlpha(pal.surface, 0.72))
 	size := ui_text_size(w, speed, .Figtree_700, 40)
+	row_h := max(ui_text_size(w, height, .Roboto_500, 14).y, ui_text_size(w, heading, .Roboto_500, 14).y)
+	box_h := max(f32(92), 12 + size.y + 4 + row_h + 12)
+	box := rl.Rectangle{PAD, screen.y - PAD - box_h, 210, box_h}
+	round_rect(w, box, 14, rl.ColorAlpha(pal.surface, 0.72))
 	ui_text(w, {box.x + 18, box.y + 12}, speed, .Figtree_700, 40, pal.text)
 	ui_text(w, {box.x + 22 + size.x, box.y + 32}, "km/h", .Roboto_500, 14, pal.text_2)
-	ui_text(w, {box.x + 18, box.y + 62}, height, .Roboto_500, 14, pal.text_2)
-	ui_text(w, {box.x + 110, box.y + 62}, heading, .Roboto_500, 14, pal.text_2)
+	row_y := box.y + 12 + size.y + 4
+	ui_text(w, {box.x + 18, row_y}, height, .Roboto_500, 14, pal.text_2)
+	ui_text(w, {box.x + 110, row_y}, heading, .Roboto_500, 14, pal.text_2)
 	if w.nav.active && !w.nav.manual {
-		ui_text(w, {box.x + 150, box.y + 62}, "auto", .Roboto_500, 14, pal.accent)
+		ui_text(w, {box.x + 150, row_y}, "auto", .Roboto_500, 14, pal.accent)
 	}
+	bat := ui_battery_badge(w, max(f32(SPEED_CIRCLE), box_h))
+	ui_battery_circle(w, {box.x + box.width + 14 + bat.dia / 2, box.y + box_h / 2}, bat.dia, bat, 0.72)
 
 	if w.street.on_s < STREET_HINT_S {
 		alpha := 1 - clamp((w.street.on_s - (STREET_HINT_S - 1)) / 1, 0, 1)
-		HINT :: "W/S throttle and brake   A/D turn   Space/Shift up and down   Mouse look around   Scroll out or fly high: map"
-		hint := ui_text_size(w, HINT, .Roboto_500, 14)
+		KB_HINT :: "W/S throttle and brake   A/D turn   Space/Shift up and down   Mouse look around   Scroll out or fly high: map"
+		PAD_HINT :: "R2 gas   L2 brake/reverse   L-stick steer   R1/L1 up/down   R-stick look   D-pad down or Circle: map"
+		hint_txt := w.pad.connected ? PAD_HINT : KB_HINT
+		hint := ui_text_size(w, hint_txt, .Roboto_500, 14)
 		r := rl.Rectangle{(screen.x - hint.x) / 2 - 14, PAD, hint.x + 28, hint.y + 16}
 		round_rect(w, r, 10, rl.ColorAlpha(pal.surface, 0.72 * alpha))
-		ui_text(w, {r.x + 14, r.y + 8}, HINT, .Roboto_500, 14, rl.ColorAlpha(pal.text, alpha))
+		ui_text(w, {r.x + 14, r.y + 8}, hint_txt, .Roboto_500, 14, rl.ColorAlpha(pal.text, alpha))
 	}
 }
