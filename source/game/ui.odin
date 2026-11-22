@@ -70,7 +70,8 @@ Fonts :: struct {
 	count: int,
 }
 
-font_get :: proc(w: ^World, font: Font, px: f32) -> rl.Font {
+font_get :: proc(w: ^World, asked: Font, px: f32) -> rl.Font {
+	font := font_remap(w, asked)
 	size := i32(px + 0.5)
 	f := &w.fonts
 	for &s in f.slots[:f.count] {
@@ -80,6 +81,7 @@ font_get :: proc(w: ^World, font: Font, px: f32) -> rl.Font {
 		logf(w, "ui", "more than %d font sizes, %v %d px uses the raylib font", MAX_FONT_SLOTS, font, size)
 		return rl.GetFontDefault()
 	}
+	prof_zone(w, .Font_Load)
 	codepoints: [max(FONT_COUNT, len(Icon))]rune
 	count := FONT_COUNT
 	if font == .Icons {
@@ -118,6 +120,14 @@ font_get :: proc(w: ^World, font: Font, px: f32) -> rl.Font {
 	return loaded
 }
 
+// Distance from the top of a ui_text line to the baseline, from the bottom of 'H' in the loaded atlas. Puts text of
+// different sizes on one baseline.
+ui_text_baseline :: proc(w: ^World, font: Font, design_px: f32) -> f32 {
+	f := font_get(w, font, text_px(w, design_px))
+	i := rl.GetGlyphIndex(f, 'H')
+	return f32(f.glyphs[i].offsetY) + f.recs[i].height
+}
+
 // Unloads every atlas this game made, never raylib's own default font.
 fonts_unload :: proc(w: ^World) {
 	default := rl.GetFontDefault()
@@ -128,7 +138,9 @@ fonts_unload :: proc(w: ^World) {
 }
 
 // pos is the top-left corner of the text. Strings are UTF-8, copied to the frame arena for raylib.
-ui_text :: proc(w: ^World, pos: [2]f32, text: string, font: Font, px: f32, color: rl.Color) {
+ui_text :: proc(w: ^World, pos: [2]f32, text: string, font: Font, design_px: f32, color: rl.Color) {
+	prof_zone(w, .Ui_Text)
+	px := text_px(w, design_px)
 	rl.DrawTextEx(
 		font_get(w, font, px),
 		strings.clone_to_cstring(text, context.temp_allocator),
@@ -139,7 +151,9 @@ ui_text :: proc(w: ^World, pos: [2]f32, text: string, font: Font, px: f32, color
 	)
 }
 
-ui_text_size :: proc(w: ^World, text: string, font: Font, px: f32) -> [2]f32 {
+ui_text_size :: proc(w: ^World, text: string, font: Font, design_px: f32) -> [2]f32 {
+	prof_zone(w, .Ui_Text)
+	px := text_px(w, design_px)
 	return rl.MeasureTextEx(
 		font_get(w, font, px),
 		strings.clone_to_cstring(text, context.temp_allocator),
@@ -151,7 +165,7 @@ ui_text_size :: proc(w: ^World, text: string, font: Font, px: f32) -> [2]f32 {
 
 // Icons (design "Iconen"): Material Symbols Rounded, filled, weight 500 (static instance from Google Fonts with only
 // the icons below, Apache 2.0, license next to it in assets/fonts, source and sha256 in notes.txt), plus the design's own icons that are
-// drawn with shapes: the logo and the docking tower. Climb / descend use the trending arrows, the jet maneuver
+// drawn with shapes: the logo, the docking tower, the steering wheel and the muted speaker. Climb / descend use the trending arrows, the jet maneuver
 // the wind icon.
 Icon :: enum u8 {
 	Leaf,
@@ -169,7 +183,6 @@ Icon :: enum u8 {
 	Search,
 	Speaker,
 	Warning,
-	Steer,
 	Reroute,
 	Straight,
 	Slight_Left,
@@ -192,6 +205,8 @@ Icon :: enum u8 {
 	// drawn with shapes, not in the font
 	Tower,
 	Logo,
+	Steer,
+	Speaker_Off,
 }
 
 // Codepoints in the Google Fonts file; a few icons keep their older Material Icons codepoint there (schedule,
@@ -212,7 +227,6 @@ ICON_CODEPOINTS :: [Icon]rune {
 	.Search       = 0xef7a,
 	.Speaker      = 0xe050, // volume_up
 	.Warning      = 0xe002,
-	.Steer        = 0xf135, // stadia_controller
 	.Reroute      = 0xe863, // autorenew
 	.Straight     = 0xeb95,
 	.Slight_Left  = 0xeba4,
@@ -234,6 +248,8 @@ ICON_CODEPOINTS :: [Icon]rune {
 	.Arrow_Right  = 0xe5c8,
 	.Tower        = 0,
 	.Logo         = 0,
+	.Steer        = 0,
+	.Speaker_Off  = 0,
 }
 
 // Fixed colors of the logo (design "Iconen"): they are part of the mark, not of the palette.
@@ -266,6 +282,20 @@ ui_icon :: proc(w: ^World, icon: Icon, centre: [2]f32, px: f32, color: rl.Color)
 				prev = p
 			}
 		}
+	case .Steer:
+		// Steering wheel: a rim, a hub and three spokes (left, right, down), on the 24 px icon grid.
+		s := px / 24
+		r := 10 * s
+		spoke := 2.6 * s
+		rl.DrawRing(centre, r - 2.6 * s, r, 0, 360, 48, color)
+		rl.DrawCircleV(centre, 3.4 * s, color)
+		rl.DrawLineEx(centre - {r - 1.3 * s, 0}, centre + {r - 1.3 * s, 0}, spoke, color)
+		rl.DrawLineEx(centre, centre + {0, r - 1.3 * s}, spoke, color)
+	case .Speaker_Off:
+		// The speaker glyph with a slash from top left to bottom right, on the 24 px icon grid.
+		s := px / 24
+		ui_icon(w, .Speaker, centre, px, color)
+		rl.DrawLineEx(centre + {-9 * s, -9 * s}, centre + {9 * s, 9 * s}, 2.4 * s, color)
 	case .Leaf ..= .Arrow_Right:
 		codepoints := ICON_CODEPOINTS
 		size := f32(i32(px + 0.5))
@@ -381,6 +411,7 @@ ui_focus_ring :: proc(w: ^World, id: int, r: rl.Rectangle, radius: f32) {
 	if w.ui.focus != id do return
 	g := f32(UI_FOCUS_RING + 1)
 	round_rect_lines(
+		w,
 		{r.x - g, r.y - g, r.width + 2 * g, r.height + 2 * g},
 		radius + g,
 		UI_FOCUS_RING,
@@ -388,20 +419,28 @@ ui_focus_ring :: proc(w: ^World, id: int, r: rl.Rectangle, radius: f32) {
 	)
 }
 
-round_rect :: proc(r: rl.Rectangle, radius: f32, color: rl.Color) {
+// raylib's roundness of r for a design radius times the corner scale of the settings (w.look.radius_scale),
+// never rounder than a pill. A square drawn fully round is a circle (a round button's shadow, its hover) and stays
+// one, the circle on it is drawn without round_rect.
+corner_roundness :: proc(w: ^World, r: rl.Rectangle, radius: f32) -> f32 {
 	m := min(r.width, r.height)
-	if m <= 0 do return
-	rl.DrawRectangleRounded(r, min(2 * radius / m, 1), 12, color)
+	if abs(r.width - r.height) < 0.5 && 2 * radius >= m do return 1
+	return min(2 * radius * w.look.radius_scale / m, 1)
 }
 
-round_rect_lines :: proc(r: rl.Rectangle, radius, thick: f32, color: rl.Color) {
-	m := min(r.width, r.height)
-	if m <= 0 do return
-	rl.DrawRectangleRoundedLinesEx(r, min(2 * radius / m, 1), 12, thick, color)
+round_rect :: proc(w: ^World, r: rl.Rectangle, radius: f32, color: rl.Color) {
+	if min(r.width, r.height) <= 0 do return
+	rl.DrawRectangleRounded(r, corner_roundness(w, r, radius), 12, color)
+}
+
+round_rect_lines :: proc(w: ^World, r: rl.Rectangle, radius, thick: f32, color: rl.Color) {
+	if min(r.width, r.height) <= 0 do return
+	rl.DrawRectangleRoundedLinesEx(r, corner_roundness(w, r, radius), 12, thick, color)
 }
 
 // The design's floating card shadow (day): two soft grey-blue layers.
 ui_shadow :: proc(w: ^World, r: rl.Rectangle, radius: f32) {
+	prof_zone(w, .Ui_Shadow)
 	base := rl.Color{60, 64, 67, 255}
 	layers := [2]struct {
 		dy, blur, alpha: f32,
@@ -412,6 +451,7 @@ ui_shadow :: proc(w: ^World, r: rl.Rectangle, radius: f32) {
 			grow := l.blur * f32(k + 1) / steps / 2
 			c := rl.ColorAlpha(base, l.alpha / steps)
 			round_rect(
+				w,
 				{r.x - grow, r.y + l.dy - grow, r.width + 2 * grow, r.height + 2 * grow},
 				radius + grow,
 				c,
@@ -423,7 +463,7 @@ ui_shadow :: proc(w: ^World, r: rl.Rectangle, radius: f32) {
 // Floating card: surface, 18 px corners, shadow. Hides the map from the mouse.
 ui_card :: proc(w: ^World, r: rl.Rectangle) {
 	ui_shadow(w, r, 18)
-	round_rect(r, 18, palette(w).surface)
+	round_rect(w, r, 18, palette(w).surface)
 	ui_block(w, r)
 }
 
@@ -458,14 +498,14 @@ ui_pill_button :: proc(
 	font := Font.Roboto_500
 	switch kind {
 	case .Primary:
-		round_rect(r, radius, hot ? rl.ColorBrightness(pal.accent, 0.1) : pal.accent)
+		round_rect(w, r, radius, hot ? rl.ColorBrightness(pal.accent, 0.1) : pal.accent)
 		fg = rl.WHITE
 	case .Secondary:
-		if hot do round_rect(r, radius, pal.surface_2)
-		round_rect_lines(r, radius, 1, pal.line)
+		if hot do round_rect(w, r, radius, pal.surface_2)
+		round_rect_lines(w, r, radius, 1, pal.line)
 		fg = pal.accent
 	case .Danger:
-		round_rect(r, radius, hot ? rl.ColorBrightness(pal.red, 0.1) : pal.red)
+		round_rect(w, r, radius, hot ? rl.ColorBrightness(pal.red, 0.1) : pal.red)
 		fg = rl.WHITE
 		px = 21
 		font = .Figtree_500
@@ -488,17 +528,57 @@ ui_toggle :: proc(w: ^World, r: rl.Rectangle, on: ^bool) -> bool {
 	target: f32 = on^ ? 1 : 0
 	step := frame_time(w) / 0.15
 	a^ = target > a^ ? min(a^ + step, target) : max(a^ - step, target)
-	round_rect(r, r.height / 2, on^ ? pal.accent_strong : pal.surface_3)
+	round_rect(w, r, r.height / 2, on^ ? pal.accent_strong : pal.surface_3)
 	knob := r.height - 4
 	rl.DrawCircleV({r.x + 2 + knob / 2 + a^ * (r.width - 4 - knob), r.y + r.height / 2}, knob / 2, rl.WHITE)
 	ui_focus_ring(w, id, r, r.height / 2)
 	return fired
 }
 
+// Slider on a 4 px track: drag (shared by the panel's sliders, 0 = none) holds the id of the one being dragged,
+// the caller clears it when the mouse button is up. def gets a small mark on the track; the knob turns accent
+// when the value is not def.
+ui_slider :: proc(w: ^World, track: rl.Rectangle, value: ^f32, lo, hi, def: f32, drag: ^int, id: int) {
+	pal := palette(w)
+	_, _, fired := ui_widget(w, {track.x, track.y - 8, track.width, 20})
+	if fired do drag^ = id
+	if drag^ == id {
+		k := clamp((rl.GetMousePosition().x - track.x) / track.width, 0, 1)
+		value^ = lo + k * (hi - lo)
+	}
+	changed := abs(value^ - def) > 1e-4
+	k := clamp((value^ - lo) / (hi - lo), 0, 1)
+	kd := clamp((def - lo) / (hi - lo), 0, 1)
+	round_rect(w, track, 2, pal.surface_3)
+	round_rect(w, {track.x, track.y, track.width * k, track.height}, 2, pal.accent)
+	rl.DrawRectangleV({track.x + track.width * kd - 1, track.y - 4}, {2, 12}, pal.text_2)
+	rl.DrawCircleV({track.x + track.width * k, track.y + 2}, 8, changed ? pal.accent : pal.surface)
+	rl.DrawCircleLinesV({track.x + track.width * k, track.y + 2}, 8, pal.line)
+}
+
+// Slider row of an editor panel, 50 px high: the label and text (the value) on top, the slider under them.
+UI_SLIDER_ROW_H :: 50
+ui_slider_row :: proc(
+	w: ^World,
+	x, y, width: f32,
+	label, text: string,
+	value: ^f32,
+	lo, hi, def: f32,
+	drag: ^int,
+	id: int,
+) {
+	pal := palette(w)
+	ui_text(w, {x, y}, label, .Roboto_400, 13, pal.text)
+	size := ui_text_size(w, text, .Mono_400, 12)
+	changed := abs(value^ - def) > 1e-4
+	ui_text(w, {x + width - size.x, y}, text, .Mono_400, 12, changed ? pal.accent : pal.text_2)
+	ui_slider(w, {x, y + 26, width, 4}, value, lo, hi, def, drag, id)
+}
+
 // Segment control: a surface_2 bar with 10 px corners, the chosen segment surface with a light shadow.
 ui_segment :: proc(w: ^World, r: rl.Rectangle, labels: []string, sel: ^int) -> bool {
 	pal := palette(w)
-	round_rect(r, 10, pal.surface_2)
+	round_rect(w, r, 10, pal.surface_2)
 	changed := false
 	seg := r.width / f32(len(labels))
 	for label, i in labels {
@@ -510,7 +590,7 @@ ui_segment :: proc(w: ^World, r: rl.Rectangle, labels: []string, sel: ^int) -> b
 		}
 		if sel^ == i {
 			ui_shadow(w, s, 8)
-			round_rect(s, 8, pal.surface)
+			round_rect(w, s, 8, pal.surface)
 		}
 		size := ui_text_size(w, label, .Roboto_500, 13)
 		ui_text(
@@ -530,13 +610,13 @@ ui_segment :: proc(w: ^World, r: rl.Rectangle, labels: []string, sel: ^int) -> b
 // battery meter, meter < 0 none.
 ui_stat_chip :: proc(w: ^World, r: rl.Rectangle, label, value: string, meter: f32) {
 	pal := palette(w)
-	round_rect(r, 12, pal.chip)
+	round_rect(w, r, 12, pal.chip)
 	ui_text(w, {r.x + 12, r.y + 8}, label, .Roboto_400, 11, pal.text_2)
 	ui_text(w, {r.x + 12, r.y + 24}, value, .Mono_600, 17, pal.text)
 	if meter >= 0 {
 		bar := rl.Rectangle{r.x + 12, r.y + r.height - 10, r.width - 24, 4}
-		round_rect(bar, 2, pal.surface_3)
-		round_rect({bar.x, bar.y, bar.width * clamp(meter, 0, 1), bar.height}, 2, pal.green)
+		round_rect(w, bar, 2, pal.surface_3)
+		round_rect(w, {bar.x, bar.y, bar.width * clamp(meter, 0, 1), bar.height}, 2, pal.green)
 	}
 }
 
@@ -551,11 +631,11 @@ ui_input :: proc(
 ) -> bool {
 	pal := palette(w)
 	id, hot, fired := ui_widget(w, r)
-	if editing do round_rect(r, 10, pal.surface_2)
+	if editing do round_rect(w, r, 10, pal.surface_2)
 	if error {
-		round_rect_lines(r, 10, 2, pal.red)
+		round_rect_lines(w, r, 10, 2, pal.red)
 	} else {
-		round_rect_lines(r, 10, 1, editing || hot ? pal.text_2 : pal.line)
+		round_rect_lines(w, r, 10, 1, editing || hot ? pal.text_2 : pal.line)
 	}
 	shown := text == "" ? placeholder : text
 	size := ui_text_size(w, shown, .Roboto_400, 15)
@@ -589,13 +669,13 @@ ui_text_edit :: proc(buf: []u8, n: ^int) -> (changed: bool) {
 ui_zoom_pill :: proc(w: ^World, r: rl.Rectangle) -> int {
 	pal := palette(w)
 	ui_shadow(w, r, 24)
-	round_rect(r, 24, pal.surface)
+	round_rect(w, r, 24, pal.surface)
 	ui_block(w, r)
 	out := 0
 	for half in 0 ..< 2 {
 		h := rl.Rectangle{r.x, r.y + f32(half) * r.height / 2, r.width, r.height / 2}
 		id, hot, fired := ui_widget(w, h)
-		if hot do round_rect(h, 24, pal.surface_2)
+		if hot do round_rect(w, h, 24, pal.surface_2)
 		ui_icon(w, half == 0 ? .Plus : .Minus, {h.x + h.width / 2, h.y + h.height / 2}, 24, pal.text)
 		ui_focus_ring(w, id, h, 24)
 		if fired do out = half == 0 ? 1 : -1
@@ -608,11 +688,11 @@ ui_zoom_pill :: proc(w: ^World, r: rl.Rectangle) -> int {
 ui_tile :: proc(w: ^World, r: rl.Rectangle, label: string, preview: rl.Color, on: bool) -> bool {
 	pal := palette(w)
 	id, hot, fired := ui_widget(w, r)
-	round_rect(r, 12, hot ? pal.surface_3 : pal.surface_2)
-	round_rect({r.x + 6, r.y + 6, r.width - 12, 54}, 8, preview)
+	round_rect(w, r, 12, hot ? pal.surface_3 : pal.surface_2)
+	round_rect(w, {r.x + 6, r.y + 6, r.width - 12, 54}, 8, preview)
 	size := ui_text_size(w, label, .Roboto_500, 13)
 	ui_text(w, {r.x + (r.width - size.x) / 2, r.y + 66}, label, .Roboto_500, 13, pal.text)
-	if on do round_rect_lines(r, 12, 2, pal.accent)
+	if on do round_rect_lines(w, r, 12, 2, pal.accent)
 	ui_focus_ring(w, id, r, 12)
 	return fired
 }
@@ -632,6 +712,6 @@ ui_toast_draw :: proc(w: ^World) {
 	text := string(u.toast[:u.toast_len])
 	size := ui_text_size(w, text, .Roboto_400, 14)
 	r := rl.Rectangle{(f32(rl.GetScreenWidth()) - size.x) / 2 - 16, 22, size.x + 32, size.y + 20}
-	round_rect(r, 10, rl.ColorAlpha({48, 49, 52, 255}, alpha))
+	round_rect(w, r, 10, rl.ColorAlpha({48, 49, 52, 255}, alpha))
 	ui_text(w, {r.x + 16, r.y + 10}, text, .Roboto_400, 14, rl.ColorAlpha({232, 234, 237, 255}, alpha))
 }

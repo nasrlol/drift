@@ -58,6 +58,7 @@ labels_build :: proc(w: ^World) {
 
 // taken: the label rects drawn so far this frame (hub names first), a new label must not overlap them.
 labels_draw :: proc(w: ^World, taken: ^[dynamic]rl.Rectangle) {
+	prof_zone(w, .Labels)
 	if !w.labels.built do labels_build(w)
 	pal := palette(w)
 	z := w.cam.pose.zoom
@@ -71,6 +72,9 @@ labels_draw :: proc(w: ^World, taken: ^[dynamic]rl.Rectangle) {
 		if z < (lb.shield ? SHIELD_MIN_ZOOM : RIVER_MIN_ZOOM) do continue
 		p, visible := cam_to_screen(w, {lb.pos.x, lb.pos.y, 0})
 		if !visible || p.x < 0 || p.y < 0 || p.x > w.cam.screen.x || p.y > w.cam.screen.y do continue
+		// Far labels fade out (view_edit.odin), so names do not pile up along the horizon.
+		a := view_label_alpha(w, view_depth(w, {lb.pos.x, lb.pos.y, 0}), w.view_edit.label_end)
+		if a <= 0.01 do continue
 		text := map_name(&w.m, lb.text)
 		if lb.shield {
 			// "E40;A10" -> "E40": one shield per road.
@@ -90,9 +94,9 @@ labels_draw :: proc(w: ^World, taken: ^[dynamic]rl.Rectangle) {
 			if overlaps(taken[:], r) do continue
 			append(taken, r)
 			append(&drawn, Drawn{p, text})
-			round_rect(r, 4, pal.shield_border)
-			round_rect({r.x + 1.5, r.y + 1.5, r.width - 3, r.height - 3}, 3, pal.shield)
-			ui_text(w, {r.x + 5, r.y + 2}, text, .Roboto_700, 12, pal.shield_text)
+			round_rect(w, r, 4, rl.ColorAlpha(pal.shield_border, a))
+			round_rect(w, {r.x + 1.5, r.y + 1.5, r.width - 3, r.height - 3}, 3, rl.ColorAlpha(pal.shield, a))
+			ui_text(w, {r.x + 5, r.y + 2}, text, .Roboto_700, 12, rl.ColorAlpha(pal.shield_text, a))
 		} else {
 			px :: f32(15)
 			font := font_get(w, .Figtree_Italic_400, px)
@@ -104,9 +108,9 @@ labels_draw :: proc(w: ^World, taken: ^[dynamic]rl.Rectangle) {
 			append(taken, r)
 			append(&drawn, Drawn{p, text})
 			for o in ([?][2]f32{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}) {
-				rl.DrawTextEx(font, ctext, {r.x, r.y} + o, px, spacing, pal.label_halo)
+				rl.DrawTextEx(font, ctext, {r.x, r.y} + o, px, spacing, rl.ColorAlpha(pal.label_halo, a))
 			}
-			rl.DrawTextEx(font, ctext, {r.x, r.y}, px, spacing, pal.water_label)
+			rl.DrawTextEx(font, ctext, {r.x, r.y}, px, spacing, rl.ColorAlpha(pal.water_label, a))
 		}
 	}
 

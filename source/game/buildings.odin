@@ -26,6 +26,10 @@ BUILDINGS_POS_UNIT_M :: 0.5
 BUILDINGS_RADIUS_KM :: 1.0 // RADIUS_KM of the bake
 // Taller than real, so they read in the chase view where a street is a few pixels wide.
 BUILDINGS_HEIGHT_X :: 1.6
+// Shares of the roofs drawn with solar panels and with plants (ours: a solarpunk map, as the street view's flat
+// roofs, notes.txt). Picked by a hash of the building, so a roof keeps its kind between runs.
+BUILDINGS_SOLAR_ROOFS :: 0.3
+BUILDINGS_GREEN_ROOFS :: 0.25
 
 Buildings :: struct {
 	meshes:   [BUILDINGS_MAX_CITIES]rl.Mesh,
@@ -33,13 +37,14 @@ Buildings :: struct {
 	count:    int,
 	material: rl.Material,
 	loc:      struct {
-		roof, wall, tree, city, park, fog_c, fog_r, fade_px, feature_px: i32,
+		roof, solar_roof, green_roof, wall, tree, city, park, fog_c, fog_r, fade_px, feature_px: i32,
 	},
 	ready:    bool,
 }
 
-// vertexColor.r = light (0..1), .g = 1 on the roof, .b = 1 for a tree clump (nature.odin, same shader). The roof
-// and wall colors come from the palette as uniforms, city and park are the ground under a building and a clump.
+// vertexColor.r = light (0..1), .g = 1 on the roof, .b = 1 for a tree clump (nature.odin, same shader), .a the
+// roof kind (roof_alpha). The roof and wall colors come from the palette as uniforms, city and park are the
+// ground under a building and a clump.
 // feature_px: the size of BUILDINGS_FEATURE_KM on the screen at a view depth (clip w) of 1 km, so w gives its
 // size at a vertex; fade_px as BUILDINGS_FADE_PX_0 and _1. Fog as LINE_VS.
 BUILDINGS_VS :: `#version 330
@@ -47,6 +52,8 @@ in vec3 vertexPosition;
 in vec4 vertexColor;
 uniform mat4 mvp;
 uniform vec3 roof;
+uniform vec3 solar_roof;
+uniform vec3 green_roof;
 uniform vec3 wall;
 uniform vec3 tree;
 uniform vec3 city;
@@ -62,7 +69,8 @@ void main() {
 	vec4 p = mvp * vec4(vertexPosition.xy, vertexPosition.z * grow, 1.0);
 	gl_Position = p;
 	bool is_tree = vertexColor.b > 0.5;
-	vec3 c = (is_tree ? tree : mix(wall, roof, vertexColor.g)) * vertexColor.r;
+	vec3 top = vertexColor.a > 0.75 ? roof : (vertexColor.a > 0.25 ? green_roof : solar_roof);
+	vec3 c = (is_tree ? tree : mix(wall, top, vertexColor.g)) * vertexColor.r;
 	c = mix(is_tree ? park : city, c, grow);
 	float f = clamp((p.w - fog_range.x) / max(fog_range.y - fog_range.x, 1e-3), 0.0, 1.0);
 	fragColor = vec4(mix(c, fog_color, f * f), 1.0);
@@ -84,6 +92,14 @@ turn :: proc(a, b, c: [2]f32) -> f32 {
 }
 
 // Ear clipping of a small counter-clockwise ring into out (3 points per triangle). A ring that crosses itself
+// vertexColor.a of a roof for BUILDINGS_VS from a building's hash: 0 solar panels, 128 plants, 255 plain.
+roof_alpha :: proc(seed: u32) -> u8 {
+	r := f32(hash_u32(seed) >> 8) / (1 << 24)
+	if r < BUILDINGS_SOLAR_ROOFS do return 0
+	if r < BUILDINGS_SOLAR_ROOFS + BUILDINGS_GREEN_ROOFS do return 128
+	return 255
+}
+
 // can leave no ear: the rest becomes a fan, good enough for a roof.
 roof_triangles :: proc(ring: [][2]f32, idx: []int, out: ^[dynamic][2]f32) {
 	n := len(ring)
@@ -118,6 +134,7 @@ roof_triangles :: proc(ring: [][2]f32, idx: []int, out: ^[dynamic][2]f32) {
 // Unpacks the buildings into one GPU mesh per city. Staging memory is a local arena, freed at the end; the
 // meshes keep no CPU arrays. Needs the window.
 buildings_build :: proc(w: ^World) {
+	prof_zone(w, .Buildings_Build)
 	b := &w.buildings
 	scratch: virtual.Arena
 	if virtual.arena_init_growing(&scratch) != nil do return
@@ -218,9 +235,10 @@ buildings_build :: proc(w: ^World) {
 			}
 			clear(&roof)
 			roof_triangles(ring[:], idx[:n], &roof)
+			kind := roof_alpha(u32(bi) * 2654435761 + 11)
 			for p in roof {
 				append(&pos, [3]f32{p.x, p.y, -height})
-				append(&col, [4]u8{255, 255, 0, 255})
+				append(&col, [4]u8{255, 255, 0, kind})
 			}
 		}
 		if len(pos) == 0 do continue
@@ -241,6 +259,8 @@ buildings_build :: proc(w: ^World) {
 	b.material.shader = sh
 	b.loc = {
 		roof       = rl.GetShaderLocation(sh, "roof"),
+		solar_roof = rl.GetShaderLocation(sh, "solar_roof"),
+		green_roof = rl.GetShaderLocation(sh, "green_roof"),
 		wall       = rl.GetShaderLocation(sh, "wall"),
 		tree       = rl.GetShaderLocation(sh, "tree"),
 		fog_c      = rl.GetShaderLocation(sh, "fog_color"),
@@ -269,7 +289,7 @@ buildings_feature_px :: proc(c: ^Cam) -> (px: f32, shown: bool) {
 // buildings_feature_px, cities within reach (km) of target are drawn where place puts them (a city mesh is
 // relative to its origin). look gives the roof, wall, tree and fog colors and the ground under them.
 Buildings_Look :: struct {
-	roof, wall, tree, city, park, fog: [3]f32,
+	roof, solar_roof, green_roof, wall, tree, city, park, fog: [3]f32,
 }
 
 buildings_draw :: proc(
@@ -281,14 +301,18 @@ buildings_draw :: proc(
 	place: Placement,
 	look: Buildings_Look,
 ) {
+	prof_zone(w, .Buildings_Draw)
 	b := &w.buildings
 	if !b.ready do return
-	roof, wall, tree, city, park, horizon := look.roof, look.wall, look.tree, look.city, look.park, look.fog
+	roof, solar_roof, green_roof := look.roof, look.solar_roof, look.green_roof
+	wall, tree, city, park, horizon := look.wall, look.tree, look.city, look.park, look.fog
 	fog := fog
 	fade := [2]f32{BUILDINGS_FADE_PX_0, BUILDINGS_FADE_PX_1}
 	feature_px := feature_px
 	sh := b.material.shader
 	rl.SetShaderValue(sh, b.loc.roof, &roof, .VEC3)
+	rl.SetShaderValue(sh, b.loc.solar_roof, &solar_roof, .VEC3)
+	rl.SetShaderValue(sh, b.loc.green_roof, &green_roof, .VEC3)
 	rl.SetShaderValue(sh, b.loc.wall, &wall, .VEC3)
 	rl.SetShaderValue(sh, b.loc.tree, &tree, .VEC3)
 	rl.SetShaderValue(sh, b.loc.city, &city, .VEC3)
@@ -309,6 +333,8 @@ buildings_map_look :: proc(w: ^World) -> Buildings_Look {
 	pal := palette(w)
 	return {
 		roof = rl.ColorNormalize(pal.roof).rgb,
+		solar_roof = rl.ColorNormalize(pal.solar_roof).rgb,
+		green_roof = rl.ColorNormalize(pal.green_roof).rgb,
 		wall = rl.ColorNormalize(pal.wall).rgb,
 		tree = rl.ColorNormalize(pal.tree).rgb,
 		city = rl.ColorNormalize(pal.city).rgb,

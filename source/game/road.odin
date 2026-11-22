@@ -3,6 +3,7 @@ package game
 
 import "core:math"
 import "core:math/linalg"
+import "core:mem/virtual"
 
 // Landing picks a road this close. The road graph holds the secondary roads and up, so in a city centre the
 // nearest one can be 700 m away (Brussels hub: 660 m). Not from the spec or design, see the PR assumptions.
@@ -14,27 +15,96 @@ ROAD_LAND_KM :: 1.0
 // Throttle drives along the edge (same speed limits as flying), turn picks the next edge at a junction, a
 // one-way road is only ever driven its own way. No wind on the ground.
 
-// The edge nearest to pos within radius_km, and the distance along it in km. Brute force over the road points:
-// called once when landing, not every step.
-road_nearest_edge :: proc(w: ^World, pos: [2]f32, radius_km: f32) -> (edge: int, s_km: f32, ok: bool) {
-	best := radius_km
-	for e, ei in w.m.road_edges {
-		pts := w.m.road_points[e.start:][:e.count]
-		along: f32
-		for i in 1 ..< len(pts) {
-			a, b := pts[i - 1], pts[i]
-			ab := b - a
-			l2 := linalg.length2(ab)
-			f := l2 > 0 ? clamp(linalg.dot(pos - a, ab) / l2, 0, 1) : 0
-			d := linalg.length(pos - (a + ab * f))
-			seg := math.sqrt(l2)
-			if d < best {
-				best, edge, s_km, ok = d, ei, along + seg * f, true
+// Road segments per ROAD_CELL_KM cell of the map, for road_nearest_edge: items[cells[c] : cells[c + 1]] for
+// cell c = y * ROAD_CELLS_W + x, each item an edge index and the index of the segment's first point in
+// road_points. A segment is in every cell its bounding box touches, cells outside the map are clamped to the
+// border. Built once from w.m (indices, no pointers, so it stays valid after a hot reload), in w.perm.
+ROAD_CELL_KM :: ROAD_LAND_KM
+ROAD_CELLS_W :: int(MAP_W_KM / ROAD_CELL_KM) + 1
+ROAD_CELLS_H :: int(MAP_H_KM / ROAD_CELL_KM) + 1
+Road_Index :: struct {
+	cells: []u32,
+	items: [][2]u32,
+	built: bool,
+}
+
+road_cell_range :: proc(lo, hi: [2]f32) -> (x0, y0, x1, y1: int) {
+	x0 = clamp(int(math.floor(lo.x / ROAD_CELL_KM)), 0, ROAD_CELLS_W - 1)
+	x1 = clamp(int(math.floor(hi.x / ROAD_CELL_KM)), 0, ROAD_CELLS_W - 1)
+	y0 = clamp(int(math.floor(lo.y / ROAD_CELL_KM)), 0, ROAD_CELLS_H - 1)
+	y1 = clamp(int(math.floor(hi.y / ROAD_CELL_KM)), 0, ROAD_CELLS_H - 1)
+	return
+}
+
+// Two passes over the segments: count per cell, then fill.
+road_index_build :: proc(w: ^World) {
+	ri := &w.road_index
+	ri.built = true
+	perm := virtual.arena_allocator(&w.perm)
+	counts := make([]u32, ROAD_CELLS_W * ROAD_CELLS_H + 1, perm)
+	for pass in 0 ..< 2 {
+		for e, ei in w.m.road_edges {
+			for k in e.start + 1 ..< e.start + e.count {
+				a, b := w.m.road_points[k - 1], w.m.road_points[k]
+				x0, y0, x1, y1 := road_cell_range(linalg.min(a, b), linalg.max(a, b))
+				for y in y0 ..= y1 {
+					for x in x0 ..= x1 {
+						c := y * ROAD_CELLS_W + x
+						if pass == 0 {
+							counts[c + 1] += 1
+						} else {
+							ri.items[ri.cells[c] + counts[c]] = {u32(ei), k - 1}
+							counts[c] += 1
+						}
+					}
+				}
 			}
-			along += seg
+		}
+		if pass == 0 {
+			for c in 1 ..< len(counts) do counts[c] += counts[c - 1]
+			ri.cells = counts
+			ri.items = make([][2]u32, counts[len(counts) - 1], perm)
+			counts = make([]u32, ROAD_CELLS_W * ROAD_CELLS_H + 1, context.temp_allocator)
 		}
 	}
-	return
+}
+
+// The edge nearest to pos within radius_km, and the distance along it in km. Searches only the cells within
+// radius_km of pos. The closest point of a segment within radius_km lies in a cell of both the segment's box and
+// the searched square, so no segment is missed. Equal distances keep the lowest edge, then the lowest point,
+// as a scan of all road points in order would, and the distance along is summed in the same order.
+road_nearest_edge :: proc(w: ^World, pos: [2]f32, radius_km: f32) -> (edge: int, s_km: f32, ok: bool) {
+	if !(abs(pos.x) < math.F32_MAX && abs(pos.y) < math.F32_MAX) do return
+	if !w.road_index.built do road_index_build(w)
+	ri := &w.road_index
+	best := radius_km
+	best_item: [2]u32
+	best_f: f32
+	x0, y0, x1, y1 := road_cell_range(pos - radius_km, pos + radius_km)
+	for y in y0 ..= y1 {
+		for x in x0 ..= x1 {
+			c := y * ROAD_CELLS_W + x
+			for item in ri.items[ri.cells[c]:ri.cells[c + 1]] {
+				a, b := w.m.road_points[item[1]], w.m.road_points[item[1] + 1]
+				ab := b - a
+				l2 := linalg.length2(ab)
+				f := l2 > 0 ? clamp(linalg.dot(pos - a, ab) / l2, 0, 1) : 0
+				d := linalg.length(pos - (a + ab * f))
+				earlier := item[0] < best_item[0] || (item[0] == best_item[0] && item[1] < best_item[1])
+				if d < best || (ok && d == best && earlier) {
+					best, best_item, best_f, ok = d, item, f, true
+				}
+			}
+		}
+	}
+	if !ok do return
+	e := w.m.road_edges[best_item[0]]
+	along: f32
+	for k in e.start + 1 ..= best_item[1] {
+		along += math.sqrt(linalg.length2(w.m.road_points[k] - w.m.road_points[k - 1]))
+	}
+	seg := math.sqrt(linalg.length2(w.m.road_points[best_item[1] + 1] - w.m.road_points[best_item[1]]))
+	return int(best_item[0]), along + seg * best_f, true
 }
 
 // Polyline length of an edge in km (length_km is the unsimplified way, the drawn geometry is what we drive on).
@@ -145,7 +215,8 @@ road_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
 	s.alt = height_at(w, s.pos.x, s.pos.y)
 	s.turn_rate = 0
 	s.used_kwh += power_kw(s.speed, 0) * dt / 3600
-	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, sim_hour(w))) * dt / 3600
+	s.solar_kwh +=
+		solar_kw(cloud_at(w, s.pos.x, s.pos.y, sim_hour(w)), sun_factor(w, sim_hour(w))) * dt / 3600
 	s.warnings = {}
 	s.docked = false
 	return true
@@ -170,7 +241,8 @@ road_landing_step :: proc(w: ^World, c: Controls, dt: f32) -> bool {
 	ground := height_at(w, goal.x, goal.y)
 	s.alt = max(s.alt - ROAD_DESCENT_MS * dt, ground)
 	s.used_kwh += power_kw(s.speed, 0) * dt / 3600
-	s.solar_kwh += solar_kw(cloud_at(w, s.pos.x, s.pos.y, sim_hour(w))) * dt / 3600
+	s.solar_kwh +=
+		solar_kw(cloud_at(w, s.pos.x, s.pos.y, sim_hour(w)), sun_factor(w, sim_hour(w))) * dt / 3600
 	s.warnings = {}
 	s.docked = false
 	if s.alt <= ground {

@@ -167,9 +167,10 @@ towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 			append(&col, [4]u8{low, 0, 0, 255}, [4]u8{low, 0, 0, 255}, [4]u8{top, 0, 0, 255})
 			append(&col, [4]u8{low, 0, 0, 255}, [4]u8{top, 0, 0, 255}, [4]u8{top, 0, 0, 255})
 		}
+		kind := roof_alpha(th.seed)
 		for v in ([6]int{0, 1, 2, 0, 2, 3}) {
 			append(&pos, [3]f32{ring[v].x, ring[v].y, -height})
-			append(&col, [4]u8{255, 255, 0, 255})
+			append(&col, [4]u8{255, 255, 0, kind})
 		}
 	}
 	return tile_mesh(pos[:], col[:])
@@ -177,6 +178,7 @@ towns_build_tile :: proc(w: ^World, lo, hi: [2]f32) -> rl.Mesh {
 
 // Inside BeginMode3D, right after buildings_draw (which sets the shader's uniforms), around target (km).
 towns_draw :: proc(w: ^World, target: [2]f32, reach: f32, place: Placement) {
+	prof_zone(w, .Towns_Draw)
 	b := &w.buildings
 	if !b.ready do return
 	tiles_update_draw(w, &w.towns, TOWN_TILE_KM, reach, towns_build_tile, b.material, target, place)

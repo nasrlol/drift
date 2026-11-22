@@ -93,7 +93,8 @@ music_toggle :: proc(w: ^World) {
 // Speaker button (plan map buttons, navigation button column): lit while the music plays, same as N.
 music_button :: proc(w: ^World, r: rl.Rectangle) {
 	m := &w.music
-	if !ui_round_button(w, r, .Speaker, m.ready && !m.off) do return
+	on := m.ready && !m.off
+	if !ui_round_button(w, r, on ? .Speaker : .Speaker_Off, on) do return
 	if !m.ready {
 		ui_toast(w, "No audio device")
 		return

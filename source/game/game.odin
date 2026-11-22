@@ -32,73 +32,84 @@ DRIFT_PROFILE :: #config(DRIFT_PROFILE, false)
 BUILD_MODE :: "debug" when DRIFT_DEBUG else "profile" when DRIFT_PROFILE else "release"
 
 World :: struct {
-	perm:            virtual.Arena,
-	route_mem:       virtual.Arena,
-	frame:           virtual.Arena,
-	m:               Map,
-	world_map:       World_Map,
-	globe:           Globe_GPU,
-	weather:         Weather,
+	perm:             virtual.Arena,
+	route_mem:        virtual.Arena,
+	frame:            virtual.Arena,
+	m:                Map,
+	world_map:        World_Map,
+	globe:            Globe_GPU,
+	weather:          Weather,
 	// sha256 of weather, identifies the snapshot (carpool offers will carry it)
-	weather_hash:    [32]u8,
-	fetch:           Fetch,
-	identity:        ed25519.Private_Key, // zero until identity_load_or_create succeeds
-	identity_pub:    [32]u8,
-	store:           Store, // carpool messages, see net.odin
-	node:            Net_Node, // peer to peer threads and peers, see net.odin
-	trip:            Trip, // the accepted trip in progress, frame loop only
-	live_send_s:     f32, // seconds since our live position was last sent (carpool_frame)
-	partner:         [3]f32, // the carpool partner's newest live position, km, km, m
-	partner_seen:    bool,
-	grid:            Grid,
-	belgium:         [HEIGHT_W * HEIGHT_H]u8, // inside-Belgium mask with depth, see belgium_build
-	controls:        Controls,
-	ship:            Ship,
-	screen:          Screen, // zero = plan: Controls move the camera. Navigate: Controls steer the ship
-	plan:            Plan,
-	plan_mem:        virtual.Arena, // paths and maneuvers of w.routes, reset by plan_routes
-	routes:          [Route_Mode]Planned_Route,
-	nav:             Nav,
-	nav_wind:        bool, // wind trails while navigating (design: off by default)
-	replay:          Replay,
-	no_fly:          [MAX_NO_FLY]No_Fly_Zone,
-	gust_zones:      [MAX_GUST_ZONES]Gust_Zone, // reported in flight, route() goes around them
-	tick:            u64,
-	accum:           f64,
-	prof:            Profiler,
-	cam:             Cam,
-	ui:              Ui,
-	scan_s:          f32, // seconds since the last plan, for the A* scan animation
+	weather_hash:     [32]u8,
+	fetch:            Fetch,
+	identity:         ed25519.Private_Key, // zero until identity_load_or_create succeeds
+	identity_pub:     [32]u8,
+	store:            Store, // carpool messages, see net.odin
+	node:             Net_Node, // peer to peer threads and peers, see net.odin
+	trip:             Trip, // the accepted trip in progress, frame loop only
+	live_send_s:      f32, // seconds since our live position was last sent (carpool_frame)
+	partner:          [3]f32, // the carpool partner's newest live position, km, km, m
+	partner_seen:     bool,
+	grid:             Grid,
+	belgium:          [HEIGHT_W * HEIGHT_H]u8, // inside-Belgium mask with depth, see belgium_build
+	controls:         Controls,
+	ship:             Ship,
+	screen:           Screen, // zero = plan: Controls move the camera. Navigate: Controls steer the ship
+	plan:             Plan,
+	plan_mem:         virtual.Arena, // paths and maneuvers of w.routes, reset by plan_routes
+	routes:           [Route_Mode]Planned_Route,
+	nav:              Nav,
+	nav_wind:         bool, // wind trails while navigating (design: off by default)
+	replay:           Replay,
+	no_fly:           [MAX_NO_FLY]No_Fly_Zone,
+	gust_zones:       [MAX_GUST_ZONES]Gust_Zone, // reported in flight, route() goes around them
+	tick:             u64,
+	accum:            f64,
+	prof:             Profiler,
+	cam:              Cam,
+	ui:               Ui,
+	scan_s:           f32, // seconds since the last plan, for the A* scan animation
 	// GPU texture and glyph tables owned by raylib, zero until the first frame with a window.
-	fonts:           Fonts,
-	line_meshes:     Line_Meshes,
-	labels:          Map_Labels,
-	palette:         Palette, // PALETTE, copied every frame, read through palette(w)
-	wind:            Wind_Particles,
-	airship:         Airship,
-	buildings:       Buildings,
-	cloud_sprites:   Cloud_Sprites,
-	nature:          Tile_Cache,
-	towns:           Tile_Cache,
+	fonts:            Fonts,
+	line_meshes:      Line_Meshes,
+	labels:           Map_Labels,
+	palette:          Palette, // PALETTE, copied every frame, read through palette(w)
+	wind:             Wind_Particles,
+	airship:          Airship,
+	buildings:        Buildings,
+	cloud_sprites:    Cloud_Sprites,
+	nature:           Tile_Cache,
+	towns:            Tile_Cache,
 	// Cruise control while steering yourself: the throttle the ship holds, -1 = take the current speed first.
-	cruise:          f32,
-	cruise_on_road:  bool,
-	car_anim:        Car_Anim,
-	car_skin:        Car_Skin, // the player's car body, car_models.odin
-	music:           Soundtrack, // music.odin
-	tune:            Tune, // the F2 speed editor, tune.odin
+	cruise:           f32,
+	map_time_now:     f32, // times real time the simulation runs now (map_time_scale, tune.odin)
+	cruise_on_road:   bool,
+	car_anim:         Car_Anim,
+	car_skin:         Car_Skin, // the player's car body, car_models.odin
+	music:            Soundtrack, // music.odin
+	// The F2 settings panel (settings.odin) and what its tabs change.
+	settings:         Settings,
+	look:             Look, // palette, fonts and corners
+	setting_defaults: Setting_Values, // the code with assets/settings.txt on top (settings_store.odin)
+	tune:             Tune, // speeds, tune.odin
+	border_edit:      Border_Edit, // border lines, border_edit.odin
+	cloud_edit:       Cloud_Edit, // clouds, cloud_edit.odin
+	wind_edit:        Wind_Edit, // wind lines, wind_edit.odin
+	view_edit:        View_Edit, // the tilted map's horizon, view_edit.odin
+	grass_edit:       Grass_Edit, // street view grass, grass_edit.odin
 	// Other cars from the presence gossip (presence.odin), copied from the node table every PRESENCE_COPY_S.
-	others:          [PRESENCE_SLOTS]Other_Car,
-	other_count:     int,
-	others_copied_s: f32, // seconds since that copy
-	presence_send_s: f32,
-	presence_copy_s: f32,
-	street:          Street, // the third-person street view, street.odin
-	pose_prev:       Ship_Pose, // the ship before the last fixed step
-	pose:            Ship_Pose, // where the ship is drawn this frame (ship.odin)
-	collide:         Collide, // building footprints for free flight, collide.odin
-	script:          Script, // --script: keys, mouse and screenshots per frame, debug.odin
-	pad:             Pad, // the first gamepad, input.odin
+	others:           [PRESENCE_SLOTS]Other_Car,
+	other_count:      int,
+	others_copied_s:  f32, // seconds since that copy
+	presence_send_s:  f32,
+	presence_copy_s:  f32,
+	street:           Street, // the third-person street view, street.odin
+	pose_prev:        Ship_Pose, // the ship before the last fixed step
+	pose:             Ship_Pose, // where the ship is drawn this frame (ship.odin)
+	collide:          Collide, // building footprints for free flight, collide.odin
+	road_index:       Road_Index, // road segments per cell for landing, road.odin
+	script:           Script, // --script: keys, mouse and screenshots per frame, debug.odin
+	pad:              Pad, // the first gamepad, input.odin
 }
 
 @(export)
@@ -108,7 +119,9 @@ game_memory_size :: proc() -> int {
 
 @(export)
 game_init_window :: proc() {
-	rl.SetConfigFlags({.WINDOW_RESIZABLE, .MSAA_4X_HINT})
+	// Vsync instead of a fixed 60 fps cap (#90): frames follow the display refresh, and game_update draws the ship
+	// between pose_prev and the last fixed step, so motion stays smooth at any rate.
+	rl.SetConfigFlags({.WINDOW_RESIZABLE, .MSAA_4X_HINT, .VSYNC_HINT})
 	rl.InitWindow(1440, 900, "drift")
 	if !rl.IsWindowReady() {
 		// Without a display (a sleeping or locked screen) the game went on and crashed with exit 139.
@@ -118,7 +131,6 @@ game_init_window :: proc() {
 	rl.SetWindowMinSize(900, 600)
 	// Esc leaves navigation (design), it does not close the window.
 	rl.SetExitKey(.KEY_NULL)
-	rl.SetTargetFPS(60)
 }
 
 @(export)
@@ -128,6 +140,8 @@ game_init :: proc() -> rawptr {
 		fmt.eprintln("[game] cannot allocate World:", err)
 		return nil
 	}
+	when PROFILING do w.prof.trace_mem = make([]u8, PROF_TRACE_BYTES, virtual.arena_allocator(&w.perm))
+	w.prof.init_start = prof_zone(w, .Init)
 	if res := curl.global_init(curl.GLOBAL_ALL); res != .E_OK {
 		fmt.eprintln("[weather] curl global_init failed:", curl.easy_strerror(res))
 	}
@@ -148,7 +162,7 @@ game_init :: proc() -> rawptr {
 	if !weather_load_snapshot(w, SNAPSHOT_PATH) do weather_load_fallback(w)
 	identity_load_or_create(w)
 	car_skin_load(w)
-	w.tune = tune_defaults()
+	settings_init(w)
 	if rl.IsWindowReady() {
 		airship_build(w)
 		buildings_build(w)
@@ -173,6 +187,7 @@ game_init :: proc() -> rawptr {
 @(export)
 game_hot_reloaded :: proc(memory: rawptr) {
 	w := (^World)(memory)
+	prof_zone(w, .Load_Map)
 	m, ok := load_map()
 	if !ok {
 		logf(
@@ -185,6 +200,7 @@ game_hot_reloaded :: proc(memory: rawptr) {
 	}
 	w.m = m
 	belgium_build(w)
+	if !w.road_index.built do road_index_build(w)
 	wm, wm_ok := load_world()
 	if !wm_ok do logf(w, "map", "world.bin: wrong magic or version")
 	w.world_map = wm
@@ -204,10 +220,11 @@ game_update :: proc(memory: rawptr) -> bool {
 	context.temp_allocator = virtual.arena_allocator(&w.frame)
 	defer virtual.arena_free_all(&w.frame)
 
-	t := prof_begin()
+	t := prof_begin(w, .Update)
 	if w.script.on {
 		script_frame(w)
 	} else {
+		prof_zone(w, .Poll)
 		weather_poll(w)
 		node_poll(w)
 	}
@@ -243,8 +260,11 @@ game_update :: proc(memory: rawptr) -> bool {
 		plan_refresh(w)
 	}
 
-	// A scripted run steps exactly once per frame, unless it gives frame times (frame_ms).
-	w.accum += w.script.on && w.script.frame_n == 0 ? SIM_DT : f64(frame_time(w))
+	// A scripted run steps exactly once per frame, unless it gives frame times (frame_ms). Driving on the map
+	// steps map_time_scale times as often (tune.odin).
+	step_dt := w.script.on && w.script.frame_n == 0 ? SIM_DT : f64(frame_time(w))
+	w.accum += step_dt * f64(map_time_scale(w, f32(step_dt)))
+	steps_t := prof_begin(w, .Sim_Steps)
 	for w.accum >= SIM_DT {
 		if w.screen == .Navigate {
 			w.pose_prev = ship_pose(&w.ship)
@@ -273,6 +293,7 @@ game_update :: proc(memory: rawptr) -> bool {
 		w.tick += 1
 		w.accum -= SIM_DT
 	}
+	prof_end(w, .Sim_Steps, steps_t)
 	{
 		// Between the last two steps; a jump (a teleport, a new start) or no stepping at all draws the state as is.
 		now := ship_pose(&w.ship)
@@ -291,7 +312,6 @@ game_update :: proc(memory: rawptr) -> bool {
 		presence_frame(w, frame_time(w))
 		music_frame(w)
 	}
-	prof_end(w, .Update, t)
 
 	if key_pressed(w, .F5) {
 		b := strings.builder_make(context.temp_allocator)
@@ -302,14 +322,18 @@ game_update :: proc(memory: rawptr) -> bool {
 	// Camera: input when the mouse is not on last frame's UI, glides, chase / preview, then the raylib camera.
 	// The keyboard and stick pan only on the plan screen, in navigation they steer the ship.
 	// A scripted run has no real mouse: its wheel always reaches the map.
-	cam_update(w, (w.script.on || !ui_mouse_captured(w)) && !w.street.on, w.screen == .Plan && !typing)
+	{
+		prof_zone(w, .Cam_Update)
+		cam_update(w, (w.script.on || !ui_mouse_captured(w)) && !w.street.on, w.screen == .Plan && !typing)
+	}
+	prof_end(w, .Update, t)
 
-	w.palette = PALETTE
+	settings_apply(w)
 	pal := palette(w)
 	frame_dt := frame_time(w)
 
 	rl.BeginDrawing()
-	t = prof_begin()
+	t = prof_begin(w, .Draw)
 	space := pal.sky
 	bg := rl.ColorLerp(pal.land, space, clamp(-w.cam.pose.zoom, 0, 1))
 	rl.ClearBackground(bg)
@@ -317,6 +341,7 @@ game_update :: proc(memory: rawptr) -> bool {
 	if !w.street.on {
 		lm := &w.line_meshes
 		if !lm.built {
+			prof_zone(w, .Map_Mesh_Build)
 			segments := 0
 			for l in w.m.lines do segments += max(int(l.count) - 1, 0)
 			n := segments * 6
@@ -325,7 +350,6 @@ game_update :: proc(memory: rawptr) -> bool {
 			color := make([][4]u8, n, context.temp_allocator)
 			along := make([][2]f32, n, context.temp_allocator)
 			i := 0
-			sea_segments := 0
 			for l in w.m.lines {
 				pts := w.m.points[l.start:][:l.count]
 				km: f32 = 0
@@ -333,9 +357,13 @@ game_update :: proc(memory: rawptr) -> bool {
 					a, b := pts[s - 1], pts[s]
 					// The border round the territorial sea (OSM's country boundary runs 12 nm out) is dashed.
 					dash: u8 = 0
-					if Map_Kind(l.kind) == .Border && border_at_sea(w, (a + b) / 2) {
-						dash = 255
-						sea_segments += 1
+					if Map_Kind(l.kind) == .Border {
+						if border_at_sea(w, (a + b) / 2) {
+							dash = 255
+							lm.border_sea += 1
+						} else {
+							lm.border_land += 1
+						}
 					}
 					line_quad(pos, other, color, i, a, b, {u8(l.kind), dash, 0, 255})
 					next := km + linalg.length(b - a)
@@ -345,7 +373,7 @@ game_update :: proc(memory: rawptr) -> bool {
 				}
 			}
 			if n > 0 do lm.map_lines = line_mesh_upload(pos, other, color, false, along)
-			logf(w, "render", "%d border segments at sea, dashed", sea_segments)
+			logf(w, "render", "%d border segments at sea, dashed", lm.border_sea)
 			{
 				// Ground layer grid (gust risk, solar): GROUND_CELL_KM quads, two triangles each, colors per
 				// vertex rewritten every frame, positions fixed.
@@ -389,10 +417,12 @@ game_update :: proc(memory: rawptr) -> bool {
 			lm.loc_fog_c = rl.GetShaderLocation(shader, "fog_color")
 			lm.loc_fog_r = rl.GetShaderLocation(shader, "fog_range")
 			lm.loc_bias = rl.GetShaderLocation(shader, "depth_bias")
-			dash_on, dash_off := f32(LINE_DASH_ON_PX), f32(LINE_DASH_OFF_PX)
-			rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "dash_on"), &dash_on, .FLOAT)
-			rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "dash_off"), &dash_off, .FLOAT)
+			lm.loc_dash_width = rl.GetShaderLocation(shader, "dash_width")
+			lm.loc_dash_on = rl.GetShaderLocation(shader, "dash_on")
+			lm.loc_dash_off = rl.GetShaderLocation(shader, "dash_off")
 			lm.built = true
+			lm.scan_material = rl.LoadMaterialDefault()
+			scan_build(w)
 			logf(
 				w,
 				"render",
@@ -408,6 +438,7 @@ game_update :: proc(memory: rawptr) -> bool {
 		// mesh, colored by speed.
 		show_wind := w.screen == .Plan ? w.plan.layers.show_wind : w.nav_wind
 		if show_wind {
+			prof_zone(w, .Wind)
 			wp := &w.wind
 			lo, hi := [2]f32{1e9, 1e9}, [2]f32{-1e9, -1e9}
 			screen := w.cam.screen
@@ -420,19 +451,22 @@ game_update :: proc(memory: rawptr) -> bool {
 			lo = linalg.max(lo, [2]f32{0, 0})
 			hi = linalg.min(hi, [2]f32{MAP_W_KM, MAP_H_KM})
 			hour := sim_hour(w)
-			km_per_ms := WIND_PX_PER_MS / w.cam.px_per_km
-			for i in 0 ..< WIND_PARTICLES {
+			we := &w.wind_edit
+			count := clamp(int(we.count), 0, WIND_PARTICLES)
+			life := max(we.life_s, 0.1)
+			km_per_ms := we.px_per_ms / w.cam.px_per_km
+			for i in 0 ..< count {
 				wp.age[i] += frame_dt
 				out := wp.x[i] < lo.x || wp.x[i] > hi.x || wp.y[i] < lo.y || wp.y[i] > hi.y
 				out ||= !belgium_inside(w, wp.x[i], wp.y[i])
-				if !wp.seeded || out || wp.age[i] >= WIND_LIFE_S {
+				if !wp.seeded || out || wp.age[i] >= life {
 					// A few picks to land in Belgium. One that still misses has fade 0 and tries again next frame.
 					for _ in 0 ..< WIND_SPAWN_TRIES {
 						wp.x[i] = lo.x + wind_rand(wp) * (hi.x - lo.x)
 						wp.y[i] = lo.y + wind_rand(wp) * (hi.y - lo.y)
 						if belgium_inside(w, wp.x[i], wp.y[i]) do break
 					}
-					wp.age[i] = wp.seeded ? 0 : wind_rand(wp) * WIND_LIFE_S
+					wp.age[i] = wp.seeded ? 0 : wind_rand(wp) * life
 				}
 				v := wind_at(w, wp.x[i], wp.y[i], w.plan.layers.wind_layer, hour)
 				wp.vx[i], wp.vy[i] = v.x, v.y
@@ -444,15 +478,14 @@ game_update :: proc(memory: rawptr) -> bool {
 			pos := make([][3]f32, WIND_VERTICES, context.temp_allocator)
 			other := make([][3]f32, WIND_VERTICES, context.temp_allocator)
 			color := make([][4]u8, WIND_VERTICES, context.temp_allocator)
-			// Plan screen 40 % opacity in the design, raised: Lars wants the wind clearer (2026-11-21).
-			alpha: f32 = w.screen == .Plan ? 0.75 : 0.9
-			for i in 0 ..< WIND_PARTICLES {
+			alpha := clamp(w.screen == .Plan ? we.opacity_plan : we.opacity_nav, 0, 1)
+			for i in 0 ..< count {
 				v := [2]f32{wp.vx[i], wp.vy[i]}
 				speed := linalg.length(v)
-				if speed < WIND_CALM_MS do continue
+				if speed < we.calm_ms do continue
 				p := [2]f32{wp.x[i], wp.y[i]}
-				fade := math.sin(math.PI * wp.age[i] / WIND_LIFE_S) * alpha * belgium_fade(w, p.x, p.y)
-				tail := p - v * km_per_ms * WIND_TRAIL_S
+				fade := math.sin(math.PI * min(wp.age[i] / life, 1)) * alpha * belgium_fade(w, p.x, p.y)
+				tail := p - v * km_per_ms * we.trail_s
 				k := speed < 6 ? 0 : speed < 10 ? 1 : speed < 14 ? 2 : 3
 				line_quad(pos, other, color, i * 6, p, tail, {u8(WIND_COLOR + k), 0, 0, u8(fade * 255)})
 			}
@@ -490,25 +523,19 @@ game_update :: proc(memory: rawptr) -> bool {
 		// A* scan animation: replays the order the last route search expanded its nodes (grid.expanded), a
 		// faint accent square per 1 km cell, over SCAN_S after a new plan. The router does no extra work.
 		if w.scan_s > 0 && w.scan_s < SCAN_S && w.screen == .Plan {
+			prof_zone(w, .Scan)
 			w.scan_s += frame_dt
 			g := &w.grid
 			shown := int(f32(g.expanded_len) * min(w.scan_s / (SCAN_S * 0.7), 1))
 			fade := 1 - clamp((w.scan_s - SCAN_S * 0.7) / (SCAN_S * 0.3), 0, 1)
-			c := rl.ColorAlpha(pal.accent, 0.18 * fade)
-			for n in g.expanded[:shown] {
-				cell := grid_cell(n)
-				x, y := f32(cell.x) * GRID_CELL_KM, f32(cell.y) * GRID_CELL_KM
-				a, b := [3]f32{x + 0.1, y + 0.1, 0}, [3]f32{x + 0.1, y + 0.9, 0}
-				c2, d := [3]f32{x + 0.9, y + 0.9, 0}, [3]f32{x + 0.9, y + 0.1, 0}
-				rl.DrawTriangle3D(a, b, c2, c)
-				rl.DrawTriangle3D(a, c2, d, c)
-			}
+			scan_draw(w, shown, rl.ColorAlpha(pal.accent, 0.18 * fade))
 		}
 
 		// Draw order 3: road casings, then the fills. Widths are pixels on the screen (design "De kaart": 10 / 8 /
 		// 6 px + 2 px casing per side). The design's zoom range ends at a ~16 km wide view; zoomed out further
 		// the widths shrink and the street classes drop out, otherwise all of Belgium is one blob of roads.
 		{
+			prof_zone(w, .Map_Lines)
 			screen := w.cam.screen
 			z := w.cam.pose.zoom
 			// Full design widths from zoom ~4.5 (a ~16 km wide view), eased in so a city-to-city view stays light.
@@ -516,7 +543,6 @@ game_update :: proc(memory: rawptr) -> bool {
 			t *= t
 			streets := clamp((z - 3) / 1.5, 0, 1)
 			fill, casing: [LINE_COLORS]f32
-			fill[Map_Kind.Border] = 1.5
 			fill[Map_Kind.River] = 1.5 + 2.5 * t
 			fill[Map_Kind.Motorway] = 2 + 8 * t
 			fill[Map_Kind.Trunk] = 1 + 7 * t
@@ -526,7 +552,7 @@ game_update :: proc(memory: rawptr) -> bool {
 			for k in ([?]Map_Kind{.Motorway, .Trunk, .Primary, .Secondary, .Tertiary}) {
 				if fill[k] > 0 do casing[k] = fill[k] + 4 * t
 			}
-			for k in 0 ..< WIND_COLOR_COUNT do fill[WIND_COLOR + k] = WIND_WIDTH_PX
+			for k in 0 ..< WIND_COLOR_COUNT do fill[WIND_COLOR + k] = w.wind_edit.width_px
 			colors, casing_colors: [LINE_COLORS][4]f32
 			colors[Map_Kind.Border] = rl.ColorNormalize(pal.text_2)
 			colors[Map_Kind.River] = rl.ColorNormalize(pal.water)
@@ -543,10 +569,16 @@ game_update :: proc(memory: rawptr) -> bool {
 			casing_colors[Map_Kind.Trunk] = rl.ColorNormalize(pal.main_road_casing)
 			casing_colors[Map_Kind.Motorway] = rl.ColorNormalize(pal.motorway_casing)
 			horizon := rl.ColorNormalize(pal.horizon).rgb
-			// Fog starts a bit beyond the ship in the chase view, none from above.
-			dist := linalg.length(w.cam.view.position - w.cam.view.target)
-			fog := w.cam.pose.tilt > 0.05 ? [2]f32{dist * 1.2, dist * 3.5} : [2]f32{1e9, 2e9}
+			// Fog starts a bit beyond the ship in the chase view, none from above (view_edit.odin).
+			fog := view_fog_range(w)
 			sh := lm.material.shader
+			// Border widths and the sea border's dashes come from the border editor (border_edit.odin). Only the
+			// sea border is dashed and it has no casing: the casing pass draws dashed segments 0 wide.
+			dash_on, dash_off := w.border_edit.dash_on, w.border_edit.dash_off
+			no_dash: f32 = 0
+			rl.SetShaderValue(sh, lm.loc_dash_on, &dash_on, .FLOAT)
+			rl.SetShaderValue(sh, lm.loc_dash_off, &dash_off, .FLOAT)
+			rl.SetShaderValue(sh, lm.loc_dash_width, &no_dash, .FLOAT)
 			rl.SetShaderValue(sh, lm.loc_screen, &screen, .VEC2)
 			rl.SetShaderValue(sh, lm.loc_fog_c, &horizon, .VEC3)
 			rl.SetShaderValue(sh, lm.loc_fog_r, &fog, .VEC2)
@@ -554,11 +586,14 @@ game_update :: proc(memory: rawptr) -> bool {
 				bias := f32(0.5 * LINE_DEPTH_BIAS)
 				rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
 				rl.SetShaderValueV(sh, lm.loc_colors, &colors, .VEC4, LINE_COLORS)
-				rl.SetShaderValueV(sh, lm.loc_widths, &fill, .FLOAT, LINE_COLORS)
-				globe_draw_lines(w)
+				// The globe's lines take the Border slot, one kind per draw.
+				for set, kind in ([World_Line_Kind]Border_Set{.Coastline = .Coastlines, .Country_Border = .Countries}) {
+					fill[Map_Kind.Border] = border_width(w, set)
+					rl.SetShaderValueV(sh, lm.loc_widths, &fill, .FLOAT, LINE_COLORS)
+					globe_draw_lines(w, kind)
+				}
 			}
-			// After the globe, so its coastlines (same Border slot) stay when the borders are hidden.
-			if w.plan.layers.hide_borders do fill[Map_Kind.Border] = 0
+			fill[Map_Kind.Border] = border_width(w, .Belgium_Land)
 			if lm.map_lines.vertexCount > 0 {
 				bias := f32(LINE_DEPTH_BIAS)
 				rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
@@ -566,10 +601,13 @@ game_update :: proc(memory: rawptr) -> bool {
 				rl.SetShaderValueV(sh, lm.loc_widths, &casing, .FLOAT, LINE_COLORS)
 				rl.DrawMesh(lm.map_lines, lm.material, rl.Matrix(1))
 				bias = 2 * LINE_DEPTH_BIAS
+				sea := border_width(w, .Belgium_Sea)
 				rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
+				rl.SetShaderValue(sh, lm.loc_dash_width, &sea, .FLOAT)
 				rl.SetShaderValueV(sh, lm.loc_colors, &colors, .VEC4, LINE_COLORS)
 				rl.SetShaderValueV(sh, lm.loc_widths, &fill, .FLOAT, LINE_COLORS)
 				rl.DrawMesh(lm.map_lines, lm.material, rl.Matrix(1))
+				rl.SetShaderValue(sh, lm.loc_dash_width, &no_dash, .FLOAT)
 			}
 			bias := f32(3 * LINE_DEPTH_BIAS)
 			rl.SetShaderValue(sh, lm.loc_bias, &bias, .FLOAT)
@@ -596,31 +634,42 @@ game_update :: proc(memory: rawptr) -> bool {
 		others_draw(w)
 		if w.screen == .Navigate do airship_draw(w)
 		carpool_draw_partner(w)
+		view_horizon_draw(w)
 		clouds_draw(w)
 
 		// Draw order 7: hub markers with their names (design: green 26 px circle, white 2 px border, tower icon
 		// 15 px, name in Figtree 600 13 px). Names are the real ones from belgium.bin. Screen space, culled: a
 		// name that overlaps an earlier one is dropped, the marker stays.
 		{
+			prof_zone(w, .Hub_Markers)
 			labels := make([dynamic]rl.Rectangle, 0, w.m.hub_count, context.temp_allocator)
 			for i in 0 ..< w.m.hub_count {
 				h := w.m.hubs[i].pos
 				p, visible := cam_to_screen(w, {h.x, h.y, 0})
 				if !visible do continue
+				a := view_label_alpha(w, view_depth(w, {h.x, h.y, 0}), w.view_edit.hub_end)
+				if a <= 0.01 do continue
 				name := hub_name(w, i)
 				size := ui_text_size(w, name, .Figtree_600, 13)
 				rect := rl.Rectangle{p.x + HUB_MARKER_PX / 2 + 4, p.y - size.y / 2, size.x, size.y}
 				shown := true
 				for prev in labels do if rl.CheckCollisionRecs(rect, prev) do shown = false
-				rl.DrawCircleV(p, HUB_MARKER_PX / 2, rl.WHITE)
-				rl.DrawCircleV(p, HUB_MARKER_PX / 2 - 2, pal.hub)
-				ui_icon(w, .Tower, p, 15, rl.WHITE)
+				rl.DrawCircleV(p, HUB_MARKER_PX / 2, rl.ColorAlpha(rl.WHITE, a))
+				rl.DrawCircleV(p, HUB_MARKER_PX / 2 - 2, rl.ColorAlpha(pal.hub, a))
+				ui_icon(w, .Tower, p, 15, rl.ColorAlpha(rl.WHITE, a))
 				if !shown do continue
 				append(&labels, rect)
 				for o in ([?][2]f32{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}) {
-					ui_text(w, {rect.x, rect.y} + o, name, .Figtree_600, 13, pal.label_halo)
+					ui_text(
+						w,
+						{rect.x, rect.y} + o,
+						name,
+						.Figtree_600,
+						13,
+						rl.ColorAlpha(pal.label_halo, a),
+					)
 				}
-				ui_text(w, {rect.x, rect.y}, name, .Figtree_600, 13, pal.area_label)
+				ui_text(w, {rect.x, rect.y}, name, .Figtree_600, 13, rl.ColorAlpha(pal.area_label, a))
 			}
 			labels_draw(w, &labels)
 		}
@@ -648,72 +697,18 @@ game_update :: proc(memory: rawptr) -> bool {
 		rl.DrawRectangleV(box, text + 2 * PAD, rl.ColorAlpha(pal.surface, 0.8))
 		ui_text(w, box + PAD, CREDIT, .Roboto_400, 12, pal.text_2)
 	}
-	tune_ui(w)
+	when DRIFT_DEBUG do settings_ui(w)
 	ui_toast_draw(w)
 
 	prof_end(w, .Draw, t)
 
-	// Profiler overlay, F3 or the Profiler toggle in the layers panel shows it. It shows the previous frame and is not counted in draw ms.
-	when PROFILING {
-		p := &w.prof
-		if key_pressed(w, .F3) do p.shown = !p.shown
-		if p.shown {
-			worst: f32
-			for ms in p.frame_ms do worst = max(worst, ms)
-			MB :: f32(1 << 20)
-			x0 := i32(w.cam.screen.x) - 316 - 88 // left of the map controls column
-			y0 := i32(w.cam.screen.y) - 170
-			rl.DrawRectangle(x0, y0, 300, 132, {0, 0, 0, 170})
-			lines := [?]cstring {
-				fmt.ctprintf(
-					"frame %.2f ms (update %.2f, draw %.2f)",
-					p.ms[.Update] + p.ms[.Draw],
-					p.ms[.Update],
-					p.ms[.Draw],
-				),
-				fmt.ctprintf("worst of %d frames %.2f ms, budget %d", PROF_FRAMES, worst, FRAME_BUDGET_MS),
-				fmt.ctprintf("route %.2f ms, weather load %.2f ms", p.ms[.Route], p.ms[.Weather_Load]),
-				fmt.ctprintf(
-					"perm %.2f / %.2f MB, route %.2f / %.2f MB",
-					f32(w.perm.total_used) / MB,
-					f32(w.perm.total_reserved) / MB,
-					f32(w.route_mem.total_used) / MB,
-					f32(w.route_mem.total_reserved) / MB,
-				),
-				fmt.ctprintf("frame arena %.1f KB", f32(p.frame_used) / 1024),
-			}
-			for line, i in lines do rl.DrawText(line, x0 + 6, y0 + 6 + i32(i) * 12, 10, rl.RAYWHITE)
-
-			// 2 px per frame, oldest on the left, 10 px per ms, the yellow line is the budget.
-			base := y0 + 126
-			rl.DrawLine(
-				x0 + 6,
-				base - FRAME_BUDGET_MS * 10,
-				x0 + 6 + PROF_FRAMES * 2,
-				base - FRAME_BUDGET_MS * 10,
-				rl.YELLOW,
-			)
-			for i in 0 ..< PROF_FRAMES {
-				ms := p.frame_ms[(p.head + i) % PROF_FRAMES]
-				h := clamp(i32(ms * 10), 1, 60)
-				rl.DrawRectangle(
-					x0 + 6 + i32(i) * 2,
-					base - h,
-					2,
-					h,
-					ms > FRAME_BUDGET_MS ? rl.RED : rl.GREEN,
-				)
-			}
-		}
-	}
+	prof_overlay(w)
 	quit := w.script.on && script_end(w)
-	rl.EndDrawing()
-
-	when PROFILING {
-		w.prof.frame_ms[w.prof.head] = w.prof.ms[.Update] + w.prof.ms[.Draw]
-		w.prof.head = (w.prof.head + 1) % PROF_FRAMES
-		w.prof.frame_used = w.frame.total_used
+	{
+		prof_zone(w, .Swap)
+		rl.EndDrawing()
 	}
+	prof_frame_end(w)
 
 	return !rl.WindowShouldClose() && !quit
 }
@@ -735,6 +730,7 @@ game_before_reload :: proc(memory: rawptr) {
 @(export)
 game_shutdown :: proc(memory: rawptr) {
 	w := (^World)(memory)
+	prof_trace_stop(w)
 	weather_stop(w)
 	node_stop(w)
 	fonts_unload(w)

@@ -1,16 +1,16 @@
 weather start 1795176000
 plan Bruxelles - Brussel -> Gent hour 3
-  fastest: 48.8 min, 52.379 km, 64.3 km/h, 37.640 kWh net, Extra_Energy, Via Skyway 300, past Aalst
+  fastest: 48.8 min, 52.379 km, 64.3 km/h, 42.590 kWh net, Extra_Energy, Via Skyway 300, past Aalst
     0.000 km Depart: Head north-west / Leave Bruxelles - Brussel and climb / Rue de l'Écuyer - Schildknaapsstraat
     0.953 km Straight: Continue on Skyway 300 / for 50 km / Boulevard Barthélémy - Barthélémylaan
     50.702 km Descend: Descend to the Gent tower / 79 m, smoother air below / Dendermondsesteenweg
     52.379 km Arrive: Dock at Gent / Platform at 73 m / Leie
-  greenest: 79.4 min, 52.379 km, 39.6 km/h, 10.340 kWh net, Lowest_Energy, Via Skyway 300, past Aalst
+  greenest: 79.4 min, 52.379 km, 39.6 km/h, 18.382 kWh net, Lowest_Energy, Via Skyway 300, past Aalst
     0.000 km Depart: Head north-west / Leave Bruxelles - Brussel and climb / Rue de l'Écuyer - Schildknaapsstraat
     0.953 km Straight: Continue on Skyway 300 / for 50 km / Boulevard Barthélémy - Barthélémylaan
     50.702 km Descend: Descend to the Gent tower / 79 m, smoother air below / Dendermondsesteenweg
     52.379 km Arrive: Dock at Gent / Platform at 73 m / Leie
-  calmest: 67.2 min, 52.379 km, 46.8 km/h, 17.040 kWh net, Gust_Index, Via Skyway 300, past Aalst
+  calmest: 67.2 min, 52.379 km, 46.8 km/h, 23.844 kWh net, Gust_Index, Via Skyway 300, past Aalst
     0.000 km Depart: Head north-west / Leave Bruxelles - Brussel and climb / Rue de l'Écuyer - Schildknaapsstraat
     0.953 km Straight: Continue on Skyway 300 / for 50 km / Boulevard Barthélémy - Barthélémylaan
     50.702 km Descend: Descend to the Gent tower / 79 m, smoother air below / Dendermondsesteenweg
@@ -40,17 +40,17 @@ car 21: 126.060 66.560 alt 300 m
 car 22: 126.020 66.470 alt 300 m
 car 23: 125.980 66.380 alt 300 m
 plan Bruxelles - Brussel -> Gent hour 3
-  fastest: 48.7 min, 52.239 km, 64.4 km/h, 37.522 kWh net, Extra_Energy, Via Skyway 300, past Aalst
+  fastest: 48.7 min, 52.239 km, 64.4 km/h, 42.456 kWh net, Extra_Energy, Via Skyway 300, past Aalst
     0.000 km Depart: Head north-west / Leave Bruxelles - Brussel and climb / Rue de l'Écuyer - Schildknaapsstraat
     0.959 km Straight: Continue on Skyway 300 / for 49 km / Boulevard Barthélémy - Barthélémylaan
     50.457 km Descend: Descend to the Gent tower / 79 m, smoother air below / Dendermondsesteenweg
     52.239 km Arrive: Dock at Gent / Platform at 73 m / Leie
-  greenest: 79.1 min, 52.239 km, 39.6 km/h, 10.313 kWh net, Lowest_Energy, Via Skyway 300, past Aalst
+  greenest: 79.1 min, 52.239 km, 39.6 km/h, 18.334 kWh net, Lowest_Energy, Via Skyway 300, past Aalst
     0.000 km Depart: Head north-west / Leave Bruxelles - Brussel and climb / Rue de l'Écuyer - Schildknaapsstraat
     0.959 km Straight: Continue on Skyway 300 / for 49 km / Boulevard Barthélémy - Barthélémylaan
     50.457 km Descend: Descend to the Gent tower / 79 m, smoother air below / Dendermondsesteenweg
     52.239 km Arrive: Dock at Gent / Platform at 73 m / Leie
-  calmest: 67.0 min, 52.239 km, 46.8 km/h, 16.995 kWh net, Gust_Index, Via Skyway 300, past Aalst
+  calmest: 67.0 min, 52.239 km, 46.8 km/h, 23.781 kWh net, Gust_Index, Via Skyway 300, past Aalst
     0.000 km Depart: Head north-west / Leave Bruxelles - Brussel and climb / Rue de l'Écuyer - Schildknaapsstraat
     0.959 km Straight: Continue on Skyway 300 / for 49 km / Boulevard Barthélémy - Barthélémylaan
     50.457 km Descend: Descend to the Gent tower / 79 m, smoother air below / Dendermondsesteenweg

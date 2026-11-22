@@ -101,11 +101,13 @@ tiles_update_draw :: proc(
 			if cache.tiles[slot].mesh.vertexCount > 0 do rl.UnloadMesh(cache.tiles[slot].mesh)
 		}
 		lo_km := [2]f32{f32(best.x), f32(best.y)} * size
+		build_t := prof_begin(w, .Tile_Build)
 		cache.tiles[slot] = {
 			key  = best,
 			mesh = build(w, lo_km, lo_km + size),
 			used = true,
 		}
+		prof_end(w, .Tile_Build, build_t)
 	}
 	tiles_draw(cache, size, reach, material, target, place)
 }

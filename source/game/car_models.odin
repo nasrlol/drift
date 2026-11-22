@@ -22,6 +22,10 @@ Car_Skin :: enum u8 {
 	Hatch,
 	Offroad,
 	Cigarette,
+	Dirigible,
+	Solar_Van,
+	Buggy,
+	Tram,
 }
 CAR_SKIN_NAMES :: [Car_Skin]string {
 	.Concept   = "Concept",
@@ -29,6 +33,10 @@ CAR_SKIN_NAMES :: [Car_Skin]string {
 	.Hatch     = "Hatch",
 	.Offroad   = "4x4",
 	.Cigarette = "Smoke",
+	.Dirigible = "Airship",
+	.Solar_Van = "Solar",
+	.Buggy     = "Rover",
+	.Tram      = "Tram",
 }
 CAR_SKIN_PATH :: "cache/car_skin.txt"
 
@@ -234,6 +242,140 @@ CIGARETTE :: Body_Spec {
 	wheel_r = 0.30,
 }
 
+CAR_BRASS :: [4]u8{204, 166, 74, CLASS_METAL}
+CAR_COPPER :: [4]u8{198, 128, 68, CLASS_METAL}
+CAR_WOOD :: [4]u8{176, 126, 68, CLASS_MATTE}
+CAR_SOLAR :: [4]u8{18, 38, 76, CLASS_GLASS}
+CAR_CANVAS :: [4]u8{236, 228, 206, CLASS_MATTE}
+CAR_CREAM :: [4]u8{238, 232, 214, CLASS_PAINT}
+
+// Solarpunk dirigible: a wheeled wood-and-brass gondola beneath a linen gasbag with twin side nacelles.
+DIRIGIBLE_KEYS :: [?]Body_Key {
+	{1.95, 0.34, 0.72, 0.72, 0.62, 0, .None},
+	{1.80, 0.24, 0.78, 0.84, 0.76, 0.62, .Top},
+	{1.15, 0.24, 0.80, 1.24, 0.78, 0.60, .Side},
+	{-1.15, 0.24, 0.80, 1.24, 0.78, 0.60, .Top},
+	{-1.80, 0.24, 0.78, 0.86, 0.74, 0.56, .None},
+	{-1.95, 0.34, 0.72, 0.72, 0.58, 0, .None},
+}
+DIRIGIBLE_PARTS :: [?]Body_Part {
+	{.Blob, {0, 2.15, 0}, {2.35, 0.72, 0.78}, CAR_CANVAS, false}, // envelope
+	{.Blob, {2.28, 2.15, 0}, {0.16, 0.22, 0.22}, CAR_BRASS, false}, // nose cap
+	{.Cylinder, {0.95, 2.15, 0}, {0.04, 0.67, 0.73}, CAR_BRASS, false}, // hull bands
+	{.Cylinder, {-0.95, 2.15, 0}, {0.04, 0.67, 0.73}, CAR_BRASS, false},
+	{.Box, {-1.95, 2.26, 0}, {0.36, 0.72, 0.03}, {62, 128, 96, CLASS_PAINT}, false}, // vertical fin
+	{.Box, {-1.95, 2.15, 0}, {0.36, 0.03, 0.94}, {62, 128, 96, CLASS_PAINT}, false}, // horizontal fins
+	{.Box, {0.85, 1.46, 0.36}, {0.04, 0.30, 0.04}, CAR_BRASS, true}, // gondola struts
+	{.Box, {-0.85, 1.46, 0.36}, {0.04, 0.30, 0.04}, CAR_BRASS, true},
+	{.Cylinder, {-0.15, 1.38, 0.88}, {0.30, 0.14, 0.14}, CAR_BRASS, true}, // side nacelles
+	{.Blob, {-0.46, 1.38, 0.88}, {0.06, 0.11, 0.11}, {90, 230, 255, CLASS_LIGHT}, true}, // nacelle glow
+	{.Box, {0, 0.54, 0.79}, {1.20, 0.08, 0.02}, CAR_WOOD, true}, // wood rub rail
+	{.Blob, {1.92, 0.62, 0.44}, {0.05, 0.09, 0.09}, CAR_HEAD, true}, // headlamps
+	{.Blob, {-1.92, 0.64, 0.44}, {0.04, 0.08, 0.08}, CAR_TAIL, true}, // tail lights
+}
+DIRIGIBLE :: Body_Spec {
+	r_low   = 0.08,
+	r_belt  = 0.10,
+	r_roof  = 0.12,
+	crown   = 0.02,
+	paint   = {62, 128, 96},
+	wheel_x = {1.30, -1.30},
+	wheel_z = 0.76,
+	wheel_r = 0.32,
+}
+
+// Solarpunk expedition camper van with bamboo trim and a full solar-panel roof array.
+SOLAR_VAN_KEYS :: [?]Body_Key {
+	{2.24, 0.30, 0.78, 0.78, 0.74, 0, .None},
+	{2.10, 0.22, 0.92, 0.96, 0.90, 0.76, .Top},
+	{1.45, 0.22, 0.96, 1.62, 0.92, 0.78, .Side},
+	{-1.85, 0.22, 0.98, 1.66, 0.92, 0.78, .Top},
+	{-2.16, 0.24, 0.96, 1.56, 0.88, 0.74, .None},
+	{-2.24, 0.32, 0.90, 0.90, 0.80, 0, .None},
+}
+SOLAR_VAN_PARTS :: [?]Body_Part {
+	{.Box, {0.42, 1.71, 0}, {0.68, 0.03, 0.66}, CAR_SOLAR, false}, // front solar panel
+	{.Box, {-1.02, 1.71, 0}, {0.68, 0.03, 0.66}, CAR_SOLAR, false}, // rear solar panel
+	{.Box, {-0.30, 1.69, 0.71}, {1.48, 0.04, 0.03}, CAR_CHROME, true}, // roof rack rails
+	{.Box, {0, 0.56, 0.92}, {1.50, 0.09, 0.02}, CAR_WOOD, true}, // bamboo side trim
+	{.Box, {2.21, 0.52, 0}, {0.04, 0.10, 0.52}, CAR_TRIM, false}, // front grille
+	{.Blob, {2.14, 0.76, 0.62}, {0.10, 0.06, 0.13}, CAR_HEAD, true}, // headlamps
+	{.Blob, {1.48, 1.62, 0.52}, {0.05, 0.04, 0.07}, CAR_AMBER, true}, // roof markers
+	{.Box, {-2.18, 0.78, 0.68}, {0.04, 0.14, 0.09}, CAR_TAIL, true}, // tail lights
+	{.Box, {-2.20, 0.30, 0}, {0.06, 0.07, 0.74}, CAR_TRIM, false}, // rear bumper
+	{.Blob, {1.20, 1.06, 0.94}, {0.08, 0.06, 0.09}, PAINT, true}, // mirrors
+}
+SOLAR_VAN :: Body_Spec {
+	r_low   = 0.07,
+	r_belt  = 0.12,
+	r_roof  = 0.14,
+	crown   = 0.03,
+	paint   = {46, 118, 92},
+	wheel_x = {1.38, -1.38},
+	wheel_z = 0.82,
+	wheel_r = 0.35,
+}
+
+// Solarpunk botanical rover: open-wheel buggy with a glass greenhouse bubble and copper roll cage.
+BUGGY_KEYS :: [?]Body_Key {
+	{2.28, 0.42, 0.68, 0.68, 0.58, 0, .None},
+	{2.05, 0.36, 0.80, 0.80, 0.74, 0, .None},
+	{1.15, 0.36, 0.90, 0.90, 0.78, 0, .None},
+	{-1.25, 0.36, 0.94, 0.94, 0.78, 0, .None},
+	{-2.05, 0.38, 0.92, 0.92, 0.70, 0, .None},
+	{-2.20, 0.44, 0.84, 0.84, 0.58, 0, .None},
+}
+BUGGY_PARTS :: [?]Body_Part {
+	{.Blob, {0.05, 1.02, 0}, {1.02, 0.50, 0.66}, CAR_GLASS, false}, // greenhouse canopy
+	{.Cylinder, {0.05, 1.42, 0.48}, {0.80, 0.035, 0.035}, CAR_COPPER, true}, // copper cage rails
+	{.Box, {0.72, 1.15, 0.48}, {0.04, 0.29, 0.04}, CAR_COPPER, true}, // front pillars
+	{.Box, {-0.75, 1.15, 0.48}, {0.04, 0.29, 0.04}, CAR_COPPER, true}, // rear pillars
+	{.Box, {-1.45, 1.02, 0}, {0.46, 0.12, 0.58}, CAR_SOLAR, false}, // rear solar deck
+	{.Box, {2.30, 0.50, 0}, {0.06, 0.06, 0.62}, CAR_COPPER, false}, // front bullbar
+	{.Blob, {2.14, 0.76, 0.48}, {0.07, 0.09, 0.09}, CAR_HEAD, true}, // headlamps
+	{.Blob, {-2.16, 0.78, 0.46}, {0.05, 0.07, 0.07}, CAR_TAIL, true}, // tail lights
+	{.Box, {0, 0.44, 0.82}, {0.72, 0.04, 0.05}, CAR_TRIM, true}, // side rock sliders
+}
+BUGGY :: Body_Spec {
+	r_low   = 0.06,
+	r_belt  = 0.12,
+	r_roof  = 0.08,
+	crown   = 0.02,
+	paint   = {218, 158, 38},
+	wheel_x = {1.44, -1.40},
+	wheel_z = 0.86,
+	wheel_r = 0.40,
+}
+
+// Solarpunk garden tram: symmetrical rounded transit pod with panoramic glass, cream roof and brass trim.
+TRAM_KEYS :: [?]Body_Key {
+	{2.26, 0.28, 0.80, 0.80, 0.72, 0, .None},
+	{2.10, 0.20, 0.90, 0.96, 0.86, 0.74, .Top},
+	{1.65, 0.20, 0.92, 1.56, 0.88, 0.74, .Side},
+	{-1.65, 0.20, 0.92, 1.56, 0.88, 0.74, .Top},
+	{-2.10, 0.20, 0.90, 0.96, 0.86, 0.74, .None},
+	{-2.26, 0.28, 0.80, 0.80, 0.72, 0, .None},
+}
+TRAM_PARTS :: [?]Body_Part {
+	{.Box, {0, 1.60, 0}, {1.50, 0.04, 0.64}, CAR_CREAM, false}, // cream roof cap
+	{.Box, {0, 1.72, 0}, {0.42, 0.08, 0.36}, CAR_BRASS, false}, // pantograph base
+	{.Box, {0, 1.84, 0}, {0.10, 0.03, 0.62}, CAR_BRASS, false}, // collector bow
+	{.Box, {0, 0.88, 0.88}, {1.80, 0.03, 0.02}, CAR_BRASS, true}, // brass belt trim
+	{.Blob, {2.22, 0.64, 0.44}, {0.05, 0.10, 0.10}, CAR_HEAD, true}, // headlamps
+	{.Blob, {-2.22, 0.64, 0.44}, {0.05, 0.10, 0.10}, CAR_TAIL, true}, // tail lights
+	{.Blob, {2.22, 0.64, 0}, {0.04, 0.07, 0.07}, CAR_AMBER, false}, // center lamp
+}
+TRAM :: Body_Spec {
+	r_low   = 0.08,
+	r_belt  = 0.10,
+	r_roof  = 0.14,
+	crown   = 0.03,
+	paint   = {38, 132, 98},
+	wheel_x = {1.36, -1.36},
+	wheel_z = 0.76,
+	wheel_r = 0.33,
+}
+
 // Vertex data while a body is built, in the scratch arena.
 Car_Builder :: struct {
 	pos: [dynamic][3]f32,
@@ -269,6 +411,26 @@ car_skins_build :: proc(w: ^World, tmp: mem.Allocator) {
 			parts := CIG_PARTS
 			spec = CIGARETTE
 			spec.parts = parts[:]
+			a.skins[skin] = car_body_upload(w, &spec, tmp)
+		case .Dirigible:
+			keys, parts := DIRIGIBLE_KEYS, DIRIGIBLE_PARTS
+			spec = DIRIGIBLE
+			spec.keys, spec.parts = keys[:], parts[:]
+			a.skins[skin] = car_body_upload(w, &spec, tmp)
+		case .Solar_Van:
+			keys, parts := SOLAR_VAN_KEYS, SOLAR_VAN_PARTS
+			spec = SOLAR_VAN
+			spec.keys, spec.parts = keys[:], parts[:]
+			a.skins[skin] = car_body_upload(w, &spec, tmp)
+		case .Buggy:
+			keys, parts := BUGGY_KEYS, BUGGY_PARTS
+			spec = BUGGY
+			spec.keys, spec.parts = keys[:], parts[:]
+			a.skins[skin] = car_body_upload(w, &spec, tmp)
+		case .Tram:
+			keys, parts := TRAM_KEYS, TRAM_PARTS
+			spec = TRAM
+			spec.keys, spec.parts = keys[:], parts[:]
 			a.skins[skin] = car_body_upload(w, &spec, tmp)
 		}
 	}

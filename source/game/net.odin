@@ -242,6 +242,7 @@ hourly_values :: proc(
 // game_init loads SNAPSHOT_PATH, headless mode its --snapshot file.
 // A missing or bad snapshot leaves w.weather as it was (zero at startup: calm, fetch now) and returns false.
 weather_load_snapshot :: proc(w: ^World, path: string) -> bool {
+	prof_zone(w, .Weather_Load)
 	f := &w.fetch
 	defer virtual.arena_free_all(&f.mem)
 	data, err := os.read_entire_file(path, virtual.arena_allocator(&f.mem))

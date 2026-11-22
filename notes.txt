@@ -197,7 +197,9 @@ license (SIL OFL 1.1) next to it. Raw downloads in assets/raw/fonts (not in git)
     icons of ui.odin ICON_CODEPOINTS), file MaterialSymbolsRounded-Filled.ttf, 12756 bytes, sha256 f6fc79a3...
     1ed1f092fc5e (full f6fc79a366be9647afa5f24e0a624388430573edc1ffccbea1277ed1f092fc5e). The full font is 3.7 MB,
     over the 1 MB check. The subset keeps the legacy codepoints for a few icons (schedule 0xe8b5, location_on
-    0xe0c8, warning 0xe002), see ICON_CODEPOINTS. Tower and Logo are drawn with shapes, they are not icons.
+    0xe0c8, warning 0xe002), see ICON_CODEPOINTS. Tower, Logo and Steer are drawn with shapes, they are not
+    icons. Steer (the self-fly button) was the stadia_controller gamepad glyph until 2026-11-22 (nasr: a real
+    steering wheel); that glyph is still in the subset but unused.
 
 CODE LAYOUT
 source/game/      package game, all game code, builds as build/game.so (debug) or into the exe (release)
@@ -293,18 +295,30 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   gust_report (260 m zone 700 m ahead + reroute), nav_autopilot -> Controls.
   nav_ui.odin     (Lars) route strips, time bubbles, start ring + destination pin, banner + Then, road sign,
                   pill under the ship (layer, or the road name while driving), warning pill, sheet,
-                  carpool_draw_partner.
+                  carpool_draw_partner. View tab toggle "Rerouting banner" (View_Edit.reroute_banner, default on,
+                  nasr 2026-11-22): off, a reroute shows the next maneuver at once; "no safe route" still shows.
   pilot_ui.odin   (Dario) button column, speed circle with the battery circle (charge ring) under it, Re-centre, self-fly + Exit / Done.
                   No sound button (speech is NOT DOING).
   plan_ui.odin    (Andrei) plan panel (cards A and B, hub search, departure list, route rows, wind note,
                   Preview / Start; without a route they toast what is missing and shake the empty from / to field red,
                   plan_nudge), hub menu on the map, map buttons, layers panel, layers_draw_ground.
+                  Hub search (match_hub): case- and accent-insensitive, UTF-8 U+00C0..U+00FF fold to their base
+                  letter (LATIN1_BASE), so "Liege" finds "Li\xc3\xa8ge" (UTF-8 bytes). Route rows show "+X.X kWh solar" (sum.solar_kwh)
+                  in pal.green. The Greenest route is drawn in pal.green_route / green_route_casing (nav_draw_routes).
+                  Solar layer: pal.sun wash where clear and the sun is up ((1 - cloud) x sun_factor x
+                  SOLAR_SUN_ALPHA), black shade under the clouds (cloud x SOLAR_SHADE_ALPHA), the stronger wins.
   labels.odin     (nasr) river names and motorway shields: places picked once along the lines (labels_build),
                   projected and culled against each other and the hub names every frame.
   road.odin       (Lars, simulation, no raylib) the airship as a flying car on the road graph (#67, #68 B):
                   road_try_land (descending at the lowest flying height within ROAD_LAND_KM = 1 km of a road; the
                   Brussels tower is 660 m from the nearest graph road), road_step (edge + km along it, one-way
                   respected, turn input picks the edge at a junction, climb takes off), road_nearest_edge, road_at.
+                  road_nearest_edge (#95) searches w.road_index: the road segments per ROAD_CELL_KM (= ROAD_LAND_KM)
+                  cell, each in every cell its box touches, edge + first point index (no pointers, valid after a hot
+                  reload), ~1.5 MB in w.perm, built once in game_hot_reloaded (and on first use in bench / tests).
+                  Ties keep the lowest edge, then point, and the km along is summed in the old order, so it returns
+                  exactly what the old scan of all 151k points did (checked: 200k random points, radius 1 and 5 km,
+                  0 differences). Bench ship_step 13 us -> 0.22 us.
                   Transition (Lars, 2026-11-21): landing slides onto the road and turns to it over ROAD_ALIGN_S 2.5 s
                   while sinking ROAD_DESCENT_MS 4 m/s (ship.landing, road_landing_step); take-off climbs at least
                   ROAD_LIFT_MS 10 m/s to the lowest flying height (ship.lifting). On the road ROAD_MAX_SPEED 35 m/s
@@ -533,12 +547,30 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                     2 reachable" every 5 min. Killed mid-append the store file can end in a partial
                     message: the next start moves it to messages.log.bad and starts empty, peers resend.
                   The same format is used by headless --snapshot, test/data and bench. Logs go to stderr.
-  debug.odin      tools for finding bugs. Profiler: prof_begin() / prof_end(w, block, tick) store the last ms of
-                  Update, Draw, Route, Weather_Load in w.prof, compiled out in release (PROFILING =
-                  DRIFT_DEBUG || DRIFT_PROFILE). Overlay drawn in game_update, F3 toggles: frame ms with
-                  update / draw split, worst of the last 120 frames, route and weather load ms, perm / route
-                  arena used / reserved, frame arena use, 120 frame graph (yellow line = 4 ms budget, red bars
-                  over it). Frame ms excludes EndDrawing (vsync wait) and the overlay itself.
+  debug.odin      tools for finding bugs. Profiler, compiled out in release (PROFILING = DRIFT_DEBUG || DRIFT_PROFILE):
+                  prof_zone(w, .Zone) as the first line of a scope times the rest of it (deferred prof_end);
+                  prof_begin / prof_end for a span that is not a scope (Update, Draw, Sim_Steps, Tile_Build).
+                  Zones (Prof_Zone, 47) nest: per frame calls, incl ms and excl ms (children taken out), kept for
+                  the last 120 frames in w.prof rings, plus last_ms per zone (route, weather load). Zones sit in
+                  game and render code only; simulation code is timed at its call sites (route in nav.odin and
+                  headless), and the per-step procs the bench times (ship_step, road_nearest_edge, *_at) have none:
+                  two clock reads (~40 ns) would double them. Times are CPU time; GPU work lands in Swap.
+                  Update = game_update up to BeginDrawing (camera included), Draw = up to the overlay, Swap =
+                  EndDrawing (buffer swap, GPU and the vsync wait).
+                  Overlay (prof_overlay, F3 or the layers panel row): last frame, p50 / p99 / worst of 120 and
+                  frames over the 4 ms budget, swap ms, real frame time and fps (time between prof_frame_end
+                  calls), last route / weather load, perm / route arena, frame arena peak, a stacked graph
+                  (update green, draw blue, swap grey, 4 px per ms, yellow line = budget, red mark = over budget,
+                  white cap = cut off) and the 14 zones with the most own time (calls, self, total, max).
+                  Spall trace: F4 starts / stops drift.spall in the working directory (open it at
+                  gravitymoth.com/spall). Buffer PROF_TRACE_BYTES = 64 KB from the perm arena, flushed when full.
+                  The first frame logs "[prof] first frame done N ms after game_init started" with the ms of every
+                  zone so far (start-up: Init, Load_Map, Buildings_Build, Airship_Build, Font_Load, ...).
+                  Measured (profile build, Apple M2 Asahi, 2026-11-22): first frame 171-245 ms after game_init
+                  (Buildings_Build 51, Airship_Build 20-22, Map_Mesh_Build 19-34, Globe 15-23); street view near the
+                  tower: Post 2.8-3.4 ms, Collide_Car 19 calls 2.4-3.6 ms, Trees_Draw 2 calls 0.6-0.9 ms, Swap 7-9
+                  ms; plan screen: Ground_Layers 1.6 ms, Ui_Text 100 calls 0.9 ms, Ui_Shadow 7 calls 0.6 ms, Swap
+                  11 ms (the fps cap waits by spinning).
                   Headless: ./build/drift --headless --snapshot <file> --inputs <file> runs without a window,
                   prints the result to stdout (deterministic text, no timings) and timings / errors to stderr,
                   exit code 0 or 1. game_headless (exported, called by host and release main) reads the inputs,
@@ -568,11 +600,14 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   screenshots. Every frame is exactly SIM_DT and steps the simulation once (frame_time(w)), keys
                   and the street view's mouse look come only from the script (key_down / key_pressed /
                   mouse_delta / mouse_wheel in input.odin, real input is ignored), no weather fetch, no network
-                  node, weather from "snapshot <file>" or the embedded fallback, the cursor is not locked, 60 fps
+                  node, weather from "snapshot <file>" or the embedded fallback, the cursor is not locked, vsync
                   like the game (unlimited fps tore the window and looked like flicker). Commands: ship <frame> <x km> <y km> <height m>
                   <heading deg>, down / up / press <frame> <raylib key name>, mouse <frame> <dx> <dy>,
                   wheel <frame> <notches>, shot <frame> <png> (LoadImageFromScreen + ExportImage after the frame
-                  is drawn: TakeScreenshot drops the directory), quit <frame>. frame_ms <ms> ... repeats uneven frame
+                  is drawn: TakeScreenshot drops the directory), quit <frame>, profile <from> <to> <prefix> (from >= 1, debug and profile builds: a spall trace
+                  in <prefix>.spall and the mean per frame of every zone in <prefix>.csv, columns zone,
+                  calls_per_frame, incl_ms_per_frame, excl_ms_per_frame, peak_ms as docs/performance/data, plus a
+                  [prof] log line with update + draw mean, worst and frames over budget). frame_ms <ms> ... repeats uneven frame
                   times instead of SIM_DT (a frame then steps 0, 1 or 2 times, as on a real screen). flicker <from>
                   <to> <max %> counts the pixels that jump away and back between three frames (A-B-A, > 60 summed
                   over r, g, b) and logs FAILED above max %. Only meaningful with sub-pixel motion (mouse 0.05 per
@@ -647,12 +682,74 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   default, N or the speaker button (plan map buttons, navigation
                   button column; music_button) turns it on and off, saved in cache/music.txt. Silent when there is no audio device. Notes and levels are
                   ours.
-  tune.odin       (nasr) speed editor: F2 opens sliders for top speed, map acceleration / brake / turn rate by
-                  hand, street view thrust and the throttle build-up. The ship reads w.tune (Tune in World), whose
-                  defaults are the constants (SHIP_MAX_SPEED, SHIP_HAND_*, SHIP_MAX_TURN_RATE, FREE_ACCEL,
-                  CRUISE_RATE), so untouched it changes nothing. Reset to defaults, nothing is saved (a restart is
-                  the default again). The autopilot keeps SHIP_ACCEL / SHIP_BRAKE / SHIP_MAX_TURN_RATE. A value
-                  changed during a recorded run makes the replay differ.
+  settings.odin   (nasr) settings panel: F2 opens one panel with tabs (ui_segment) Speed, Borders, Clouds, Colors,
+                  Fonts, Corners, each with its own Reset, plus Bake into build. Debug builds only (nasr
+                  2026-11-22: the release runs with the project's settings, no panel). The code defaults are the
+                  design's values, so with an empty assets/settings.txt the game draws exactly as before (checked
+                  pixel for pixel with --script). Rows are ui_slider_row / ui_slider (ui.odin).
+                  Stored in three layers (settings_store.odin), each on top of the one before: 1 the code
+                  (tune_defaults, border_edit_defaults, cloud_edit_defaults, look_defaults, they stay the design's
+                  values: nasr, a bake does not change them), 2 assets/settings.txt, embedded with #load in every
+                  build, what the release, headless runs and tests use (settings_init in game_init, into
+                  World.setting_defaults: Reset and the sliders' default marks), 3 cache/settings.txt, this
+                  machine's own: loaded on the panel's first frame (debug builds, never headless or --script),
+                  saved after every change once the mouse button is up (hash compare, one write per change). Bake
+                  writes everything that differs from the code into assets/settings.txt (from the repo root) and
+                  makes the current values the defaults, so the local file empties; commit the file to ship it.
+                  Format: "group.field = value" per value that differs from the layers under it, in field order;
+                  enumerated arrays "group.field.entry"; groups speed (Tune), borders (Border_Edit), clouds
+                  (Cloud_Edit), colors (Palette), look (Look without palette). Keys from core:reflect, so new fields
+                  are stored without more code. f32, bool, enum by name, rl.Color #RRGGBB / #RRGGBBAA. A bad line
+                  is logged and skipped. A baked speed value changes hand-driven test results (drive.txt): those
+                  expected files need the owner's approval.
+                  Speed (tune.odin, w.tune): top speed, map acceleration / brake / turn rate by hand, street view
+                  thrust, throttle build-up; the ship reads w.tune, defaults SHIP_MAX_SPEED, SHIP_HAND_*,
+                  SHIP_MAX_TURN_RATE, FREE_ACCEL, CRUISE_RATE. The autopilot keeps SHIP_ACCEL / SHIP_BRAKE /
+                  SHIP_MAX_TURN_RATE. A value changed during a recorded run makes the replay differ.
+                  Time on the map (map_time, MAP_TIME_SCALE 4, 1 .. MAP_TIME_MAX 10): at real speed the car crept
+                  over the map (nasr 2026-11-22: "really slow and sluggish"), so while driving on the map the whole
+                  simulation steps that many times per real second (game_update adds frame time x map_time_scale
+                  to the accumulator). Speed, wind, battery per km, arrival times stay consistent, the clock runs
+                  faster too. Plan screen and street view are real time; the switch eases over MAP_TIME_EASE_S
+                  (World.map_time_now). Not by zoom: the map takes over from the street view at ZOOM_MAX.
+                  Headless runs and tests step directly and do not change.
+                  Borders (border_edit.odin, w.border_edit): a switch and a width (0 .. 8 px) per Border_Set:
+                  Belgium_Land (belgium.bin Border segments, solid), Belgium_Sea (the same, dashed by border_at_sea),
+                  Countries and Coastlines (world.bin, World_Line_Kind 1 and 0, one globe line mesh each:
+                  Globe_GPU.lines[kind]), plus the sea border's dash and gap. Each row shows the source, the segment
+                  count and whether the Borders layer hides it: it hides Belgium's border only, the world.bin
+                  countries (Belgium's outline among them, ~1 km off the OSM one) and coastlines stay. Defaults
+                  BORDER_DEFAULT_PX (picked in the panel, nasr 2026-11-22: land 0.8, sea 0.3, countries 0.6,
+                  coastlines 0 px) and LINE_DASH_*_PX. LINE_VS takes dash_width for dashed segments instead of
+                  their widths entry (0 in every pass but the fill pass of map_lines).
+                  Clouds (cloud_edit.odin, w.cloud_edit): on / off, cover (x the forecast, drawn clouds only), size,
+                  spacing (cell km), lowest / highest altitude, opacity, shadow, drift (x the wind), the zoom range
+                  they fade in over, and the solar layer's ground shade and sunlight (SOLAR_SHADE_ALPHA,
+                  SOLAR_SUN_ALPHA, plan_ui.odin).
+                  clouds_draw reads w.cloud_edit; defaults the CLOUD_* constants. cloud_at, the routes and the
+                  solar energy never change.
+                  Colors (w.look.palette): every Palette entry as a swatch (core:reflect over the fields, so a new
+                  entry shows up by itself), the chosen one with R, G, B sliders, changed ones with an accent dot.
+                  settings_apply copies it into w.palette every frame instead of PALETTE and rebuilds the land use
+                  mesh when its colors changed (Line_Meshes.area_colors, its colors are baked per vertex). Meshes
+                  built once elsewhere (street view) take new colors on their next build.
+                  Themes (themes.odin): a row above the swatches applies a whole palette (Theme, theme_palette); the
+                  one the palette matches is shown chosen. Design = PALETTE. Handmade (nasr 2026-11-22) = the colors
+                  of Casey Muratori's Emacs on Handmade Hero (#161616, burlywood3, DarkGoldenrod3, olive drab,
+                  gray50, cursor #40FF40, midnight blue), spread over the palette's roles by us; it is opt-in, the
+                  game stays light by default (Lars: light mode only). For the themes the speed and battery circles
+                  (pilot_ui), the route bubbles (nav_ui) and the globe's seas (new palette entry ocean, same value as
+                  the old literal) take palette colors instead of literals equal to them, so the default is pixel
+                  identical. Other literals (rl.WHITE on colored buttons and pins, the logo) stay.
+                  Fonts (w.look.text_scale, w.look.family): text size x 0.7 .. 1.6 in steps of 0.05 (the font
+                  atlases are dropped and remade at each step, text_px in ui_text / ui_text_size), and per design
+                  family (Figtree headings, Roboto body, Roboto Mono numbers) the family drawn in its place, the
+                  closest weight of it (font_remap in font_get; italic only exists in Figtree). The positions in the
+                  panels stay the design's, so big text can overflow them. The map's water labels are remapped but
+                  not scaled (they call font_get themselves).
+                  Corners (w.look.radius_scale): one scale 0 .. 2.5 for every corner of round_rect /
+                  round_rect_lines (which now take w). A square drawn fully round stays a circle (round buttons
+                  are circles with a round_rect shadow).
   presence.odin   (author andrei) other cars on the map, peer-to-peer (Lars: "geen relay service, gossiping"): every
                   PRESENCE_S 2 s the game signs its position (Presence, 136 bytes, ed25519 identity) and the node swaps
                   the fresh positions it knows with up to 8 recently synced peers (op 'Q'), so they spread over several
@@ -665,7 +762,8 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   cars on its own way (road, or the same layer) and shows the Jam warning. Our values.
   buildings.odin  3D buildings (Lars: "ik wil 3d gebouwen"): assets/buildings.bin.gz (tools/bake_buildings, see
                   BUILDINGS DATA), one mesh per city of walls + flat roof lit from the north-west, roof / wall colors
-                  from the palette. Heights 1.6x real and lowered towards the edge of the 1 km circle. Cities beyond
+                  from the palette. Solarpunk roofs (ours): by a hash of the building (roof_alpha, vertexColor.a)
+                  30 % pal.solar_roof, 25 % pal.green_roof, the rest pal.roof; towns.odin's houses the same. Heights 1.6x real and lowered towards the edge of the 1 km circle. Cities beyond
                   6 km + the view are skipped. A city mesh holds its points relative to the city origin.
                   Fade by screen size: buildings smaller than a pixel sparkled while zooming (zoom 4 and 5: 0.09 % of
                   the pixels flickered A-B-A in --script). The vertex shader measures the narrowest generated
@@ -885,7 +983,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   the two node centres.
                   Energy model (spec), in route.odin, also for the ship and the metrics: BATTERY_KWH 180,
                   BATTERY_START 0.86 (a ship leaves with 154.8 kWh), power_kw(v, g) = 3 + 0.0085 v^3 + 6 g,
-                  solar_kw(c) = 9 x 0.75 x (1 - 0.78 c) (6.75 kW clear, 1.49 kW overcast), climb_kwh(m) =
+                  solar_kw(c, sun) = 9 x 0.75 x (1 - 0.78 c) x sun (6.75 kW clear with the sun overhead, 1.49 kW
+                  overcast). sun = sun_factor(w, hour): sine of the sun's elevation over Belgium's centre
+                  (BELGIUM_LAT0 / BELGIUM_LON0) at weather.start + hour x 3600, 0 at night (nasr, 2026-11-22: a flat
+                  film; Almanac low-precision sun position in f64). 20 Nov 12 UTC 0.33, June noon 0.89. route() keeps
+                  it in grid.sun for the hour, evaluate / ship / road use the same hour. climb_kwh(m) =
                   0.12 kWh per 100 m up, 0.04 per 100 m down (a 250 m layer change: 0.30 / 0.10 kWh).
                   P(11, 0) = 14.3 kW is above the strongest sun, so greenest edges never cost less than zero.
                   Calm and clear at 11 m/s: 0.19 kWh per km, overcast 0.32.
@@ -964,6 +1066,11 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   regions) leaves an empty scan, and one that fails during A* holds every node it searched.
                   Valid until the next route call. The renderer only reads it, the router does no extra work
                   beyond one store per expanded node. The state dump prints expanded_len.
+                  The animation (render.odin scan_build / scan_draw): after each plan, and when the line meshes
+                  are rebuilt on hot reload, expanded is baked into one static mesh, 6 vertices per node in
+                  expansion order. Each frame draws the first shown nodes in one DrawMesh call (a copy of the
+                  mesh with a smaller vertexCount), color and fade through the material's diffuse color. The
+                  mesh keeps the scan of the plan, so a reroute's route call does not change the animation.
                   Blocked nodes (spec): highest ground in the cell + 75 m above the layer, the outer ring of
                   cells, or a no-fly zone below its ceiling. w.no_fly: [8]No_Fly_Zone (centre km, radius km,
                   ceiling m), radius 0 = unused slot, zero = no zones. A zone blocks every cell it overlaps,
@@ -1061,6 +1168,11 @@ source/host/      debug host: loads build/game.so (game.dll on Windows), checks 
                   refuses a reload if World changed (restart needed). Calls game_before_reload on the old
                   library right before unloading it (stops the weather thread). Run from the repo root.
 source/release/   release main: calls the game package directly, one static exe
+                  Both export NvOptimusEnablement and AmdPowerXpressRequestHighPerformance = 1 on Windows (#89 A,
+                  #94): hybrid laptops start the game on the discrete GPU (RTX 4060 frame 1.5 ms vs 5.6 ms on the
+                  780M). The drivers read them from the exe, not from game.dll.
+                  Window (game_init_window): VSYNC_HINT, no SetTargetFPS (#90 A, #99): frames follow the display
+                  refresh, the ship is drawn between pose_prev and the last fixed step, so any rate is smooth.
 
 World memory
   World is bootstrapped inside its own perm arena (virtual memory), so it survives reloads.
@@ -1152,6 +1264,9 @@ Draw order (game.odin, nasr keeps the list; the design's "Tekenvolgorde")
   5 routes (Lars)  6 airship shadow + airship (Dario)  7 labels (nasr), bubbles, road sign, pill (Lars)
   8 screen UI: Plan -> plan_ui (Andrei); Navigate -> nav_ui (Lars) + pilot_ui (Dario); layers panel (Andrei);
     toasts last (nasr)
+  The hillshade and layers_draw_ground are drawn without the depth test: as one big quad and a coarse grid on
+  z = 0 they round to slightly different depths than the land use triangles under them and lost in horizontal
+  strips that moved while zooming (zoom 2 to 3, cloudy.snap). Order alone puts them over the fills.
 Fonts and icons (nasr, #64): Figtree, Roboto Mono and Material Symbols Rounded are allowed. Each goes in assets/
   with its license file next to it, embedded like Roboto (#47). Pin the release, record URL, date and sha256 here.
 

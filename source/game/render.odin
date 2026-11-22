@@ -2,6 +2,7 @@
 package game
 
 import rl "vendor:raylib"
+import rlgl "vendor:raylib/rlgl"
 
 WIND_PARTICLES :: 900
 WIND_LIFE_S :: 3.0
@@ -10,6 +11,9 @@ WIND_PX_PER_MS :: 4.0
 WIND_TRAIL_S :: 0.8 // trail length = the distance covered in this time
 WIND_WIDTH_PX :: 2.0
 WIND_CALM_MS :: 0.5 // slower particles are not drawn
+// Plan screen 40 % opacity in the design, raised: Lars wants the wind clearer (2026-11-21).
+WIND_OPACITY_PLAN :: 0.75
+WIND_OPACITY_NAV :: 0.9
 // Random spawn points tried per particle until one lies in Belgium. In a view that is half abroad, 1 in 256
 // particles misses and waits a frame.
 WIND_SPAWN_TRIES :: 8
@@ -34,125 +38,137 @@ wind_rand :: proc(p: ^Wind_Particles) -> f32 {
 // weg"). World keeps a copy of PALETTE, refreshed every frame: a pointer into this library's constants would
 // dangle after a hot reload.
 Palette :: struct {
-	surface:          rl.Color, // panels, cards, buttons
-	surface_2:        rl.Color, // input fields, hover
-	surface_3:        rl.Color, // toggle off
-	text:             rl.Color, // main text
-	text_2:           rl.Color, // secondary text, icons
-	line:             rl.Color, // borders, dividers
-	accent:           rl.Color, // chosen chip, Start, links
-	accent_strong:    rl.Color, // chosen route bubble, chosen row
-	green:            rl.Color, // Greenest time, leaf, energy
-	banner:           rl.Color, // instruction banner
-	banner_2:         rl.Color, // "Then" tab
-	red:              rl.Color, // Exit, destination pin
-	warning:          rl.Color, // warning pill, gust icon
-	reroute:          rl.Color, // banner while rerouting
-	arrived:          rl.Color, // banner on arrival
-	sheet:            rl.Color, // navigation bottom sheet
-	chip:             rl.Color, // stat chips in the sheet
-	bubble:           rl.Color, // road sign on the map
-	bubble_text:      rl.Color, // road sign text
-	pill:             rl.Color, // road pill under the ship
+	surface:            rl.Color, // panels, cards, buttons
+	surface_2:          rl.Color, // input fields, hover
+	surface_3:          rl.Color, // toggle off
+	text:               rl.Color, // main text
+	text_2:             rl.Color, // secondary text, icons
+	line:               rl.Color, // borders, dividers
+	accent:             rl.Color, // chosen chip, Start, links
+	accent_strong:      rl.Color, // chosen route bubble, chosen row
+	green:              rl.Color, // Greenest time, leaf, energy
+	banner:             rl.Color, // instruction banner
+	banner_2:           rl.Color, // "Then" tab
+	red:                rl.Color, // Exit, destination pin
+	warning:            rl.Color, // warning pill, gust icon
+	reroute:            rl.Color, // banner while rerouting
+	arrived:            rl.Color, // banner on arrival
+	sheet:              rl.Color, // navigation bottom sheet
+	chip:               rl.Color, // stat chips in the sheet
+	bubble:             rl.Color, // road sign on the map
+	bubble_text:        rl.Color, // road sign text
+	pill:               rl.Color, // road pill under the ship
 	// map (design "Kaart" table)
-	land:             rl.Color,
-	city:             rl.Color,
-	park:             rl.Color,
-	farmland:         rl.Color,
-	marsh:            rl.Color,
-	beach:            rl.Color,
-	water:            rl.Color,
-	roof:             rl.Color,
-	wall:             rl.Color,
-	tree:             rl.Color, // tree clumps in the parks and woods (nature.odin), our color
-	motorway:         rl.Color,
-	motorway_casing:  rl.Color,
-	main_road:        rl.Color,
-	main_road_casing: rl.Color,
-	street:           rl.Color,
-	street_casing:    rl.Color,
-	track:            rl.Color,
-	track_casing:     rl.Color,
-	route:            rl.Color,
-	route_casing:     rl.Color,
-	alt_route:        rl.Color,
-	alt_route_casing: rl.Color,
-	sky:              rl.Color,
-	horizon:          rl.Color,
+	land:               rl.Color,
+	city:               rl.Color,
+	park:               rl.Color,
+	farmland:           rl.Color,
+	marsh:              rl.Color,
+	beach:              rl.Color,
+	water:              rl.Color,
+	ocean:              rl.Color, // the globe's seas beyond the map
+	roof:               rl.Color,
+	solar_roof:         rl.Color, // flat roofs with solar panels (buildings.odin)
+	green_roof:         rl.Color, // flat roofs with plants (buildings.odin)
+	wall:               rl.Color,
+	tree:               rl.Color, // tree clumps in the parks and woods (nature.odin), our color
+	motorway:           rl.Color,
+	motorway_casing:    rl.Color,
+	main_road:          rl.Color,
+	main_road_casing:   rl.Color,
+	street:             rl.Color,
+	street_casing:      rl.Color,
+	track:              rl.Color,
+	track_casing:       rl.Color,
+	route:              rl.Color,
+	route_casing:       rl.Color,
+	alt_route:          rl.Color,
+	alt_route_casing:   rl.Color,
+	green_route:        rl.Color, // the route in Greenest mode
+	green_route_casing: rl.Color,
+	sun:                rl.Color, // solar layer, sunlit ground
+	sky:                rl.Color,
+	horizon:            rl.Color,
 	// labels and markers (design "Labels en markers")
-	area_label:       rl.Color,
-	water_label:      rl.Color,
-	label_halo:       rl.Color,
-	shield:           rl.Color,
-	shield_border:    rl.Color,
-	shield_text:      rl.Color,
-	hub:              rl.Color,
+	area_label:         rl.Color,
+	water_label:        rl.Color,
+	label_halo:         rl.Color,
+	shield:             rl.Color,
+	shield_border:      rl.Color,
+	shield_text:        rl.Color,
+	hub:                rl.Color,
 	// wind trails by speed (design "Windsporen"): below 6 m/s, to 10, to 14, above
-	wind_calm:        rl.Color,
-	wind_mint:        rl.Color,
-	wind_yellow:      rl.Color,
-	wind_coral:       rl.Color,
+	wind_calm:          rl.Color,
+	wind_mint:          rl.Color,
+	wind_yellow:        rl.Color,
+	wind_coral:         rl.Color,
 }
 
 // Road colors come from the map table in docs/drift-design.pdf: main road = trunk + primary, street =
 // secondary + tertiary, the casing color (the white fill would vanish on the background while lines are 1 px
 // without casings).
 PALETTE :: Palette {
-	surface          = {255, 255, 255, 255},
-	surface_2        = {241, 243, 244, 255},
-	surface_3        = {232, 234, 237, 255},
-	text             = {32, 33, 36, 255},
-	text_2           = {95, 99, 104, 255},
-	line             = {218, 220, 224, 255},
-	accent           = {26, 115, 232, 255},
-	accent_strong    = {26, 115, 232, 255},
-	green            = {24, 128, 56, 255},
-	banner           = {15, 107, 95, 255},
-	banner_2         = {11, 90, 80, 255},
-	red              = {229, 65, 59, 255},
-	warning          = {249, 171, 0, 255},
-	reroute          = {60, 64, 67, 255},
-	arrived          = {19, 115, 51, 255},
-	sheet            = {255, 255, 255, 255},
-	chip             = {241, 243, 244, 255},
-	bubble           = {255, 255, 255, 255},
-	bubble_text      = {32, 33, 36, 255},
-	pill             = {26, 115, 232, 255},
-	land             = {239, 236, 229, 255},
-	city             = {231, 227, 219, 255},
-	park             = {200, 232, 196, 255},
-	farmland         = {238, 241, 217, 255},
-	marsh            = {211, 236, 220, 255},
-	beach            = {246, 237, 207, 255},
-	water            = {159, 212, 246, 255},
-	roof             = {244, 241, 236, 255},
-	wall             = {216, 211, 203, 255},
-	tree             = {118, 178, 106, 255},
-	motorway         = {253, 217, 130, 255},
-	motorway_casing  = {226, 180, 82, 255},
-	main_road        = {255, 255, 255, 255},
-	main_road_casing = {211, 206, 197, 255},
-	street           = {255, 255, 255, 255},
-	street_casing    = {219, 214, 206, 255},
-	track            = {251, 250, 247, 255},
-	track_casing     = {227, 223, 215, 255},
-	route            = {26, 115, 232, 255},
-	route_casing     = {20, 86, 181, 255},
-	alt_route        = {159, 189, 236, 255},
-	alt_route_casing = {117, 151, 212, 255},
-	sky              = {188, 220, 242, 255},
-	horizon          = {230, 239, 242, 255},
-	area_label       = {60, 64, 67, 255},
-	water_label      = {58, 110, 170, 255},
-	label_halo       = {255, 255, 255, 255},
-	shield           = {255, 255, 255, 255},
-	shield_border    = {154, 160, 166, 255},
-	shield_text      = {32, 33, 36, 255},
-	hub              = {47, 125, 109, 255},
-	wind_calm        = {95, 99, 104, 255},
-	wind_mint        = {24, 160, 120, 255},
-	wind_yellow      = {214, 160, 0, 255},
-	wind_coral       = {226, 90, 70, 255},
+	surface            = {255, 255, 255, 255},
+	surface_2          = {241, 243, 244, 255},
+	surface_3          = {232, 234, 237, 255},
+	text               = {32, 33, 36, 255},
+	text_2             = {95, 99, 104, 255},
+	line               = {218, 220, 224, 255},
+	accent             = {26, 115, 232, 255},
+	accent_strong      = {26, 115, 232, 255},
+	green              = {24, 128, 56, 255},
+	banner             = {15, 107, 95, 255},
+	banner_2           = {11, 90, 80, 255},
+	red                = {229, 65, 59, 255},
+	warning            = {249, 171, 0, 255},
+	reroute            = {60, 64, 67, 255},
+	arrived            = {19, 115, 51, 255},
+	sheet              = {255, 255, 255, 255},
+	chip               = {241, 243, 244, 255},
+	bubble             = {255, 255, 255, 255},
+	bubble_text        = {32, 33, 36, 255},
+	pill               = {26, 115, 232, 255},
+	land               = {239, 236, 229, 255},
+	city               = {231, 227, 219, 255},
+	park               = {200, 232, 196, 255},
+	farmland           = {238, 241, 217, 255},
+	marsh              = {211, 236, 220, 255},
+	beach              = {246, 237, 207, 255},
+	water              = {159, 212, 246, 255},
+	ocean              = {185, 212, 236, 255},
+	roof               = {244, 241, 236, 255},
+	solar_roof         = {58, 82, 124, 255},
+	green_roof         = {168, 206, 140, 255},
+	wall               = {216, 211, 203, 255},
+	tree               = {118, 178, 106, 255},
+	motorway           = {253, 217, 130, 255},
+	motorway_casing    = {226, 180, 82, 255},
+	main_road          = {255, 255, 255, 255},
+	main_road_casing   = {211, 206, 197, 255},
+	street             = {255, 255, 255, 255},
+	street_casing      = {219, 214, 206, 255},
+	track              = {251, 250, 247, 255},
+	track_casing       = {227, 223, 215, 255},
+	route              = {26, 115, 232, 255},
+	route_casing       = {20, 86, 181, 255},
+	alt_route          = {159, 189, 236, 255},
+	alt_route_casing   = {117, 151, 212, 255},
+	green_route        = {30, 142, 62, 255},
+	green_route_casing = {19, 99, 42, 255},
+	sun                = {255, 190, 50, 255},
+	sky                = {188, 220, 242, 255},
+	horizon            = {230, 239, 242, 255},
+	area_label         = {60, 64, 67, 255},
+	water_label        = {58, 110, 170, 255},
+	label_halo         = {255, 255, 255, 255},
+	shield             = {255, 255, 255, 255},
+	shield_border      = {154, 160, 166, 255},
+	shield_text        = {32, 33, 36, 255},
+	hub                = {47, 125, 109, 255},
+	wind_calm          = {95, 99, 104, 255},
+	wind_mint          = {24, 160, 120, 255},
+	wind_yellow        = {214, 160, 0, 255},
+	wind_coral         = {226, 90, 70, 255},
 }
 
 // The palette, refreshed at the start of every frame (game_update).
@@ -187,14 +203,24 @@ Line_Meshes :: struct {
 	loc_fog_c:       i32,
 	loc_fog_r:       i32,
 	loc_bias:        i32,
+	loc_dash_width:  i32,
+	loc_dash_on:     i32,
+	loc_dash_off:    i32,
+	// belgium.bin border segments on land (solid) and round the territorial sea (dashed), for the border editor
+	border_land:     int,
+	border_sea:      int,
 	// ground layers (plan_ui layers_draw_ground): a vertex colored grid over the map
 	ground:          rl.Mesh,
 	ground_material: rl.Material,
 	// land use (draw order 1): the baked area triangles, vertex colors from the palette
 	areas:           rl.Mesh,
+	area_colors:     [Area_Kind]rl.Color, // the colors areas was built with (settings_apply rebuilds it)
 	// hillshade (terrain map type): one quad over the map with the baked shading as a texture
 	hill:            rl.Mesh,
 	hill_material:   rl.Material,
+	// A* scan animation: one square per node of the last route search (grid.expanded), revealed by draw count
+	scan:            rl.Mesh,
+	scan_material:   rl.Material,
 	built:           bool,
 }
 
@@ -226,7 +252,8 @@ WIND_VERTICES :: WIND_PARTICLES * 6
 // 0 is dropped. vertexColor.r is the index into colors and widths, vertexColor.a scales the alpha. Far away
 // lines fade into the horizon color (fog_color, fog over the clip w range fog_range). vertexColor.g 255 draws
 // the segment dashed (LINE_DASH_ON_PX / LINE_DASH_OFF_PX on screen): vertexTexCoord is then the distance along
-// its line in km at A and at B, turned into screen pixels with the segment's own scale.
+// its line in km at A and at B, turned into screen pixels with the segment's own scale. A dashed segment takes
+// dash_width instead of its widths entry (only the sea border is dashed), so it can be sized and hidden on its own.
 LINE_DASH_ON_PX :: 7
 LINE_DASH_OFF_PX :: 5
 LINE_VS :: `#version 330
@@ -241,6 +268,7 @@ uniform float widths[11];
 uniform vec3 fog_color;
 uniform vec2 fog_range;
 uniform float depth_bias;
+uniform float dash_width;
 out vec4 fragColor;
 noperspective out float along_px;
 flat out int dashed;
@@ -249,7 +277,7 @@ const float SIDE[6] = float[6](-1.0, -1.0, 1.0, -1.0, 1.0, 1.0);
 void main() {
 	int k = gl_VertexID % 6;
 	int ci = int(vertexColor.r * 255.0 + 0.5);
-	float width = widths[ci];
+	float width = vertexColor.g > 0.5 ? dash_width : widths[ci];
 	vec4 a = mvp * vec4(vertexPosition, 1.0);
 	vec4 b = mvp * vec4(vertexNormal, 1.0);
 	if (a.w < 0.001 || b.w < 0.001 || width <= 0.0) {
@@ -341,9 +369,23 @@ line_meshes_unload :: proc(lm: ^Line_Meshes) {
 	rl.UnloadMesh(lm.ground)
 	if lm.areas.vertexCount > 0 do rl.UnloadMesh(lm.areas)
 	if lm.hill.vertexCount > 0 do rl.UnloadMesh(lm.hill)
+	if lm.scan.vertexCount > 0 do rl.UnloadMesh(lm.scan)
+	rl.UnloadMaterial(lm.scan_material)
 	rl.UnloadMaterial(lm.ground_material)
 	rl.UnloadMaterial(lm.material)
 	lm^ = {}
+}
+
+// The palette color of each land use kind, baked into the areas mesh.
+area_colors :: proc(pal: ^Palette) -> [Area_Kind]rl.Color {
+	return {
+		.City = pal.city,
+		.Park = pal.park,
+		.Farmland = pal.farmland,
+		.Marsh = pal.marsh,
+		.Beach = pal.beach,
+		.Water = pal.water,
+	}
 }
 
 // Land use (draw order 1): one static mesh of the baked area triangles, built once. Each triangle is turned to
@@ -353,15 +395,8 @@ areas_build :: proc(w: ^World, lm: ^Line_Meshes) {
 	if len(pts) == 0 do return
 	pos := make([][3]f32, len(pts), context.temp_allocator)
 	col := make([]rl.Color, len(pts), context.temp_allocator)
-	pal := palette(w)
-	colors := [Area_Kind]rl.Color {
-		.City     = pal.city,
-		.Park     = pal.park,
-		.Farmland = pal.farmland,
-		.Marsh    = pal.marsh,
-		.Beach    = pal.beach,
-		.Water    = pal.water,
-	}
+	colors := area_colors(palette(w))
+	lm.area_colors = colors
 	for a in w.m.areas {
 		tri := pts[a.start:][:a.count]
 		c := colors[Area_Kind(a.kind)]
@@ -384,7 +419,47 @@ areas_build :: proc(w: ^World, lm: ^Line_Meshes) {
 	lm.areas.vertices, lm.areas.colors = nil, nil
 }
 
+// Bakes the nodes the last route search expanded, in expansion order, into lm.scan. Called after each plan and
+// when the line meshes are rebuilt (hot reload), so the animation only changes its draw count per frame.
+scan_build :: proc(w: ^World) {
+	lm := &w.line_meshes
+	if !lm.built do return
+	if lm.scan.vertexCount > 0 do rl.UnloadMesh(lm.scan)
+	lm.scan = {}
+	g := &w.grid
+	if g.expanded_len == 0 do return
+	pos := make([][3]f32, int(g.expanded_len) * 6, context.temp_allocator)
+	for n, i in g.expanded[:g.expanded_len] {
+		cell := grid_cell(n)
+		x, y := f32(cell.x) * GRID_CELL_KM, f32(cell.y) * GRID_CELL_KM
+		a, b := [3]f32{x + 0.1, y + 0.1, 0}, [3]f32{x + 0.1, y + 0.9, 0}
+		c, d := [3]f32{x + 0.9, y + 0.9, 0}, [3]f32{x + 0.9, y + 0.1, 0}
+		pos[i * 6 + 0], pos[i * 6 + 1], pos[i * 6 + 2] = a, b, c
+		pos[i * 6 + 3], pos[i * 6 + 4], pos[i * 6 + 5] = a, c, d
+	}
+	lm.scan = rl.Mesh {
+		vertexCount   = i32(len(pos)),
+		triangleCount = i32(len(pos) / 3),
+		vertices      = ([^]f32)(raw_data(pos)),
+	}
+	rl.UploadMesh(&lm.scan, false)
+	lm.scan.vertices = nil
+}
+
+// The first shown nodes of lm.scan in one draw call. raylib draws a mesh without indices as vertexCount
+// vertices from the start, so a copy with a smaller count reveals the squares in expansion order.
+scan_draw :: proc(w: ^World, shown: int, c: rl.Color) {
+	lm := &w.line_meshes
+	if lm.scan.vertexCount == 0 || shown <= 0 do return
+	m := lm.scan
+	m.vertexCount = i32(min(shown * 6, int(lm.scan.vertexCount)))
+	m.triangleCount = m.vertexCount / 3
+	lm.scan_material.maps[int(rl.MaterialMapIndex.ALBEDO)].color = c
+	rl.DrawMesh(m, lm.scan_material, rl.Matrix(1))
+}
+
 areas_draw :: proc(w: ^World) {
+	prof_zone(w, .Areas)
 	lm := &w.line_meshes
 	if lm.areas.vertexCount == 0 do return
 	rl.DrawMesh(lm.areas, lm.ground_material, rl.Matrix(1))
@@ -434,8 +509,14 @@ hill_build :: proc(w: ^World, lm: ^Line_Meshes) {
 	rl.SetMaterialTexture(&lm.hill_material, .ALBEDO, tex)
 }
 
+// Without the depth test: the one big quad and the small area triangles under it round the same z = 0 to
+// slightly different depths, so the quad lost in horizontal strips that moved while zooming. Only the globe
+// (below the plane) and the areas are drawn before it, everything that goes on top is drawn after it.
 hill_draw :: proc(w: ^World) {
+	prof_zone(w, .Hill)
 	lm := &w.line_meshes
 	if lm.hill.vertexCount == 0 || !w.plan.layers.terrain do return
+	rlgl.DisableDepthTest()
 	rl.DrawMesh(lm.hill, lm.hill_material, rl.Matrix(1))
+	rlgl.EnableDepthTest()
 }
