@@ -330,6 +330,12 @@ source/game/      package game, all game code, builds as build/game.so (debug) o
                   cell + forecast hour filter, then four router runs for the detour), carpool_split (passenger:
                   seats / (seats + 1) of the shared leg + the whole detour), carpool_reputation (one review per
                   side of an accepted trip), carpool_frame (live position once a second, partner on the map).
+                  UI + persistence (nasr/carpool): carpool_request_make, carpool_accept_make, carpool_post
+                  (Store.outbox drained to disk on node_sync_thread via store_flush_outbox, zero frame IO),
+                  carpool_offer_depart (OFFER_NOW_GRACE_S 600 s boarding window), carpool_incoming_requests,
+                  carpool_poll_trip (verifies acc.author == offer.author), and Card B scroll section in plan_ui.odin
+                  plus carpool_nav_ui (accept incoming requests while navigating with click or Y; SYNC_S 5 s) and
+                  passenger ride mode (Start disabled while waiting, Board ride follows driver's car, Abort / Bksp).
   globe.odin      (nasr) 3D Earth globe backdrop around Belgium: #load embeds assets/world.bin (968 KB,
                   Natural Earth 50m land mask 2048x1024 1-bit + 1815 coastline/border lines + 1127 world
                   cities, baked by tools/bake_world after tools/download_world.sh). Sphere radius 6371 km

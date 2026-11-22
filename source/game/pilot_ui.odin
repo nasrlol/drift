@@ -127,24 +127,34 @@ pilot_ui :: proc(w: ^World) {
 
 	// Self-fly and Exit (Done on arrival) in the sheet, right.
 	{
-		exit_text := n.banner == .Arrived && n.active ? "Done" : "Exit"
+		passenger := carpool_is_passenger(w)
+		exit_text := passenger ? "Plan" : n.banner == .Arrived && n.active ? "Done" : "Exit"
 		ew := ui_text_size(w, exit_text, .Figtree_500, 21).x + 60
 		exit := rl.Rectangle{sheet.x + sheet.width - 24 - ew, sheet.y + 26, ew, 66}
 		if ui_pill_button(w, exit, exit_text, .Danger) do pilot_exit(w)
-		fly := rl.Rectangle{exit.x - 14 - SELF_FLY_BUTTON, exit.y, SELF_FLY_BUTTON, SELF_FLY_BUTTON}
-		id, hot, fired := ui_widget(w, fly)
-		c := [2]f32{fly.x + fly.width / 2, fly.y + fly.height / 2}
-		on := n.manual || !n.active
-		bg := on ? pal.accent : pal.surface_2
-		rl.DrawCircleV(c, SELF_FLY_BUTTON / 2, hot && !on ? rl.ColorBrightness(bg, 0.1) : bg)
-		ui_icon(w, .Steer, c, 32, on ? pal.sheet : pal.accent)
-		ui_focus_ring(w, id, fly, SELF_FLY_BUTTON / 2)
-		if fired && n.active do nav_set_manual(w, !n.manual)
-		// The flying state over the button, above the sheet: Manual in accent, Autopilot in the dark pill.
-		state := on ? "Manual" : "Autopilot"
-		size := ui_text_size(w, state, .Figtree_600, BUTTON_LABEL_PX)
-		pill_bg, pill_fg := on ? pal.accent : pal.pill, on ? pal.sheet : rl.WHITE
-		button_label(w, state, c.x + (size.x + 20) / 2, sheet.y - 12 - (size.y + 10) / 2, pill_bg, pill_fg)
+		if !passenger {
+			fly := rl.Rectangle{exit.x - 14 - SELF_FLY_BUTTON, exit.y, SELF_FLY_BUTTON, SELF_FLY_BUTTON}
+			id, hot, fired := ui_widget(w, fly)
+			c := [2]f32{fly.x + fly.width / 2, fly.y + fly.height / 2}
+			on := n.manual || !n.active
+			bg := on ? pal.accent : pal.surface_2
+			rl.DrawCircleV(c, SELF_FLY_BUTTON / 2, hot && !on ? rl.ColorBrightness(bg, 0.1) : bg)
+			ui_icon(w, .Steer, c, 32, on ? pal.sheet : pal.accent)
+			ui_focus_ring(w, id, fly, SELF_FLY_BUTTON / 2)
+			if fired && n.active do nav_set_manual(w, !n.manual)
+			// The flying state over the button, above the sheet: Manual in accent, Autopilot in the dark pill.
+			state := on ? "Manual" : "Autopilot"
+			size := ui_text_size(w, state, .Figtree_600, BUTTON_LABEL_PX)
+			pill_bg, pill_fg := on ? pal.accent : pal.pill, on ? pal.sheet : rl.WHITE
+			button_label(
+				w,
+				state,
+				c.x + (size.x + 20) / 2,
+				sheet.y - 12 - (size.y + 10) / 2,
+				pill_bg,
+				pill_fg,
+			)
+		}
 	}
 
 }

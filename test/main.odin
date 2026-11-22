@@ -319,6 +319,54 @@ run_carpool :: proc() -> bool {
 	stars, count := game.carpool_reputation(w, a)
 	if count != 1 || stars != 4 do return fail("reputation of A: %v stars from %d reviews, want 4 from 1", stars, count)
 	if _, cb := game.carpool_reputation(w, b); cb != 0 do return fail("B has %d reviews, want 0", cb)
+	if mt.author != a do return fail("match author mismatch")
+
+	// Live handshake & outbox: A posts an offer with carpool_offer_depart(0), B sends Request,
+	// C tries to spoof an Accept (must be rejected), then A sends real Accept and B's poll starts the trip.
+	be(w, 1)
+	live_depart := game.carpool_offer_depart(w, 0)
+	live_offer, ok2 := game.carpool_offer_make(w, 6, 12, .Greenest, live_depart, 1)
+	if !ok2 || game.carpool_post(w, &live_offer) != .Added do return fail("live offer post failed")
+	if w.store.outbox_count != 1 do return fail("outbox_count = %d, want 1", w.store.outbox_count)
+	live_offer_id := game.msg_id(&live_offer)
+
+	be(w, 2)
+	live_req, rok := game.carpool_request_make(w, live_offer_id, 5, 12, 1)
+	if !rok || game.carpool_post(w, &live_req) != .Added do return fail("live request post failed")
+	pending_id := game.msg_id(&live_req)
+	pass_priv := w.trip.own_x25519
+
+	be(w, 1)
+	reqs: [4]game.Message
+	if rn := game.carpool_incoming_requests(w, live_offer_id, reqs[:]); rn != 1 {
+		return fail("incoming requests = %d, want 1", rn)
+	}
+
+	be(w, 3)
+	spoof_acc, sok := game.carpool_accept_make(w, &live_req)
+	if !sok || game.carpool_post(w, &spoof_acc) != .Added do return fail("spoof accept post failed")
+
+	be(w, 2)
+	w.trip = {
+		own_x25519 = pass_priv,
+	}
+	if game.carpool_poll_trip(w, &pending_id) do return fail("spoofed accept from C started trip")
+
+	be(w, 1)
+	real_acc, aok := game.carpool_accept_make(w, &live_req)
+	if !aok || game.carpool_post(w, &real_acc) != .Added do return fail("real accept post failed")
+
+	be(w, 2)
+	w.trip = {
+		own_x25519 = pass_priv,
+	}
+	partner_pub, trip_acc: [32]u8
+	if !game.carpool_poll_trip(w, &pending_id, &partner_pub, &trip_acc) {
+		return fail("real accept did not start trip")
+	}
+	if !w.trip.active || partner_pub != a || pending_id != {} {
+		return fail("trip state wrong after poll")
+	}
 	return true
 }
 

@@ -584,17 +584,21 @@ key_short :: proc(k: [32]u8) -> (v: u64) {
 STORE_PATH :: "cache/messages.log"
 STORE_MAX :: 4096
 STORE_PER_AUTHOR :: 64
+OUTBOX_MAX :: 16
 MSG_KEEP_S :: 30 * 24 * 3600 // requests, accepts and reviews; an offer is useless after its depart time
 MSG_FUTURE_S :: 3600 // allowed clock difference; a time far ahead would outlive every expiry
 
 Store :: struct {
-	lock:      sync.Mutex,
-	file_lock: sync.Mutex, // both network threads append; taken before lock, never after
-	count:     int,
-	ids:       [STORE_MAX][32]u8,
-	msgs:      [STORE_MAX]Message,
-	file_ok:   bool, // the file was read whole (or did not exist), appending to it is safe
-	file_msgs: int, // messages in the file, dropped ones included; rewritten at 2 x STORE_MAX
+	lock:         sync.Mutex,
+	file_lock:    sync.Mutex, // both network threads append; taken before lock, never after
+	count:        int,
+	ids:          [STORE_MAX][32]u8,
+	msgs:         [STORE_MAX]Message,
+	offer_gen:    int, // bumped whenever an Offer is added, so the UI only re-matches when needed
+	outbox:       [OUTBOX_MAX]Message, // frame-thread posts queued for the sync thread to append
+	outbox_count: int,
+	file_ok:      bool, // the file was read whole (or did not exist), appending to it is safe
+	file_msgs:    int, // messages in the file, dropped ones included; rewritten at 2 x STORE_MAX
 }
 
 Store_Add :: enum u8 {
@@ -650,7 +654,37 @@ store_add :: proc(s: ^Store, m: ^Message, now: i64) -> Store_Add {
 	s.ids[s.count] = id
 	s.msgs[s.count] = m^
 	s.count += 1
+	if m.kind == .Offer do s.offer_gen += 1
 	return .Added
+}
+
+// Frame-loop entry point: adds m to memory and queues it for the sync thread to append to disk.
+store_post :: proc(s: ^Store, m: ^Message, now: i64) -> Store_Add {
+	res := store_add(s, m, now)
+	if res != .Added do return res
+	sync.mutex_lock(&s.lock)
+	defer sync.mutex_unlock(&s.lock)
+	if s.outbox_count < OUTBOX_MAX {
+		s.outbox[s.outbox_count] = m^
+		s.outbox_count += 1
+	}
+	return res
+}
+
+// Drains frame-loop posts to disk. Network thread only (uses store_append).
+store_flush_outbox :: proc(s: ^Store, path: string) {
+	msgs: [OUTBOX_MAX]Message
+	n := 0
+	{
+		sync.mutex_lock(&s.lock)
+		defer sync.mutex_unlock(&s.lock)
+		n = s.outbox_count
+		if n > 0 {
+			copy(msgs[:n], s.outbox[:n])
+			s.outbox_count = 0
+		}
+	}
+	for i in 0 ..< n do store_append(s, path, &msgs[i])
 }
 
 // Caller holds s.lock.
@@ -785,7 +819,7 @@ NODE_MAGIC :: 0x504e5244 // "DRNP"
 NODE_VERSION :: 2 // 2: messages are 208 bytes
 NET_TIMEOUT_MS :: 5000
 SERVE_MAX_MS :: 30_000 // one connection, so a slow peer cannot keep serve busy
-SYNC_S :: 30
+SYNC_S :: 5
 SYNC_FULL_S :: 3600 // ask for all ids this often, the rest of the time only the recent ones
 SYNC_MARGIN_S :: 600 // messages can arrive a while after their time
 SYNC_BATCH :: 64
@@ -1144,7 +1178,9 @@ node_sync_thread :: proc(t: ^thread.Thread) {
 
 	live_next: i64
 	presence_next: i64
+	defer store_flush_outbox(&w.store, STORE_PATH)
 	for !sync.atomic_load(&n.stop) {
+		store_flush_outbox(&w.store, STORE_PATH)
 		now := time.time_to_unix(time.now())
 		if now >= live_next {
 			node_live(w)

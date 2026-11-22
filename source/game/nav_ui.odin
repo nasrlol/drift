@@ -451,6 +451,16 @@ nav_ui :: proc(w: ^World) {
 			20,
 			pal.text_2,
 		)
+	} else if carpool_is_passenger(w) {
+		ui_text(w, {x, sheet.y + 28}, "Passenger ride", .Figtree_600, 38, pal.green)
+		ui_text(
+			w,
+			{x, sheet.y + 72},
+			"Following driver, Backspace or Abort to leave",
+			.Roboto_400,
+			20,
+			pal.text_2,
+		)
 	} else {
 		ui_text(w, {x, sheet.y + 28}, "Free flight", .Figtree_600, 38, pal.text)
 		ui_text(w, {x, sheet.y + 72}, "No route, fly with W A S D, R and F", .Roboto_400, 20, pal.text_2)

@@ -186,7 +186,7 @@ presence_frame :: proc(w: ^World, dt: f32) {
 	t := &n.presence
 	w.others_copied_s += dt
 	w.presence_send_s += dt
-	if w.screen == .Navigate && w.presence_send_s >= PRESENCE_S {
+	if w.screen == .Navigate && !carpool_is_passenger(w) && w.presence_send_s >= PRESENCE_S {
 		w.presence_send_s = 0
 		s := &w.ship
 		p := Presence {

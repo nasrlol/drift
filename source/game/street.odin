@@ -1714,8 +1714,17 @@ street_cars :: proc(w: ^World, mat: ^rl.Material) {
 	st := &w.street
 	look := street_look(w)
 	car := street_ship_pos(w)
-	car_draw_street(w, car, w.car_anim, rl.WHITE, look, w.car_skin, mat)
+	car_draw_street(
+		w,
+		car,
+		w.car_anim,
+		rl.WHITE,
+		look,
+		carpool_is_passenger(w) ? w.plan.partner_skin : w.car_skin,
+		mat,
+	)
 	for o in w.others[:w.other_count] {
+		if carpool_is_passenger(w) && o.author == w.plan.partner_pub do continue
 		p := others_draw_pos(w, o)
 		d := (p - st.origin) * 1000
 		if linalg.length(d - car.xz) > STREET_REACH_KM * 1000 do continue

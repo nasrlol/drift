@@ -2,6 +2,7 @@
 package game
 
 import "core:math"
+import "core:math/linalg"
 import "core:sync"
 import "core:time"
 
@@ -14,9 +15,11 @@ import "core:time"
 // plan screen shows, so a passenger compares like with like.
 VERIFY_TOLERANCE :: 0.01 // relative: the router is deterministic, this only absorbs float differences between CPUs
 MAX_MATCHES :: 16
+OFFER_NOW_GRACE_S :: 10 * 60 // boarding window so "Leave now" offers do not expire at creation
 
 Match :: struct {
 	offer:         [32]u8, // message id
+	author:        [32]u8, // driver's public key
 	from_hub:      int, // the driver's hubs
 	to_hub:        int,
 	depart:        i64,
@@ -43,6 +46,14 @@ carpool_leg :: proc(w: ^World, from, to: int, mode: Route_Mode, hour: int) -> (k
 	airspeeds := MODE_AIRSPEED
 	sum := evaluate(w, path, airspeeds[mode], hour, times, dist)
 	return sum.net_kwh, sum.km, true
+}
+
+// Departure unix timestamp for an offer at forecast hour, always at least OFFER_NOW_GRACE_S in the future
+// so "Leave now" (hour 0) or a cached/fallback weather snapshot does not expire immediately.
+carpool_offer_depart :: proc(w: ^World, hour: int) -> i64 {
+	now := time.time_to_unix(time.now())
+	if hour == 0 do return now + OFFER_NOW_GRACE_S
+	return max(i64(w.weather.start) + i64(hour) * 3600, now + OFFER_NOW_GRACE_S)
 }
 
 // A signed offer for seats on this user's trip. The energy is recomputed with the current snapshot, whose
@@ -157,6 +168,7 @@ carpool_match :: proc(w: ^World, from, to, hour, seats: int, out: []Match) -> in
 		if !ok1 || !ok2 || !ok3 do continue
 		mt := Match {
 			offer       = msg_id(&m),
+			author      = m.author,
 			from_hub    = a,
 			to_hub      = b,
 			depart      = i64(o.depart),
@@ -260,4 +272,205 @@ carpool_frame :: proc(w: ^World, dt: f32) {
 		w.partner = {f32(pos.x), f32(pos.y), f32(pos.alt)}
 		w.partner_seen = true
 	}
+}
+
+// Signed request for seats on offer_id, generating a fresh x25519 keypair in w.trip.
+// Caller must ensure no trip is active and no other request is pending (trip_keypair resets w.trip).
+carpool_request_make :: proc(w: ^World, offer_id: [32]u8, from, to, seats: int) -> (m: Message, ok: bool) {
+	if seats < 1 || seats > MSG_MAX_SEATS || from == to do return
+	if from < 0 || from >= w.m.hub_count || to < 0 || to >= w.m.hub_count do return
+	pub := trip_keypair(w)
+	m.kind = .Request
+	m.time = i64le(time.time_to_unix(time.now()))
+	m.request = {
+		offer    = offer_id,
+		from_hub = u16le(from),
+		to_hub   = u16le(to),
+		seats    = u8(seats),
+		x25519   = pub,
+	}
+	ok = msg_sign(w, &m)
+	return
+}
+
+// Signed accept answering a passenger's request, generating the driver's x25519 half in w.trip.
+carpool_accept_make :: proc(w: ^World, req: ^Message) -> (m: Message, ok: bool) {
+	if req.kind != .Request do return
+	pub := trip_keypair(w)
+	m.kind = .Accept
+	m.time = i64le(time.time_to_unix(time.now()))
+	m.accept = {
+		offer   = req.request.offer,
+		request = msg_id(req),
+		x25519  = pub,
+	}
+	ok = msg_sign(w, &m)
+	return
+}
+
+// Posts a locally signed message into memory and queues it for the sync thread to write to disk.
+// Never locks w.store.lock before calling store_post (store_add acquires s.lock itself).
+carpool_post :: proc(w: ^World, m: ^Message) -> Store_Add {
+	return store_post(&w.store, m, time.time_to_unix(time.now()))
+}
+
+carpool_find_message :: proc(w: ^World, id: [32]u8) -> (m: Message, ok: bool) {
+	s := &w.store
+	sync.mutex_lock(&s.lock)
+	defer sync.mutex_unlock(&s.lock)
+	for i in 0 ..< s.count {
+		if s.ids[i] == id do return s.msgs[i], true
+	}
+	return {}, false
+}
+
+carpool_offer_gen :: proc(w: ^World) -> int {
+	s := &w.store
+	sync.mutex_lock(&s.lock)
+	defer sync.mutex_unlock(&s.lock)
+	return s.offer_gen
+}
+
+// Unanswered valid requests targeting offer_id.
+carpool_incoming_requests :: proc(w: ^World, offer_id: [32]u8, out: []Message) -> int {
+	if offer_id == {} || len(out) == 0 do return 0
+	offer, offer_ok := carpool_find_message(w, offer_id)
+	if !offer_ok || offer.kind != .Offer do return 0
+	s := &w.store
+	sync.mutex_lock(&s.lock)
+	defer sync.mutex_unlock(&s.lock)
+	n := 0
+	for i in 0 ..< s.count {
+		m := &s.msgs[i]
+		if m.kind != .Request || m.author == w.identity_pub do continue
+		if m.request.offer != offer_id do continue
+		if int(m.request.seats) < 1 || int(m.request.seats) > int(offer.offer.seats) do continue
+		fh, th := int(m.request.from_hub), int(m.request.to_hub)
+		if fh >= w.m.hub_count || th >= w.m.hub_count || fh == th do continue
+		req_id := s.ids[i]
+		answered := false
+		for j in 0 ..< s.count {
+			a := &s.msgs[j]
+			if a.kind == .Accept && a.accept.request == req_id && a.author == w.identity_pub {
+				answered = true
+				break
+			}
+		}
+		if answered do continue
+		out[n] = m^
+		n += 1
+		if n == len(out) do break
+	}
+	return n
+}
+
+carpool_is_passenger :: proc(w: ^World) -> bool {
+	return w.trip.active && !w.trip.driver
+}
+
+carpool_partner_target :: proc(
+	w: ^World,
+) -> (
+	pos: [2]f32,
+	alt, heading, speed: f32,
+	on_road: bool,
+	skin: Car_Skin,
+	ok: bool,
+) {
+	for o in w.others[:w.other_count] {
+		if o.author != w.plan.partner_pub do continue
+		return others_draw_pos(w, o), o.alt, o.heading, o.speed, o.on_road, o.skin, true
+	}
+	if w.partner_seen {
+		return w.partner.xy, w.partner.z, w.ship.heading, 0, false, w.plan.partner_skin, true
+	}
+	return {}, 0, 0, 0, false, w.plan.partner_skin, false
+}
+
+carpool_board :: proc(w: ^World) {
+	nav_stop(w)
+	w.screen = .Navigate
+	w.plan.layers_open = false
+	if pos, alt, heading, speed, on_road, skin, ok := carpool_partner_target(w); ok {
+		w.ship.pos = pos
+		w.ship.pos_frac = {}
+		w.ship.alt = alt
+		w.ship.heading = heading
+		w.ship.speed = speed
+		w.ship.on_road = on_road
+		w.plan.partner_skin = skin
+	}
+	cam_chase(w)
+}
+
+carpool_abort :: proc(w: ^World) {
+	trip_end(w)
+	w.partner_seen = false
+	w.plan.partner_pub = {}
+	w.plan.trip_accept = {}
+	w.plan.request_id = {}
+	w.plan.partner_skin = .Concept
+	if w.screen == .Navigate do pilot_exit(w)
+}
+
+carpool_passenger_step :: proc(w: ^World, dt: f32) {
+	pos, alt, heading, speed, on_road, skin, ok := carpool_partner_target(w)
+	if !ok do return
+	s := &w.ship
+	w.plan.partner_skin = skin
+	if linalg.length(pos - s.pos) > 1.0 {
+		s.pos = pos
+		s.alt = alt
+		s.heading = heading
+	} else {
+		k := min(dt * 8, 1)
+		s.pos += (pos - s.pos) * k
+		s.alt += (alt - s.alt) * k
+		diff := math.mod(heading - s.heading + 3 * math.PI, math.TAU) - math.PI
+		s.heading = math.mod(s.heading + diff * k + math.TAU, math.TAU)
+	}
+	s.pos_frac = {}
+	s.speed = speed
+	s.on_road = on_road
+	s.landing, s.lifting, s.docked = false, false, false
+	s.warnings = {}
+	s.turn_rate = 0
+}
+
+// Starts the passenger's encrypted live trip when an Accept from the offer's author arrives.
+carpool_poll_trip :: proc(
+	w: ^World,
+	pending_req: ^[32]u8,
+	partner_out: ^[32]u8 = nil,
+	accept_out: ^[32]u8 = nil,
+) -> bool {
+	if w.trip.active || pending_req^ == {} do return false
+	req, req_ok := carpool_find_message(w, pending_req^)
+	if !req_ok || req.kind != .Request do return false
+	offer, offer_ok := carpool_find_message(w, req.request.offer)
+	if !offer_ok || offer.kind != .Offer do return false
+	acc: Message
+	found := false
+	{
+		s := &w.store
+		sync.mutex_lock(&s.lock)
+		defer sync.mutex_unlock(&s.lock)
+		for i in 0 ..< s.count {
+			m := &s.msgs[i]
+			if m.kind != .Accept do continue
+			if m.accept.request == pending_req^ &&
+			   m.accept.offer == req.request.offer &&
+			   m.author == offer.author {
+				acc = m^
+				found = true
+				break
+			}
+		}
+	}
+	if !found do return false
+	if !trip_start(w, &req, &acc, false) do return false
+	if partner_out != nil do partner_out^ = offer.author
+	if accept_out != nil do accept_out^ = msg_id(&acc)
+	pending_req^ = {}
+	return true
 }

@@ -490,7 +490,7 @@ airship_draw :: proc(w: ^World) {
 		an,
 		CAR_PX,
 		rl.WHITE,
-		w.car_skin,
+		carpool_is_passenger(w) ? w.plan.partner_skin : w.car_skin,
 	)
 }
 
@@ -504,6 +504,7 @@ others_draw :: proc(w: ^World) {
 	prof_zone(w, .Others)
 	px: f32 = w.screen == .Navigate ? CAR_OTHER_PX : CAR_OTHER_PX * 0.6
 	for o in w.others[:w.other_count] {
+		if carpool_is_passenger(w) && o.author == w.plan.partner_pub do continue
 		an := Car_Anim {
 			fly  = o.on_road ? 0 : 1,
 			time = w.car_anim.time + f32(o.author[0]),

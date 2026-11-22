@@ -176,6 +176,7 @@ The central relay (#18, #22, #25) was dropped; reuse its code from those branche
 [x] accept handshake, live position encrypted between matched users (x25519 + chacha20poly1305),
     through peers, reuse the crypto from #25 (#43)
 [x] signed reviews for reputation
+[x] nasr: carpool UI + outbox persistence (offer, incoming requests, join, live trip poll, rating)
 design (plan_ui.odin = plan screen + layers panel; weather.odin for the wind text):
 [x] plan panel: 404 px on the left, card A (brand, from / to, modes, departure) + card B (routes, actions)
 [x] brand bar: logo, "DRIFT", round day / night button (sets w.theme)

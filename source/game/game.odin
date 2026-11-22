@@ -243,9 +243,15 @@ game_update :: proc(memory: rawptr) -> bool {
 		// M: free flight without a route (the old drive mode), or back to the plan screen.
 		if key_pressed(w, .M) && !w.street.on {
 			if w.screen == .Plan {
-				nav_stop(w)
-				w.screen = .Navigate
-				cam_chase(w)
+				if carpool_is_passenger(w) {
+					carpool_board(w)
+				} else if w.plan.request_id != {} {
+					ui_toast(w, "Cancel ride request first to fly solo")
+				} else {
+					nav_stop(w)
+					w.screen = .Navigate
+					cam_chase(w)
+				}
 			} else {
 				pilot_exit(w)
 			}
@@ -269,27 +275,31 @@ game_update :: proc(memory: rawptr) -> bool {
 	for w.accum >= SIM_DT {
 		if w.screen == .Navigate {
 			w.pose_prev = ship_pose(&w.ship)
-			c := w.controls
-			autopilot := w.nav.active && !w.nav.manual
-			// Street view by hand: free flight with momentum, the throttle is the thrust (no cruise control).
-			free := w.street.on && !autopilot
-			if autopilot {
-				c = nav_autopilot(w)
-				w.cruise = -1
-			} else if !free {
-				c.throttle = cruise_throttle(w, c.throttle, SIM_DT)
-			}
-			step := controls_pack(c)
-			if w.replay.count < len(w.replay.steps) {
-				w.replay.steps[w.replay.count] = step
-				w.replay.count += 1
-			}
-			if free {
-				ship_free_step(w, controls_unpack(step), SIM_DT)
+			if carpool_is_passenger(w) {
+				carpool_passenger_step(w, SIM_DT)
 			} else {
-				ship_step(w, controls_unpack(step), SIM_DT)
+				c := w.controls
+				autopilot := w.nav.active && !w.nav.manual
+				// Street view by hand: free flight with momentum, the throttle is the thrust (no cruise control).
+				free := w.street.on && !autopilot
+				if autopilot {
+					c = nav_autopilot(w)
+					w.cruise = -1
+				} else if !free {
+					c.throttle = cruise_throttle(w, c.throttle, SIM_DT)
+				}
+				step := controls_pack(c)
+				if w.replay.count < len(w.replay.steps) {
+					w.replay.steps[w.replay.count] = step
+					w.replay.count += 1
+				}
+				if free {
+					ship_free_step(w, controls_unpack(step), SIM_DT)
+				} else {
+					ship_step(w, controls_unpack(step), SIM_DT)
+				}
+				nav_update(w, SIM_DT)
 			}
-			nav_update(w, SIM_DT)
 		}
 		w.tick += 1
 		w.accum -= SIM_DT
@@ -309,6 +319,9 @@ game_update :: proc(memory: rawptr) -> bool {
 		}
 	}
 	if !w.script.on {
+		if carpool_poll_trip(w, &w.plan.request_id, &w.plan.partner_pub, &w.plan.trip_accept) {
+			ui_toast(w, "Carpool accepted, click Board ride")
+		}
 		carpool_frame(w, frame_time(w))
 		presence_frame(w, frame_time(w))
 		music_frame(w)
@@ -687,6 +700,7 @@ game_update :: proc(memory: rawptr) -> bool {
 			pilot_ui(w)
 		}
 	}
+	if w.screen == .Navigate do carpool_nav_ui(w)
 	credit: {
 		// The OpenStreetMap license (ODbL) asks for this credit wherever the map is shown, CC BY 4.0 for the car
 		// model (assets/car-LICENSE.txt).
